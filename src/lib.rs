@@ -9,8 +9,10 @@
 //! - [`distance`] — Distance and travel time matrix
 //! - [`evaluation`] — Route feasibility checking and cost evaluation
 //! - [`constructive`] — Constructive heuristics (Nearest Neighbor, Clarke-Wright)
+//! - [`local_search`] — Local search operators (2-opt, Relocate)
 
 pub mod constructive;
 pub mod distance;
 pub mod evaluation;
+pub mod local_search;
 pub mod models;
