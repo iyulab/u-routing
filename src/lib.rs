@@ -11,7 +11,9 @@
 //! - [`constructive`] — Constructive heuristics (Nearest Neighbor, Clarke-Wright)
 //! - [`local_search`] — Local search operators (2-opt, Relocate)
 //! - [`ga`] — Genetic algorithm with Prins split (giant tour encoding)
+//! - [`alns`] — ALNS with destroy/repair operators
 
+pub mod alns;
 pub mod constructive;
 pub mod distance;
 pub mod evaluation;
