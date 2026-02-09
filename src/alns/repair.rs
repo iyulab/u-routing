@@ -81,7 +81,7 @@ fn best_insertion(
 /// let sol = RoutingSolution::new(vec![vec![1]], vec![2], &cust, &dm);
 ///
 /// let op = GreedyInsertion::new(dm, cust, 100);
-/// let mut rng = u_numerics::random::create_rng(42);
+/// let mut rng = u_numflow::random::create_rng(42);
 /// let repaired = op.repair(&sol, &mut rng);
 /// assert!(repaired.unassigned().is_empty());
 /// ```
@@ -307,7 +307,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1]], vec![2, 3, 4], &cust, &dm);
         let op = GreedyInsertion::new(dm.clone(), cust.clone(), 100);
-        let mut rng = u_numerics::random::create_rng(42);
+        let mut rng = u_numflow::random::create_rng(42);
         let repaired = op.repair(&sol, &mut rng);
         assert!(repaired.unassigned().is_empty());
         let total: usize = repaired.routes().iter().map(|r| r.len()).sum();
@@ -319,7 +319,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1, 2]], vec![3, 4], &cust, &dm);
         let op = GreedyInsertion::new(dm.clone(), cust.clone(), 20); // cap 20, demand 10 each
-        let mut rng = u_numerics::random::create_rng(42);
+        let mut rng = u_numflow::random::create_rng(42);
         let repaired = op.repair(&sol, &mut rng);
         assert!(repaired.unassigned().is_empty());
         assert!(repaired.num_routes() >= 2);
@@ -330,7 +330,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1]], vec![2, 3, 4], &cust, &dm);
         let op = RegretInsertion::new(dm.clone(), cust.clone(), 100);
-        let mut rng = u_numerics::random::create_rng(42);
+        let mut rng = u_numflow::random::create_rng(42);
         let repaired = op.repair(&sol, &mut rng);
         assert!(repaired.unassigned().is_empty());
         let total: usize = repaired.routes().iter().map(|r| r.len()).sum();
@@ -344,7 +344,7 @@ mod tests {
         // with fewer insertion options
         let sol = RoutingSolution::new(vec![vec![1], vec![2]], vec![3, 4], &cust, &dm);
         let op = RegretInsertion::new(dm.clone(), cust.clone(), 20);
-        let mut rng = u_numerics::random::create_rng(42);
+        let mut rng = u_numflow::random::create_rng(42);
         let repaired = op.repair(&sol, &mut rng);
         assert!(repaired.unassigned().is_empty());
     }
