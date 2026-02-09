@@ -13,6 +13,7 @@ categories = ["algorithms"]
 [dependencies]
 u-metaheur = { version = "0.1", path = "../../algorithms/u-metaheur" }
 u-optim = { version = "0.1", path = "../../foundation/u-optim" }
+rand = "0.9"
 
 [dev-dependencies]
 proptest = "1.4"
