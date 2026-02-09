@@ -93,7 +93,7 @@ pub fn nearest_neighbor(
                     continue;
                 }
                 let d = distances.get(current, i);
-                if best.is_none() || d < best.expect("checked is_none").1 {
+                if best.is_none_or(|(_, best_d)| d < best_d) {
                     best = Some((i, d));
                 }
             }
