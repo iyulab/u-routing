@@ -19,8 +19,8 @@
 //! Lin, S. (1965). "Computer Solutions of the Traveling Salesman Problem",
 //! *Bell System Technical Journal* 44(10), 2245-2269.
 
-use crate::distance::DistanceMatrix;
 use super::or_opt::route_distance;
+use crate::distance::DistanceMatrix;
 
 /// Applies 3-opt improvement to a single route.
 ///
@@ -73,8 +73,7 @@ pub fn three_opt_improve(
         'outer: for i in 0..n - 2 {
             for j in (i + 1)..n - 1 {
                 for k in (j + 1)..n {
-                    if let Some(new_route) =
-                        try_three_opt_move(&current, depot, distances, i, j, k)
+                    if let Some(new_route) = try_three_opt_move(&current, depot, distances, i, j, k)
                     {
                         current = new_route;
                         improved = true;

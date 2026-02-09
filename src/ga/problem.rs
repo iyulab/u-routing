@@ -14,9 +14,9 @@
 //! Prins, C. (2004). "A simple and effective evolutionary algorithm for the
 //! vehicle routing problem", *Computers & Operations Research* 31(12), 1985-2002.
 
+use rand::Rng;
 use u_metaheur::ga::operators::{invert_mutation, order_crossover, swap_mutation};
 use u_metaheur::ga::GaProblem;
-use rand::Rng;
 
 use crate::distance::DistanceMatrix;
 use crate::local_search::two_opt_improve;

@@ -72,11 +72,7 @@ pub fn relocate_improve(
     }
 
     // Extract route customer sequences
-    let mut routes: Vec<Vec<usize>> = solution
-        .routes()
-        .iter()
-        .map(|r| r.customer_ids())
-        .collect();
+    let mut routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
 
     let mut improved = true;
     while improved {
@@ -125,14 +121,11 @@ fn find_best_relocate(
 
                 // Try all insertion positions
                 for to_pos in 0..=to_route.len() {
-                    let insertion_delta =
-                        insertion_cost(to_route, to_pos, cid, depot, distances);
+                    let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances);
                     let delta = removal_delta + insertion_delta;
 
                     if delta < -1e-10 {
-                        let is_better = best
-                            .as_ref()
-                            .is_none_or(|b| delta < b.delta);
+                        let is_better = best.as_ref().is_none_or(|b| delta < b.delta);
                         if is_better {
                             best = Some(RelocateMove {
                                 from_route: from_r,
@@ -152,12 +145,7 @@ fn find_best_relocate(
 }
 
 /// Cost of removing customer at `pos` from route.
-fn removal_cost(
-    route: &[usize],
-    pos: usize,
-    depot: usize,
-    distances: &DistanceMatrix,
-) -> f64 {
+fn removal_cost(route: &[usize], pos: usize, depot: usize, distances: &DistanceMatrix) -> f64 {
     let prev = if pos == 0 { depot } else { route[pos - 1] };
     let next = if pos == route.len() - 1 {
         depot
@@ -180,7 +168,11 @@ fn insertion_cost(
     distances: &DistanceMatrix,
 ) -> f64 {
     let prev = if pos == 0 { depot } else { route[pos - 1] };
-    let next = if pos == route.len() { depot } else { route[pos] };
+    let next = if pos == route.len() {
+        depot
+    } else {
+        route[pos]
+    };
 
     // Old: prev → next
     // New: prev → customer_id → next
@@ -258,7 +250,7 @@ mod tests {
         let customers = vec![
             Customer::depot(0.0, 0.0),
             Customer::new(1, 10.0, 0.0, 10, 0.0),
-            Customer::new(2, 5.0, 5.0, 5, 0.0),   // between
+            Customer::new(2, 5.0, 5.0, 5, 0.0), // between
             Customer::new(3, 0.0, 10.0, 10, 0.0),
         ];
         let dm = DistanceMatrix::from_customers(&customers);
@@ -281,7 +273,11 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let vehicle = Vehicle::new(0, 15);
-        let vehicles = vec![Vehicle::new(0, 15), Vehicle::new(1, 15), Vehicle::new(2, 15)];
+        let vehicles = vec![
+            Vehicle::new(0, 15),
+            Vehicle::new(1, 15),
+            Vehicle::new(2, 15),
+        ];
         let sol = nearest_neighbor(&customers, &dm, &vehicles);
         let improved = relocate_improve(&sol, &customers, &dm, &vehicle);
         // Each route should have at most capacity 15 (1 customer each)
@@ -296,8 +292,7 @@ mod tests {
         let dm = DistanceMatrix::from_data(
             4,
             vec![
-                0.0, 5.0, 8.0, 12.0, 5.0, 0.0, 3.0, 7.0, 8.0, 3.0, 0.0, 4.0, 12.0, 7.0, 4.0,
-                0.0,
+                0.0, 5.0, 8.0, 12.0, 5.0, 0.0, 3.0, 7.0, 8.0, 3.0, 0.0, 4.0, 12.0, 7.0, 4.0, 0.0,
             ],
         )
         .expect("valid");
@@ -316,8 +311,7 @@ mod tests {
         let dm = DistanceMatrix::from_data(
             4,
             vec![
-                0.0, 5.0, 8.0, 12.0, 5.0, 0.0, 3.0, 7.0, 8.0, 3.0, 0.0, 4.0, 12.0, 7.0, 4.0,
-                0.0,
+                0.0, 5.0, 8.0, 12.0, 5.0, 0.0, 3.0, 7.0, 8.0, 3.0, 0.0, 4.0, 12.0, 7.0, 4.0, 0.0,
             ],
         )
         .expect("valid");

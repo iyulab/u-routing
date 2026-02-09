@@ -120,9 +120,13 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
             let mut found = false;
 
             for (ui, &cid) in unassigned.iter().enumerate() {
-                if let Some((ri, pos, cost)) =
-                    best_insertion(sol.routes(), cid, &self.distances, &self.customers, self.capacity)
-                {
+                if let Some((ri, pos, cost)) = best_insertion(
+                    sol.routes(),
+                    cid,
+                    &self.distances,
+                    &self.customers,
+                    self.capacity,
+                ) {
                     if cost < best_cost {
                         best_cost = cost;
                         best_cust_idx = ui;

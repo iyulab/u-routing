@@ -87,17 +87,19 @@ pub fn solomon_i1(
 
             for (ui, &cid) in unrouted.iter().enumerate() {
                 // Check capacity
-                let current_load: i32 = route_customers
-                    .iter()
-                    .map(|&c| customers[c].demand())
-                    .sum();
+                let current_load: i32 =
+                    route_customers.iter().map(|&c| customers[c].demand()).sum();
                 if current_load + customers[cid].demand() > vehicle.capacity() {
                     continue;
                 }
 
                 // Try inserting at every position
                 for pos in 0..=route_customers.len() {
-                    let prev = if pos == 0 { depot } else { route_customers[pos - 1] };
+                    let prev = if pos == 0 {
+                        depot
+                    } else {
+                        route_customers[pos - 1]
+                    };
                     let next = if pos == route_customers.len() {
                         depot
                     } else {
@@ -140,11 +142,7 @@ pub fn solomon_i1(
 }
 
 /// Finds the index of the farthest customer from the depot.
-fn farthest_from_depot(
-    unrouted: &[usize],
-    depot: usize,
-    distances: &DistanceMatrix,
-) -> usize {
+fn farthest_from_depot(unrouted: &[usize], depot: usize, distances: &DistanceMatrix) -> usize {
     let mut best_idx = 0;
     let mut best_dist = 0.0;
     for (i, &cid) in unrouted.iter().enumerate() {

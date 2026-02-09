@@ -155,8 +155,8 @@ impl<'a> RouteEvaluator<'a> {
                 }
             }
 
-            total_cost +=
-                route.total_distance() * self.vehicle.cost_per_distance() + self.vehicle.fixed_cost();
+            total_cost += route.total_distance() * self.vehicle.cost_per_distance()
+                + self.vehicle.fixed_cost();
             all_violations.append(&mut violations);
         }
 
@@ -215,7 +215,11 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert!(matches!(
             violations[0].kind,
-            ViolationType::CapacityExceeded { load: 45, capacity: 25, .. }
+            ViolationType::CapacityExceeded {
+                load: 45,
+                capacity: 25,
+                ..
+            }
         ));
     }
 

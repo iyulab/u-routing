@@ -145,7 +145,11 @@ fn try_or_opt_pass(
                 // to > from + seg_len
                 let actual_to = to; // index in original route
                 let p = route[actual_to - 1];
-                let nx = if actual_to >= n { depot } else { route[actual_to] };
+                let nx = if actual_to >= n {
+                    depot
+                } else {
+                    route[actual_to]
+                };
                 (p, nx)
             };
 

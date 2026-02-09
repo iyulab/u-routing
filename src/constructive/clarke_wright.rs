@@ -131,18 +131,17 @@ pub fn clarke_wright_savings(
         let i_at_start = route_members[ri].first() == Some(&saving.i);
         let j_at_end = route_members[rj].last() == Some(&saving.j);
 
-        let (merge_from, merge_into, reverse_from, reverse_into) =
-            if i_at_end && j_at_start {
-                (rj, ri, false, false)
-            } else if j_at_end && i_at_start {
-                (ri, rj, false, false)
-            } else if i_at_end && j_at_end {
-                (rj, ri, true, false)
-            } else if i_at_start && j_at_start {
-                (rj, ri, false, true)
-            } else {
-                continue;
-            };
+        let (merge_from, merge_into, reverse_from, reverse_into) = if i_at_end && j_at_start {
+            (rj, ri, false, false)
+        } else if j_at_end && i_at_start {
+            (ri, rj, false, false)
+        } else if i_at_end && j_at_end {
+            (rj, ri, true, false)
+        } else if i_at_start && j_at_start {
+            (rj, ri, false, true)
+        } else {
+            continue;
+        };
 
         // Merge: append members of merge_from into merge_into
         let mut from_members = std::mem::take(&mut route_members[merge_from]);
@@ -258,9 +257,9 @@ mod tests {
         // Triangle: depot at origin, two customers forming a triangle
         let customers = vec![
             Customer::depot(0.0, 0.0),
-            Customer::new(1, 5.0, 0.0, 10, 0.0),  // east
-            Customer::new(2, 0.0, 5.0, 10, 0.0),  // north
-            Customer::new(3, 5.0, 5.0, 10, 0.0),  // northeast
+            Customer::new(1, 5.0, 0.0, 10, 0.0), // east
+            Customer::new(2, 0.0, 5.0, 10, 0.0), // north
+            Customer::new(3, 5.0, 5.0, 10, 0.0), // northeast
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let vehicle = Vehicle::new(0, 100);

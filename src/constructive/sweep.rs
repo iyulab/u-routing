@@ -52,11 +52,7 @@ use crate::models::{Customer, Solution, Vehicle};
 /// let solution = sweep(&customers, &dm, &vehicle);
 /// assert_eq!(solution.num_served(), 4);
 /// ```
-pub fn sweep(
-    customers: &[Customer],
-    distances: &DistanceMatrix,
-    vehicle: &Vehicle,
-) -> Solution {
+pub fn sweep(customers: &[Customer], distances: &DistanceMatrix, vehicle: &Vehicle) -> Solution {
     let n = customers.len();
     if n <= 1 {
         return Solution::new();
@@ -77,10 +73,7 @@ pub fn sweep(
         .collect();
 
     // Sort by angle (ascending)
-    angle_order.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .expect("angles should not be NaN")
-    });
+    angle_order.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("angles should not be NaN"));
 
     // Build routes by sweeping through sorted customers
     let evaluator = RouteEvaluator::new(customers, distances, vehicle);
@@ -162,10 +155,10 @@ mod tests {
         // Customers in two clusters: NE quadrant and SW quadrant
         let customers = vec![
             Customer::depot(0.0, 0.0),
-            Customer::new(1, 1.0, 1.0, 10, 0.0),    // NE ~45°
-            Customer::new(2, 1.5, 1.5, 10, 0.0),    // NE ~45°
-            Customer::new(3, -1.0, -1.0, 10, 0.0),  // SW ~-135°
-            Customer::new(4, -1.5, -1.5, 10, 0.0),  // SW ~-135°
+            Customer::new(1, 1.0, 1.0, 10, 0.0),   // NE ~45°
+            Customer::new(2, 1.5, 1.5, 10, 0.0),   // NE ~45°
+            Customer::new(3, -1.0, -1.0, 10, 0.0), // SW ~-135°
+            Customer::new(4, -1.5, -1.5, 10, 0.0), // SW ~-135°
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let vehicle = Vehicle::new(0, 20);
@@ -223,10 +216,10 @@ mod tests {
         // Customers at known angles: 0°, 90°, 180°, 270°
         let customers = vec![
             Customer::depot(0.0, 0.0),
-            Customer::new(1, 1.0, 0.0, 10, 0.0),   // 0°
-            Customer::new(2, 0.0, 1.0, 10, 0.0),   // 90°
-            Customer::new(3, -1.0, 0.0, 10, 0.0),  // 180°
-            Customer::new(4, 0.0, -1.0, 10, 0.0),  // -90° (=270°)
+            Customer::new(1, 1.0, 0.0, 10, 0.0),  // 0°
+            Customer::new(2, 0.0, 1.0, 10, 0.0),  // 90°
+            Customer::new(3, -1.0, 0.0, 10, 0.0), // 180°
+            Customer::new(4, 0.0, -1.0, 10, 0.0), // -90° (=270°)
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let vehicle = Vehicle::new(0, 100);

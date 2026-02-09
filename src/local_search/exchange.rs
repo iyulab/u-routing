@@ -70,11 +70,7 @@ pub fn exchange_improve(
     }
 
     let depot = vehicle.depot_id();
-    let mut routes: Vec<Vec<usize>> = solution
-        .routes()
-        .iter()
-        .map(|r| r.customer_ids())
-        .collect();
+    let mut routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
 
     let mut improved = true;
     while improved {
@@ -82,9 +78,14 @@ pub fn exchange_improve(
 
         for r1 in 0..routes.len() {
             for r2 in (r1 + 1)..routes.len() {
-                if let Some((cut1, cut2, delta)) =
-                    find_best_exchange(&routes[r1], &routes[r2], depot, distances, customers, vehicle)
-                {
+                if let Some((cut1, cut2, delta)) = find_best_exchange(
+                    &routes[r1],
+                    &routes[r2],
+                    depot,
+                    distances,
+                    customers,
+                    vehicle,
+                ) {
                     if delta < -1e-10 {
                         // Execute the exchange
                         let tail1: Vec<usize> = routes[r1][cut1..].to_vec();
@@ -170,9 +171,7 @@ fn find_best_exchange(
 
             let delta = (new_edge1 + new_edge2) - (old_edge1 + old_edge2);
 
-            if delta < -1e-10
-                && best.as_ref().is_none_or(|b| delta < b.2)
-            {
+            if delta < -1e-10 && best.as_ref().is_none_or(|b| delta < b.2) {
                 best = Some((cut1, cut2, delta));
             }
         }
@@ -270,7 +269,7 @@ mod tests {
         // Exchange tails to get [1, 3] (east) and [4, 2] (west)
         let customers = vec![
             Customer::depot(0.0, 0.0),
-            Customer::new(1, 5.0, 1.0, 10, 0.0),  // east
+            Customer::new(1, 5.0, 1.0, 10, 0.0),   // east
             Customer::new(2, -5.0, -1.0, 10, 0.0), // west
             Customer::new(3, 5.0, -1.0, 10, 0.0),  // east
             Customer::new(4, -5.0, 1.0, 10, 0.0),  // west

@@ -134,9 +134,7 @@ mod tests {
         let problem = RoutingAlnsProblem::new(cust.clone(), dm.clone(), capacity);
         let destroy_ops = vec![RandomRemoval];
         let repair_ops = vec![GreedyInsertion::new(dm, cust, capacity)];
-        let config = AlnsConfig::default()
-            .with_max_iterations(200)
-            .with_seed(42);
+        let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
         let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
         assert!(result.best_cost < f64::INFINITY);
@@ -150,9 +148,7 @@ mod tests {
         let problem = RoutingAlnsProblem::new(cust.clone(), dm.clone(), capacity);
         let destroy_ops = vec![WorstRemoval::new(dm.clone())];
         let repair_ops = vec![GreedyInsertion::new(dm, cust, capacity)];
-        let config = AlnsConfig::default()
-            .with_max_iterations(200)
-            .with_seed(42);
+        let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
         let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
         assert!(result.best_cost < f64::INFINITY);
@@ -166,9 +162,7 @@ mod tests {
         let problem = RoutingAlnsProblem::new(cust.clone(), dm.clone(), capacity);
         let destroy_ops = vec![ShawRemoval::new(dm.clone(), cust.clone())];
         let repair_ops = vec![RegretInsertion::new(dm, cust, capacity)];
-        let config = AlnsConfig::default()
-            .with_max_iterations(200)
-            .with_seed(42);
+        let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
         let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
         assert!(result.best_cost < f64::INFINITY);

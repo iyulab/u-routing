@@ -52,7 +52,12 @@ impl DestroyOperator<RoutingSolution> for RandomRemoval {
         "random_removal"
     }
 
-    fn destroy<R: Rng>(&self, solution: &RoutingSolution, degree: f64, rng: &mut R) -> RoutingSolution {
+    fn destroy<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        degree: f64,
+        rng: &mut R,
+    ) -> RoutingSolution {
         let mut sol = solution.clone();
         let total_customers: usize = sol.routes().iter().map(|r| r.len()).sum();
         let num_remove = ((total_customers as f64 * degree).round() as usize).max(1);
@@ -114,7 +119,8 @@ impl WorstRemoval {
 
         // Old: prev → cid → next, New: prev → next
         // Saving = old - new (positive means removing saves distance)
-        self.distances.get(prev, cid) + self.distances.get(cid, next) - self.distances.get(prev, next)
+        self.distances.get(prev, cid) + self.distances.get(cid, next)
+            - self.distances.get(prev, next)
     }
 }
 
@@ -123,7 +129,12 @@ impl DestroyOperator<RoutingSolution> for WorstRemoval {
         "worst_removal"
     }
 
-    fn destroy<R: Rng>(&self, solution: &RoutingSolution, degree: f64, rng: &mut R) -> RoutingSolution {
+    fn destroy<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        degree: f64,
+        rng: &mut R,
+    ) -> RoutingSolution {
         let mut sol = solution.clone();
         let total_customers: usize = sol.routes().iter().map(|r| r.len()).sum();
         let num_remove = ((total_customers as f64 * degree).round() as usize).max(1);
@@ -197,7 +208,12 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
         "shaw_removal"
     }
 
-    fn destroy<R: Rng>(&self, solution: &RoutingSolution, degree: f64, rng: &mut R) -> RoutingSolution {
+    fn destroy<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        degree: f64,
+        rng: &mut R,
+    ) -> RoutingSolution {
         let mut sol = solution.clone();
         let total_customers: usize = sol.routes().iter().map(|r| r.len()).sum();
         let num_remove = ((total_customers as f64 * degree).round() as usize).max(1);
@@ -207,7 +223,11 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
         }
 
         // Collect all assigned customers
-        let mut assigned: Vec<usize> = sol.routes().iter().flat_map(|r| r.iter().copied()).collect();
+        let mut assigned: Vec<usize> = sol
+            .routes()
+            .iter()
+            .flat_map(|r| r.iter().copied())
+            .collect();
 
         // Pick random seed customer
         let seed_idx = rng.random_range(0..assigned.len() as u64) as usize;
@@ -228,10 +248,10 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
             let mut best_idx = 0;
 
             for (idx, &cid) in assigned.iter().enumerate() {
-                let max_rel = removed.iter().map(|&r| self.relatedness(r, cid)).fold(
-                    f64::NEG_INFINITY,
-                    f64::max,
-                );
+                let max_rel = removed
+                    .iter()
+                    .map(|&r| self.relatedness(r, cid))
+                    .fold(f64::NEG_INFINITY, f64::max);
                 if max_rel > best_relatedness {
                     best_relatedness = max_rel;
                     best_idx = idx;

@@ -96,14 +96,11 @@ impl DistanceMatrix {
     ///
     /// Returns `None` if `candidates` is empty.
     pub fn nearest_neighbor(&self, from: usize, candidates: &[usize]) -> Option<usize> {
-        candidates
-            .iter()
-            .copied()
-            .min_by(|&a, &b| {
-                self.get(from, a)
-                    .partial_cmp(&self.get(from, b))
-                    .expect("distance should not be NaN")
-            })
+        candidates.iter().copied().min_by(|&a, &b| {
+            self.get(from, a)
+                .partial_cmp(&self.get(from, b))
+                .expect("distance should not be NaN")
+        })
     }
 }
 
