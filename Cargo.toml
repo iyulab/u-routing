@@ -1,0 +1,18 @@
+[package]
+name = "u-routing"
+version = "0.1.0"
+edition = "2021"
+authors = ["iyulab"]
+license = "MIT"
+repository = "https://github.com/iyulab/u-routing"
+description = "Vehicle routing optimization: TSP, CVRP, VRPTW with constructive heuristics, local search, GA, and ALNS."
+readme = "README.md"
+keywords = ["routing", "vrp", "tsp", "optimization", "logistics"]
+categories = ["algorithms"]
+
+[dependencies]
+u-metaheur = { version = "0.1", path = "../../algorithms/u-metaheur" }
+u-optim = { version = "0.1", path = "../../foundation/u-optim" }
+
+[dev-dependencies]
+proptest = "1.4"
