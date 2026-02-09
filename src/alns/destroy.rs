@@ -41,7 +41,7 @@ use super::solution_repr::RoutingSolution;
 /// let dm = DistanceMatrix::from_customers(&cust);
 /// let sol = RoutingSolution::new(vec![vec![1, 2]], vec![], &cust, &dm);
 ///
-/// let mut rng = u_optim::random::create_rng(42);
+/// let mut rng = u_numerics::random::create_rng(42);
 /// let destroyed = RandomRemoval.destroy(&sol, 0.5, &mut rng);
 /// assert!(!destroyed.unassigned().is_empty());
 /// ```
@@ -280,7 +280,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1, 2, 3, 4]], vec![], &cust, &dm);
         let op = RandomRemoval;
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let destroyed = op.destroy(&sol, 0.5, &mut rng);
         // Should remove ~2 customers
         let assigned: usize = destroyed.routes().iter().map(|r| r.len()).sum();
@@ -293,7 +293,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1, 2, 3, 4]], vec![], &cust, &dm);
         let op = WorstRemoval::new(dm.clone());
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let destroyed = op.destroy(&sol, 0.25, &mut rng);
         // Should remove 1 customer (the worst-positioned)
         assert_eq!(destroyed.unassigned().len(), 1);
@@ -304,7 +304,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1, 2, 3, 4]], vec![], &cust, &dm);
         let op = ShawRemoval::new(dm.clone(), cust.clone());
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let destroyed = op.destroy(&sol, 0.5, &mut rng);
         // Should remove ~2 related customers
         assert_eq!(destroyed.unassigned().len(), 2);
@@ -318,7 +318,7 @@ mod tests {
         let (cust, dm) = setup();
         let sol = RoutingSolution::new(vec![vec![1, 2], vec![3, 4]], vec![], &cust, &dm);
         let op = RandomRemoval;
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let destroyed = op.destroy(&sol, 0.5, &mut rng);
         let mut all: Vec<usize> = destroyed
             .routes()

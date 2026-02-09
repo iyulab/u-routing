@@ -181,7 +181,7 @@ mod tests {
     fn test_create_individual() {
         let (cust, dm) = setup();
         let problem = RoutingGaProblem::new(cust, dm, 30);
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let ind = problem.create_individual(&mut rng);
         assert_eq!(ind.len(), 3);
         let mut sorted = ind.customers().to_vec();
@@ -215,7 +215,7 @@ mod tests {
         let problem = RoutingGaProblem::new(cust, dm, 30);
         let p1 = GiantTour::new(vec![1, 2, 3]);
         let p2 = GiantTour::new(vec![3, 1, 2]);
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let children = problem.crossover(&p1, &p2, &mut rng);
         assert_eq!(children.len(), 2);
         for child in &children {
@@ -231,7 +231,7 @@ mod tests {
         let (cust, dm) = setup();
         let problem = RoutingGaProblem::new(cust, dm, 30);
         let mut tour = GiantTour::new(vec![1, 2, 3]);
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         problem.mutate(&mut tour, &mut rng);
         let mut sorted = tour.customers().to_vec();
         sorted.sort();

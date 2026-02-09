@@ -111,7 +111,7 @@ mod tests {
     fn test_initial_solution() {
         let (cust, dm) = setup();
         let problem = RoutingAlnsProblem::new(cust, dm, 30);
-        let mut rng = u_optim::random::create_rng(42);
+        let mut rng = u_numerics::random::create_rng(42);
         let sol = problem.initial_solution(&mut rng);
         let total: usize = sol.routes().iter().map(|r| r.len()).sum();
         assert_eq!(total, 3);
