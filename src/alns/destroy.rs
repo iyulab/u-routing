@@ -24,6 +24,27 @@ use super::solution_repr::RoutingSolution;
 ///
 /// Simple but effective baseline operator that ensures diversity in the
 /// search process.
+///
+/// # Examples
+///
+/// ```
+/// use u_routing::models::Customer;
+/// use u_routing::distance::DistanceMatrix;
+/// use u_routing::alns::{RoutingSolution, destroy::RandomRemoval};
+/// use u_metaheur::alns::DestroyOperator;
+///
+/// let cust = vec![
+///     Customer::depot(0.0, 0.0),
+///     Customer::new(1, 1.0, 0.0, 10, 0.0),
+///     Customer::new(2, 2.0, 0.0, 10, 0.0),
+/// ];
+/// let dm = DistanceMatrix::from_customers(&cust);
+/// let sol = RoutingSolution::new(vec![vec![1, 2]], vec![], &cust, &dm);
+///
+/// let mut rng = u_optim::random::create_rng(42);
+/// let destroyed = RandomRemoval.destroy(&sol, 0.5, &mut rng);
+/// assert!(!destroyed.unassigned().is_empty());
+/// ```
 pub struct RandomRemoval;
 
 impl DestroyOperator<RoutingSolution> for RandomRemoval {

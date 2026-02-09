@@ -63,6 +63,28 @@ fn best_insertion(
 ///
 /// Iteratively selects the unassigned customer with the lowest insertion cost
 /// and places it at the best position. Creates new routes when needed.
+///
+/// # Examples
+///
+/// ```
+/// use u_routing::models::Customer;
+/// use u_routing::distance::DistanceMatrix;
+/// use u_routing::alns::{RoutingSolution, repair::GreedyInsertion};
+/// use u_metaheur::alns::RepairOperator;
+///
+/// let cust = vec![
+///     Customer::depot(0.0, 0.0),
+///     Customer::new(1, 1.0, 0.0, 10, 0.0),
+///     Customer::new(2, 2.0, 0.0, 10, 0.0),
+/// ];
+/// let dm = DistanceMatrix::from_customers(&cust);
+/// let sol = RoutingSolution::new(vec![vec![1]], vec![2], &cust, &dm);
+///
+/// let op = GreedyInsertion::new(dm, cust, 100);
+/// let mut rng = u_optim::random::create_rng(42);
+/// let repaired = op.repair(&sol, &mut rng);
+/// assert!(repaired.unassigned().is_empty());
+/// ```
 pub struct GreedyInsertion {
     distances: DistanceMatrix,
     customers: Vec<Customer>,
