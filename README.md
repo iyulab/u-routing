@@ -102,7 +102,7 @@ u-routing
 ## Dependencies
 
 - [`u-metaheur`](https://crates.io/crates/u-metaheur) — GA/ALNS framework
-- [`u-optim`](https://crates.io/crates/u-optim) — Math primitives, RNG
+- [`u-numerics`](https://crates.io/crates/u-numerics) — Math primitives, RNG
 
 ## References
 
@@ -115,6 +115,6 @@ u-routing
 
 ## Related
 
-- [u-optim](https://crates.io/crates/u-optim) — Mathematical optimization primitives
+- [u-numerics](https://crates.io/crates/u-numerics) — Mathematical optimization primitives
 - [u-metaheur](https://crates.io/crates/u-metaheur) — Metaheuristic algorithms
 - [u-schedule](https://crates.io/crates/u-schedule) — Scheduling optimization
