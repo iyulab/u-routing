@@ -1,5 +1,10 @@
 # u-routing
 
+[![Crates.io](https://img.shields.io/crates/v/u-routing.svg)](https://crates.io/crates/u-routing)
+[![docs.rs](https://docs.rs/u-routing/badge.svg)](https://docs.rs/u-routing)
+[![CI](https://github.com/iyulab/u-routing/actions/workflows/ci.yml/badge.svg)](https://github.com/iyulab/u-routing/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Vehicle routing optimization library providing building-block algorithms for
 TSP, CVRP, and VRPTW variants.
 
