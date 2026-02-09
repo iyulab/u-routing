@@ -113,7 +113,7 @@ fn two_opt_delta(
     new_cost - old_cost
 }
 
-/// Computes the total distance of a route: depot → route[0] → ... → route[n-1] → depot.
+/// Computes the total distance of a route: `depot → route[0] → ... → route[n-1] → depot`.
 fn route_distance(route: &[usize], depot: usize, distances: &DistanceMatrix) -> f64 {
     if route.is_empty() {
         return 0.0;

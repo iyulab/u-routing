@@ -83,7 +83,7 @@ pub fn or_opt_improve(
     (current, dist)
 }
 
-/// Computes the total distance: depot → route[0] → ... → route[n-1] → depot.
+/// Computes the total distance: `depot → route[0] → ... → route[n-1] → depot`.
 pub fn route_distance(route: &[usize], depot: usize, distances: &DistanceMatrix) -> f64 {
     if route.is_empty() {
         return 0.0;

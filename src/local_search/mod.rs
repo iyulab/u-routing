@@ -1,10 +1,10 @@
 //! Local search operators for improving VRP solutions.
 //!
-//! - [`two_opt`] — Intra-route 2-opt edge reversal
-//! - [`or_opt`] — Intra-route segment relocation
-//! - [`three_opt`] — Intra-route 3-opt reconnection (Lin 1965)
-//! - [`relocate`] — Inter-route customer relocation
-//! - [`exchange`] — Inter-route cross-exchange / 2-opt* (Potvin & Rousseau, 1995)
+//! - [`two_opt_improve()`] — Intra-route 2-opt edge reversal
+//! - [`or_opt_improve()`] — Intra-route segment relocation
+//! - [`three_opt_improve()`] — Intra-route 3-opt reconnection (Lin 1965)
+//! - [`relocate_improve()`] — Inter-route customer relocation
+//! - [`exchange_improve()`] — Inter-route cross-exchange / 2-opt* (Potvin & Rousseau, 1995)
 
 mod exchange;
 mod or_opt;

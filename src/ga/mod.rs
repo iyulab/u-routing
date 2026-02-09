@@ -1,8 +1,8 @@
 //! Genetic algorithm components for vehicle routing.
 //!
 //! - [`GiantTour`] — Permutation chromosome encoding all customers
-//! - [`split`] — Prins (2004) split DP to partition giant tour into routes
-//! - [`split_tw`] — Time-window-aware split for VRPTW
+//! - [`split()`] — Prins (2004) split DP to partition giant tour into routes
+//! - [`split_tw()`] — Time-window-aware split for VRPTW
 //! - [`RoutingGaProblem`] — [`GaProblem`](u_metaheur::ga::GaProblem) implementation
 
 mod chromosome;
