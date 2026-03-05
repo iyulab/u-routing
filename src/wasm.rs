@@ -155,10 +155,10 @@ pub fn solve_vrp(problem_json: JsValue) -> Result<JsValue, JsValue> {
             let vehicle_template = &vehicles[0];
             clarke_wright_savings(&customers, &dm, vehicle_template)
         }
-        _ => {
-            // Default: nearest neighbor
-            nearest_neighbor(&customers, &dm, &vehicles)
-        }
+        "nn" => nearest_neighbor(&customers, &dm, &vehicles),
+        other => return Err(js_err(format!(
+            "unknown method '{}'. Supported: \"nn\", \"savings\"", other
+        ))),
     };
 
     // Convert internal indices back to original customer IDs
