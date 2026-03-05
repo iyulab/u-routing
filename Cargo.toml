@@ -10,10 +10,19 @@ readme = "README.md"
 keywords = ["routing", "vrp", "tsp", "optimization", "logistics"]
 categories = ["algorithms"]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
+
 [dependencies]
 u-metaheur = { version = "0.1", path = "../../algorithms/u-metaheur" }
 u-numflow = { version = "0.2", path = "../../foundation/u-numflow" }
 rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+wasm-bindgen = { version = "0.2", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

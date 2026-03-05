@@ -20,3 +20,6 @@ pub mod evaluation;
 pub mod ga;
 pub mod local_search;
 pub mod models;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
