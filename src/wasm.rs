@@ -103,13 +103,11 @@ struct VrpOutput {
 /// Returns a `JsValue` string describing the error if input is invalid.
 #[wasm_bindgen]
 pub fn solve_vrp(problem_json: JsValue) -> Result<JsValue, JsValue> {
-    let input: VrpInput =
-        serde_wasm_bindgen::from_value(problem_json).map_err(js_err)?;
+    let input: VrpInput = serde_wasm_bindgen::from_value(problem_json).map_err(js_err)?;
 
     // Build customer list: index 0 = depot, then customers in order of input id
     // We preserve the customer IDs from input so the output routes use them.
-    let mut customers: Vec<Customer> =
-        Vec::with_capacity(input.customers.len() + 1);
+    let mut customers: Vec<Customer> = Vec::with_capacity(input.customers.len() + 1);
 
     // Depot is always id=0
     customers.push(Customer::depot(input.depot.x, input.depot.y));
@@ -156,9 +154,12 @@ pub fn solve_vrp(problem_json: JsValue) -> Result<JsValue, JsValue> {
             clarke_wright_savings(&customers, &dm, vehicle_template)
         }
         "nn" => nearest_neighbor(&customers, &dm, &vehicles),
-        other => return Err(js_err(format!(
-            "unknown method '{}'. Supported: \"nn\", \"savings\"", other
-        ))),
+        other => {
+            return Err(js_err(format!(
+                "unknown method '{}'. Supported: \"nn\", \"savings\"",
+                other
+            )))
+        }
     };
 
     // Convert internal indices back to original customer IDs
