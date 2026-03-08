@@ -118,6 +118,69 @@ u-routing
 - Ropke, S. & Pisinger, D. (2006). "An Adaptive Large Neighborhood Search Heuristic for the Pickup and Delivery Problem with Time Windows"
 - Shaw, P. (1998). "Using Constraint Programming and Local Search Methods to Solve Vehicle Routing Problems"
 
+## WebAssembly / npm
+
+Available as an npm package via [wasm-pack](https://rustwasm.github.io/wasm-pack/).
+
+```bash
+npm install @iyulab/u-routing
+```
+
+### Quick Start
+
+```javascript
+import init, { solve_vrp } from '@iyulab/u-routing';
+
+await init();
+const result = solve_vrp({
+  customers: [
+    { id: 1, x: 1.0, y: 2.0, demand: 10 },
+    { id: 2, x: 3.0, y: 4.0, demand: 15 },
+  ],
+  vehicles: [{ capacity: 100 }],
+  depot: { x: 0.0, y: 0.0 },
+  method: "nn"
+});
+```
+
+### Functions
+
+#### `solve_vrp(input) -> VrpOutput`
+
+Solve a capacitated VRP with optional time windows. Four solver methods available.
+
+**Methods:** `"nn"` (Nearest Neighbor), `"savings"` (Clarke-Wright), `"ga"` (Genetic Algorithm + Split DP), `"alns"` (Adaptive Large Neighborhood Search).
+
+**Input:**
+```json
+{
+  "customers": [
+    { "id": 1, "x": 1.0, "y": 2.0, "demand": 10, "service_time": 0.5, "time_window": [8.0, 12.0] }
+  ],
+  "vehicles": [{ "capacity": 100 }],
+  "depot": { "x": 0.0, "y": 0.0 },
+  "method": "ga",
+  "config": {
+    "population_size": 50, "max_generations": 200,
+    "mutation_rate": 0.1, "elite_ratio": 0.1,
+    "max_iterations": 500, "seed": 42
+  }
+}
+```
+
+GA uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`. ALNS uses `max_iterations`. Both accept `seed`.
+
+**Output:**
+```json
+{
+  "routes": [[1, 3, 5], [2, 4]],
+  "total_distance": 42.5,
+  "num_vehicles": 2,
+  "method_used": "ga",
+  "computation_time_ms": 120.0
+}
+```
+
 ## Related
 
 - [u-numflow](https://crates.io/crates/u-numflow) — Mathematical optimization primitives
