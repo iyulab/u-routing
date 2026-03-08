@@ -231,10 +231,7 @@ fn vehicle_capacity(input_vehicles: &[InputVehicle]) -> i32 {
     if input_vehicles.is_empty() {
         i32::MAX
     } else {
-        input_vehicles[0]
-            .capacity
-            .round()
-            .min(i32::MAX as f64) as i32
+        input_vehicles[0].capacity.round().min(i32::MAX as f64) as i32
     }
 }
 
@@ -249,11 +246,7 @@ fn solve_nn(
     id_map: &[usize],
 ) -> VrpOutput {
     let solution = nearest_neighbor(customers, dm, vehicles);
-    let routes: Vec<Vec<usize>> = solution
-        .routes()
-        .iter()
-        .map(|r| r.customer_ids())
-        .collect();
+    let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     let mapped = map_routes(&routes, id_map);
     VrpOutput {
         total_distance: solution.total_distance(),
@@ -272,11 +265,7 @@ fn solve_savings(
 ) -> VrpOutput {
     let vehicle_template = &vehicles[0];
     let solution = clarke_wright_savings(customers, dm, vehicle_template);
-    let routes: Vec<Vec<usize>> = solution
-        .routes()
-        .iter()
-        .map(|r| r.customer_ids())
-        .collect();
+    let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     let mapped = map_routes(&routes, id_map);
     VrpOutput {
         total_distance: solution.total_distance(),
@@ -339,10 +328,14 @@ fn solve_alns(
     let problem = RoutingAlnsProblem::new(customers.to_vec(), dm.clone(), capacity);
 
     let destroy_ops = vec![RandomRemoval];
-    let repair_ops = vec![GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity)];
+    let repair_ops = vec![GreedyInsertion::new(
+        dm.clone(),
+        customers.to_vec(),
+        capacity,
+    )];
 
-    let mut alns_config = AlnsConfig::default()
-        .with_max_iterations(cfg.max_iterations.unwrap_or(500));
+    let mut alns_config =
+        AlnsConfig::default().with_max_iterations(cfg.max_iterations.unwrap_or(500));
 
     if let Some(seed) = cfg.seed {
         alns_config = alns_config.with_seed(seed);
