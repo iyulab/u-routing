@@ -52,7 +52,7 @@ use super::split::split;
 ///     .with_population_size(20)
 ///     .with_max_generations(50);
 ///
-/// let result = GaRunner::run(&problem, &config);
+/// let result = GaRunner::run(&problem, &config).unwrap();
 /// assert!(result.best_fitness < f64::INFINITY);
 /// ```
 pub struct RoutingGaProblem {
@@ -246,7 +246,7 @@ mod tests {
             .with_population_size(20)
             .with_max_generations(30);
 
-        let result = GaRunner::run(&problem, &config);
+        let result = GaRunner::run(&problem, &config).unwrap();
         assert!(!result.best.is_empty());
         // Should find optimal: 6.0
         assert!(result.best_fitness <= 6.0 + 1e-10);
@@ -266,7 +266,7 @@ mod tests {
             .with_population_size(20)
             .with_max_generations(30);
 
-        let result = GaRunner::run(&problem, &config);
+        let result = GaRunner::run(&problem, &config).unwrap();
         assert!(result.best_fitness < f64::INFINITY);
         // Must split into at least 2 routes
     }

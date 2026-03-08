@@ -168,7 +168,28 @@ Solve a capacitated VRP with optional time windows. Four solver methods availabl
 }
 ```
 
-GA uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`. ALNS uses `max_iterations`. Both accept `seed`.
+**GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
+**ALNS config** uses `max_iterations`. Both accept `seed`.
+
+**Config constraints:**
+
+| Parameter | Method | Constraint | Default |
+|---|---|---|---|
+| `population_size` | GA | >= 2 | 50 |
+| `max_generations` | GA | >= 1 | 200 |
+| `mutation_rate` | GA | 0.0 – 1.0 (clamped) | 0.1 |
+| `elite_ratio` | GA | 0.0 – 1.0; must not fill entire population | 0.1 |
+| `max_iterations` | ALNS | >= 1 | 500 |
+| `seed` | Both | any u64 (optional) | random |
+
+**Error handling:**
+
+`solve_vrp()` returns a JS error (string) for:
+- Invalid JSON input (missing required fields, wrong types)
+- Unknown method name
+- Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
+
+Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.
 
 **Output:**
 ```json

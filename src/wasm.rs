@@ -145,7 +145,7 @@ fn default_method() -> String {
     "nn".to_string()
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct VrpOutput {
     routes: Vec<Vec<usize>>,
     total_distance: f64,
@@ -282,7 +282,7 @@ fn solve_ga(
     capacity: i32,
     id_map: &[usize],
     cfg: &InputConfig,
-) -> VrpOutput {
+) -> Result<VrpOutput, String> {
     let problem = RoutingGaProblem::new(customers.to_vec(), dm.clone(), capacity);
 
     let mut ga_config = GaConfig::default()
@@ -300,7 +300,10 @@ fn solve_ga(
         ga_config = ga_config.with_seed(seed);
     }
 
-    let result = GaRunner::run(&problem, &ga_config);
+    ga_config.validate().map_err(|e| format!("GA config error: {}", e))?;
+
+    let result = GaRunner::run(&problem, &ga_config)
+        .map_err(|e| format!("GA execution error: {}", e))?;
 
     // Split the best individual to get routes
     let split_result = split(result.best.customers(), customers, dm, capacity);
@@ -309,13 +312,13 @@ fn solve_ga(
     let (improved_routes, total_distance) = apply_local_search(&split_result.routes, dm);
     let mapped = map_routes(&improved_routes, id_map);
 
-    VrpOutput {
+    Ok(VrpOutput {
         num_vehicles: mapped.len(),
         total_distance,
         routes: mapped,
         method_used: "ga".to_string(),
         computation_time_ms: 0.0,
-    }
+    })
 }
 
 fn solve_alns(
@@ -324,7 +327,7 @@ fn solve_alns(
     capacity: i32,
     id_map: &[usize],
     cfg: &InputConfig,
-) -> VrpOutput {
+) -> Result<VrpOutput, String> {
     let problem = RoutingAlnsProblem::new(customers.to_vec(), dm.clone(), capacity);
 
     let destroy_ops = vec![RandomRemoval];
@@ -341,20 +344,25 @@ fn solve_alns(
         alns_config = alns_config.with_seed(seed);
     }
 
-    let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config);
+    alns_config
+        .validate()
+        .map_err(|e| format!("ALNS config error: {}", e))?;
+
+    let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
+        .map_err(|e| format!("ALNS execution error: {}", e))?;
 
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
     let (improved_routes, total_distance) = apply_local_search(&alns_routes, dm);
     let mapped = map_routes(&improved_routes, id_map);
 
-    VrpOutput {
+    Ok(VrpOutput {
         num_vehicles: mapped.len(),
         total_distance,
         routes: mapped,
         method_used: "alns".to_string(),
         computation_time_ms: 0.0,
-    }
+    })
 }
 
 // ============================================================================
@@ -405,8 +413,8 @@ pub fn solve_vrp(problem_json: JsValue) -> Result<JsValue, JsValue> {
     let mut output = match input.method.as_str() {
         "nn" => solve_nn(&customers, &dm, &vehicles, &id_map),
         "savings" => solve_savings(&customers, &dm, &vehicles, &id_map),
-        "ga" => solve_ga(&customers, &dm, capacity, &id_map, &config),
-        "alns" => solve_alns(&customers, &dm, capacity, &id_map, &config),
+        "ga" => solve_ga(&customers, &dm, capacity, &id_map, &config).map_err(js_err)?,
+        "alns" => solve_alns(&customers, &dm, capacity, &id_map, &config).map_err(js_err)?,
         other => {
             return Err(js_err(format!(
                 "unknown method '{}'. Supported: \"nn\", \"savings\", \"ga\", \"alns\"",
@@ -445,4 +453,208 @@ fn elapsed_ms(start: f64) -> f64 {
 #[cfg(not(target_arch = "wasm32"))]
 fn elapsed_ms(_start: f64) -> f64 {
     0.0
+}
+
+// ============================================================================
+// Tests (native — exercise internal solver functions without JsValue)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distance::DistanceMatrix;
+    use crate::models::Customer;
+
+    /// Helper: build a small test problem with N customers around the origin.
+    fn test_customers(n: usize) -> (Vec<Customer>, DistanceMatrix, Vec<usize>) {
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        let mut id_map = Vec::new();
+        for i in 1..=n {
+            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+            customers.push(Customer::new(i, angle.cos() * 10.0, angle.sin() * 10.0, 5, 0.0));
+            id_map.push(i);
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        (customers, dm, id_map)
+    }
+
+    // ---- GA: valid minimal input ----
+
+    #[test]
+    fn ga_valid_minimal() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            population_size: Some(10),
+            max_generations: Some(5),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "GA with valid config should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.method_used, "ga");
+        assert!(!output.routes.is_empty());
+        assert!(output.total_distance > 0.0);
+    }
+
+    // ---- GA: population_size too small ----
+
+    #[test]
+    fn ga_population_size_too_small() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            population_size: Some(1),
+            max_generations: Some(10),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_err(), "population_size=1 should fail validation");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("population_size"),
+            "error should mention population_size: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn ga_population_size_zero() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            population_size: Some(0),
+            max_generations: Some(10),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_err(), "population_size=0 should fail validation");
+    }
+
+    // ---- GA: max_generations zero ----
+
+    #[test]
+    fn ga_zero_generations() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            population_size: Some(10),
+            max_generations: Some(0),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_err(), "max_generations=0 should fail validation");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("max_generations"),
+            "error should mention max_generations: {}",
+            err
+        );
+    }
+
+    // ---- GA: elite_ratio too high ----
+
+    #[test]
+    fn ga_elite_ratio_fills_population() {
+        let (customers, dm, id_map) = test_customers(3);
+        // elite_ratio is clamped to 1.0, so with pop=2 all are elite → validation error
+        let cfg = InputConfig {
+            population_size: Some(2),
+            max_generations: Some(5),
+            elite_ratio: Some(1.5),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_err(), "elite_ratio filling entire population should fail");
+    }
+
+    // ---- GA: single customer ----
+
+    #[test]
+    fn ga_single_customer() {
+        let (customers, dm, id_map) = test_customers(1);
+        let cfg = InputConfig {
+            population_size: Some(10),
+            max_generations: Some(5),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "GA with 1 customer should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.routes.len(), 1);
+    }
+
+    // ---- GA: mutation_rate clamped (not an error, just verifies no panic) ----
+
+    #[test]
+    fn ga_extreme_mutation_rate() {
+        let (customers, dm, id_map) = test_customers(3);
+        // mutation_rate > 1.0 is clamped by GaConfig::with_mutation_rate
+        let cfg = InputConfig {
+            population_size: Some(10),
+            max_generations: Some(5),
+            mutation_rate: Some(5.0),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "clamped mutation_rate should not cause error");
+    }
+
+    // ---- ALNS: valid minimal input ----
+
+    #[test]
+    fn alns_valid_minimal() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            max_iterations: Some(10),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_alns(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "ALNS with valid config should succeed");
+        let output = result.unwrap();
+        assert_eq!(output.method_used, "alns");
+        assert!(!output.routes.is_empty());
+    }
+
+    // ---- ALNS: zero iterations ----
+
+    #[test]
+    fn alns_zero_iterations() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig {
+            max_iterations: Some(0),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_alns(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_err(), "max_iterations=0 should fail validation");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("max_iterations"),
+            "error should mention max_iterations: {}",
+            err
+        );
+    }
+
+    // ---- Default config (no config provided) ----
+
+    #[test]
+    fn ga_default_config() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig::default();
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "GA with default config should succeed");
+    }
+
+    #[test]
+    fn alns_default_config() {
+        let (customers, dm, id_map) = test_customers(3);
+        let cfg = InputConfig::default();
+        let result = solve_alns(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "ALNS with default config should succeed");
+    }
 }

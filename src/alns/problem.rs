@@ -40,7 +40,7 @@ use super::solution_repr::RoutingSolution;
 ///     .with_max_iterations(100)
 ///     .with_seed(42);
 ///
-/// let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
+/// let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
 /// assert!(result.best_cost < f64::INFINITY);
 /// ```
 pub struct RoutingAlnsProblem {
@@ -136,7 +136,7 @@ mod tests {
         let repair_ops = vec![GreedyInsertion::new(dm, cust, capacity)];
         let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
-        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
+        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
         assert!(result.best_cost < f64::INFINITY);
         assert!(result.best.unassigned().is_empty());
     }
@@ -150,7 +150,7 @@ mod tests {
         let repair_ops = vec![GreedyInsertion::new(dm, cust, capacity)];
         let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
-        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
+        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
         assert!(result.best_cost < f64::INFINITY);
         assert!(result.best.unassigned().is_empty());
     }
@@ -164,7 +164,7 @@ mod tests {
         let repair_ops = vec![RegretInsertion::new(dm, cust, capacity)];
         let config = AlnsConfig::default().with_max_iterations(200).with_seed(42);
 
-        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config);
+        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
         assert!(result.best_cost < f64::INFINITY);
         assert!(result.best.unassigned().is_empty());
     }
