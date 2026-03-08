@@ -300,10 +300,12 @@ fn solve_ga(
         ga_config = ga_config.with_seed(seed);
     }
 
-    ga_config.validate().map_err(|e| format!("GA config error: {}", e))?;
+    ga_config
+        .validate()
+        .map_err(|e| format!("GA config error: {}", e))?;
 
-    let result = GaRunner::run(&problem, &ga_config)
-        .map_err(|e| format!("GA execution error: {}", e))?;
+    let result =
+        GaRunner::run(&problem, &ga_config).map_err(|e| format!("GA execution error: {}", e))?;
 
     // Split the best individual to get routes
     let split_result = split(result.best.customers(), customers, dm, capacity);
@@ -471,7 +473,13 @@ mod tests {
         let mut id_map = Vec::new();
         for i in 1..=n {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-            customers.push(Customer::new(i, angle.cos() * 10.0, angle.sin() * 10.0, 5, 0.0));
+            customers.push(Customer::new(
+                i,
+                angle.cos() * 10.0,
+                angle.sin() * 10.0,
+                5,
+                0.0,
+            ));
             id_map.push(i);
         }
         let dm = DistanceMatrix::from_customers(&customers);
@@ -566,7 +574,10 @@ mod tests {
             ..InputConfig::default()
         };
         let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
-        assert!(result.is_err(), "elite_ratio filling entire population should fail");
+        assert!(
+            result.is_err(),
+            "elite_ratio filling entire population should fail"
+        );
     }
 
     // ---- GA: single customer ----
@@ -600,7 +611,10 @@ mod tests {
             ..InputConfig::default()
         };
         let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
-        assert!(result.is_ok(), "clamped mutation_rate should not cause error");
+        assert!(
+            result.is_ok(),
+            "clamped mutation_rate should not cause error"
+        );
     }
 
     // ---- ALNS: valid minimal input ----
