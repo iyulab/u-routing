@@ -45,6 +45,7 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+
 use crate::alns::destroy::RandomRemoval;
 use crate::alns::repair::GreedyInsertion;
 use crate::alns::RoutingAlnsProblem;
@@ -304,23 +305,8 @@ fn solve_ga(
         .validate()
         .map_err(|e| format!("GA config error: {}", e))?;
 
-    // Defense-in-depth: catch any panics during GA execution (e.g., from
-    // `Instant::now()` on WASM targets without `performance.now()`, or from
-    // unexpected index-out-of-bounds in operators).
-    let ga_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        GaRunner::run(&problem, &ga_config)
-    }))
-    .map_err(|panic| {
-        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = panic.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown internal error during GA execution".to_string()
-        };
-        format!("GA execution panic: {}", msg)
-    })?
-    .map_err(|e| format!("GA execution error: {}", e))?;
+    let ga_result = GaRunner::run(&problem, &ga_config)
+        .map_err(|e| format!("GA execution error: {}", e))?;
 
     // Split the best individual to get routes
     let split_result = split(ga_result.best.customers(), customers, dm, capacity);
@@ -365,21 +351,8 @@ fn solve_alns(
         .validate()
         .map_err(|e| format!("ALNS config error: {}", e))?;
 
-    // Defense-in-depth: catch any panics during ALNS execution.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
-    }))
-    .map_err(|panic| {
-        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = panic.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown internal error during ALNS execution".to_string()
-        };
-        format!("ALNS execution panic: {}", msg)
-    })?
-    .map_err(|e| format!("ALNS execution error: {}", e))?;
+    let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
+        .map_err(|e| format!("ALNS execution error: {}", e))?;
 
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
