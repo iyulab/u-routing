@@ -304,11 +304,26 @@ fn solve_ga(
         .validate()
         .map_err(|e| format!("GA config error: {}", e))?;
 
-    let result =
-        GaRunner::run(&problem, &ga_config).map_err(|e| format!("GA execution error: {}", e))?;
+    // Defense-in-depth: catch any panics during GA execution (e.g., from
+    // `Instant::now()` on WASM targets without `performance.now()`, or from
+    // unexpected index-out-of-bounds in operators).
+    let ga_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        GaRunner::run(&problem, &ga_config)
+    }))
+    .map_err(|panic| {
+        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown internal error during GA execution".to_string()
+        };
+        format!("GA execution panic: {}", msg)
+    })?
+    .map_err(|e| format!("GA execution error: {}", e))?;
 
     // Split the best individual to get routes
-    let split_result = split(result.best.customers(), customers, dm, capacity);
+    let split_result = split(ga_result.best.customers(), customers, dm, capacity);
 
     // Apply local search to improve routes
     let (improved_routes, total_distance) = apply_local_search(&split_result.routes, dm);
@@ -350,8 +365,21 @@ fn solve_alns(
         .validate()
         .map_err(|e| format!("ALNS config error: {}", e))?;
 
-    let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
-        .map_err(|e| format!("ALNS execution error: {}", e))?;
+    // Defense-in-depth: catch any panics during ALNS execution.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
+    }))
+    .map_err(|panic| {
+        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown internal error during ALNS execution".to_string()
+        };
+        format!("ALNS execution panic: {}", msg)
+    })?
+    .map_err(|e| format!("ALNS execution error: {}", e))?;
 
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
@@ -670,5 +698,64 @@ mod tests {
         let cfg = InputConfig::default();
         let result = solve_alns(&customers, &dm, 100, &id_map, &cfg);
         assert!(result.is_ok(), "ALNS with default config should succeed");
+    }
+
+    // ---- GA: larger problem to stress-test GA operators ----
+
+    #[test]
+    fn ga_larger_problem() {
+        let (customers, dm, id_map) = test_customers(20);
+        let cfg = InputConfig {
+            population_size: Some(30),
+            max_generations: Some(20),
+            seed: Some(123),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 1000, &id_map, &cfg);
+        assert!(
+            result.is_ok(),
+            "GA with 20 customers should succeed: {:?}",
+            result.err()
+        );
+        let output = result.unwrap();
+        assert!(!output.routes.is_empty());
+        assert!(output.total_distance > 0.0);
+    }
+
+    // ---- GA: tight capacity forces many routes ----
+
+    #[test]
+    fn ga_tight_capacity() {
+        let (customers, dm, id_map) = test_customers(10);
+        // Each customer has demand=5, capacity=5 forces one customer per route
+        let cfg = InputConfig {
+            population_size: Some(20),
+            max_generations: Some(10),
+            seed: Some(99),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 5, &id_map, &cfg);
+        assert!(
+            result.is_ok(),
+            "GA with tight capacity should succeed: {:?}",
+            result.err()
+        );
+        let output = result.unwrap();
+        assert_eq!(output.routes.len(), 10, "each customer needs its own route");
+    }
+
+    // ---- GA: two customers (minimal crossover) ----
+
+    #[test]
+    fn ga_two_customers() {
+        let (customers, dm, id_map) = test_customers(2);
+        let cfg = InputConfig {
+            population_size: Some(10),
+            max_generations: Some(5),
+            seed: Some(42),
+            ..InputConfig::default()
+        };
+        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
+        assert!(result.is_ok(), "GA with 2 customers should succeed");
     }
 }

@@ -63,16 +63,22 @@ impl DistanceMatrix {
 
     /// Returns the distance from location `from` to location `to`.
     ///
-    /// # Panics
-    ///
-    /// Panics if either index is out of bounds.
+    /// Returns `f64::INFINITY` if either index is out of bounds, which is safe
+    /// for optimization algorithms (out-of-bounds routes are never chosen).
     pub fn get(&self, from: usize, to: usize) -> f64 {
+        if from >= self.size || to >= self.size {
+            return f64::INFINITY;
+        }
         self.data[from * self.size + to]
     }
 
     /// Sets the distance from location `from` to location `to`.
+    ///
+    /// Does nothing if either index is out of bounds.
     pub fn set(&mut self, from: usize, to: usize, distance: f64) {
-        self.data[from * self.size + to] = distance;
+        if from < self.size && to < self.size {
+            self.data[from * self.size + to] = distance;
+        }
     }
 
     /// Number of locations in this matrix.
@@ -166,5 +172,21 @@ mod tests {
         dm.set(0, 1, 10.0);
         dm.set(1, 0, 15.0);
         assert!(!dm.is_symmetric(1e-10));
+    }
+
+    #[test]
+    fn test_get_out_of_bounds_returns_infinity() {
+        let dm = DistanceMatrix::new(3);
+        assert_eq!(dm.get(3, 0), f64::INFINITY);
+        assert_eq!(dm.get(0, 3), f64::INFINITY);
+        assert_eq!(dm.get(10, 10), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_set_out_of_bounds_is_noop() {
+        let mut dm = DistanceMatrix::new(3);
+        dm.set(3, 0, 42.0); // should not panic
+        dm.set(0, 3, 42.0); // should not panic
+        assert_eq!(dm.get(0, 0), 0.0); // matrix unchanged
     }
 }
