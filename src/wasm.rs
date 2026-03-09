@@ -45,7 +45,6 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-
 use crate::alns::destroy::RandomRemoval;
 use crate::alns::repair::GreedyInsertion;
 use crate::alns::RoutingAlnsProblem;
@@ -305,8 +304,8 @@ fn solve_ga(
         .validate()
         .map_err(|e| format!("GA config error: {}", e))?;
 
-    let ga_result = GaRunner::run(&problem, &ga_config)
-        .map_err(|e| format!("GA execution error: {}", e))?;
+    let ga_result =
+        GaRunner::run(&problem, &ga_config).map_err(|e| format!("GA execution error: {}", e))?;
 
     // Split the best individual to get routes
     let split_result = split(ga_result.best.customers(), customers, dm, capacity);
