@@ -8,7 +8,7 @@
     <RootNamespace>URouting</RootNamespace>
     <AssemblyName>URouting</AssemblyName>
     <PackageId>URouting</PackageId>
-    <Version>0.2.2</Version>
+    <Version>0.2.3</Version>
     <Authors>iyulab</Authors>
     <Description>Vehicle routing optimization (TSP, CVRP, VRPTW) — Rust engine with C# bindings.</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
