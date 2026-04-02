@@ -1,7 +1,18 @@
 //! FFI module for u-routing — JSON-in/JSON-out pattern
+//!
+//! Error codes:
+//!   0 = OK
+//!  -1 = null pointer input
+//!  -2 = JSON parse error
+//!  -3 = computation error
+//!  -4 = internal panic
+//!
+//! All FFI entry points are wrapped in `catch_unwind` to prevent panic propagation.
 
 #[cfg(feature = "ffi")]
 use std::ffi::{CStr, CString};
+#[cfg(feature = "ffi")]
+use std::panic;
 
 #[cfg(feature = "ffi")]
 use serde::{Deserialize, Serialize};
@@ -37,7 +48,9 @@ struct InputVehicle {
 }
 
 #[cfg(feature = "ffi")]
-fn default_capacity() -> f64 { 1e9 }
+fn default_capacity() -> f64 {
+    1e9
+}
 
 #[cfg(feature = "ffi")]
 #[derive(Deserialize)]
@@ -52,7 +65,9 @@ struct VrpInput {
 }
 
 #[cfg(feature = "ffi")]
-fn default_method() -> String { "nn".to_string() }
+fn default_method() -> String {
+    "nn".to_string()
+}
 
 #[cfg(feature = "ffi")]
 #[derive(Serialize)]
@@ -67,16 +82,24 @@ struct VrpOutput {
 
 #[cfg(feature = "ffi")]
 unsafe fn read_json(ptr: *const libc::c_char) -> Result<String, i32> {
-    if ptr.is_null() { return Err(-1); }
+    if ptr.is_null() {
+        return Err(-1);
+    }
     let cstr = unsafe { CStr::from_ptr(ptr) };
     cstr.to_str().map(|s| s.to_string()).map_err(|_| -2)
 }
 
 #[cfg(feature = "ffi")]
 fn write_json<T: Serialize>(result_ptr: *mut *mut libc::c_char, value: &T) -> i32 {
+    if result_ptr.is_null() {
+        return -1;
+    }
     match serde_json::to_string(value) {
         Ok(json) => match CString::new(json) {
-            Ok(cstr) => { unsafe { *result_ptr = cstr.into_raw() }; 0 }
+            Ok(cstr) => {
+                unsafe { *result_ptr = cstr.into_raw() };
+                0
+            }
             Err(_) => -3,
         },
         Err(_) => -3,
@@ -86,8 +109,25 @@ fn write_json<T: Serialize>(result_ptr: *mut *mut libc::c_char, value: &T) -> i3
 #[cfg(feature = "ffi")]
 fn write_error(result_ptr: *mut *mut libc::c_char, msg: &str) -> i32 {
     let err = serde_json::json!({ "error": msg });
-    write_json(result_ptr, &err);
-    -3
+    write_json(result_ptr, &err)
+}
+
+/// Wraps an FFI body in `catch_unwind`, initializing `result_ptr` to null.
+#[cfg(feature = "ffi")]
+fn ffi_catch(
+    result_ptr: *mut *mut libc::c_char,
+    f: impl FnOnce() -> i32 + panic::UnwindSafe,
+) -> i32 {
+    if !result_ptr.is_null() {
+        unsafe { *result_ptr = std::ptr::null_mut() };
+    }
+    match panic::catch_unwind(f) {
+        Ok(code) => code,
+        Err(_) => {
+            let _ = write_error(result_ptr, "internal panic");
+            -4
+        }
+    }
 }
 
 #[cfg(feature = "ffi")]
@@ -115,14 +155,19 @@ fn solve_internal(input: &VrpInput) -> Result<VrpOutput, String> {
 
     let dm = DistanceMatrix::from_customers(&customers);
 
-    let cap = input.vehicles.first()
+    let cap = input
+        .vehicles
+        .first()
         .map(|v| v.capacity.round() as i32)
         .unwrap_or(i32::MAX);
 
     let vehicles: Vec<Vehicle> = if input.vehicles.is_empty() {
         vec![Vehicle::new(0, cap)]
     } else {
-        input.vehicles.iter().enumerate()
+        input
+            .vehicles
+            .iter()
+            .enumerate()
             .map(|(i, v)| Vehicle::new(i, v.capacity.round() as i32))
             .collect()
     };
@@ -130,20 +175,26 @@ fn solve_internal(input: &VrpInput) -> Result<VrpOutput, String> {
     let method = input.method.to_lowercase();
 
     let solution = match method.as_str() {
-        "savings" => {
-            clarke_wright_savings(&customers, &dm, &vehicles[0])
-        }
-        _ => {
-            // Nearest neighbor (default)
-            nearest_neighbor(&customers, &dm, &vehicles)
-        }
+        "savings" => clarke_wright_savings(&customers, &dm, &vehicles[0]),
+        _ => nearest_neighbor(&customers, &dm, &vehicles),
     };
 
     // Extract routes with original customer IDs
-    let routes: Vec<Vec<usize>> = solution.routes().iter()
-        .map(|r| r.customer_ids().into_iter().map(|i| {
-            if i > 0 && i <= id_map.len() { id_map[i - 1] } else { i }
-        }).collect())
+    let routes: Vec<Vec<usize>> = solution
+        .routes()
+        .iter()
+        .map(|r| {
+            r.customer_ids()
+                .into_iter()
+                .map(|i| {
+                    if i > 0 && i <= id_map.len() {
+                        id_map[i - 1]
+                    } else {
+                        i
+                    }
+                })
+                .collect()
+        })
         .collect();
 
     Ok(VrpOutput {
@@ -163,25 +214,29 @@ pub unsafe extern "C" fn urouting_solve_vrp(
     request_json: *const libc::c_char,
     result_ptr: *mut *mut libc::c_char,
 ) -> i32 {
-    let json = match unsafe { read_json(request_json) } {
-        Ok(j) => j,
-        Err(e) => return e,
-    };
-    let input: VrpInput = match serde_json::from_str(&json) {
-        Ok(r) => r,
-        Err(e) => return write_error(result_ptr, &format!("JSON parse error: {e}")),
-    };
-    match solve_internal(&input) {
-        Ok(output) => write_json(result_ptr, &output),
-        Err(e) => write_error(result_ptr, &e),
-    }
+    ffi_catch(result_ptr, || {
+        let json = match unsafe { read_json(request_json) } {
+            Ok(j) => j,
+            Err(e) => return e,
+        };
+        let input: VrpInput = match serde_json::from_str(&json) {
+            Ok(r) => r,
+            Err(e) => return write_error(result_ptr, &format!("JSON parse error: {e}")),
+        };
+        match solve_internal(&input) {
+            Ok(output) => write_json(result_ptr, &output),
+            Err(e) => write_error(result_ptr, &e),
+        }
+    })
 }
 
 /// Free string allocated by u-routing FFI
 #[cfg(feature = "ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn urouting_free_string(ptr: *mut libc::c_char) {
-    if !ptr.is_null() { unsafe { drop(CString::from_raw(ptr)) }; }
+    if !ptr.is_null() {
+        unsafe { drop(CString::from_raw(ptr)) };
+    }
 }
 
 /// Get u-routing version
@@ -189,5 +244,7 @@ pub unsafe extern "C" fn urouting_free_string(ptr: *mut libc::c_char) {
 #[no_mangle]
 pub extern "C" fn urouting_version() -> *mut libc::c_char {
     let version = env!("CARGO_PKG_VERSION");
-    CString::new(version).expect("version string has no interior NUL").into_raw()
+    CString::new(version)
+        .expect("version string has no interior NUL")
+        .into_raw()
 }
