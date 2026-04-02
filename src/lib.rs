@@ -23,3 +23,6 @@ pub mod models;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;
