@@ -65,6 +65,18 @@ fn js_err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Deserialize a native JS value, rejecting JSON strings with an actionable
+/// message and prefixing the offending parameter name to any serde error.
+fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Result<T, JsValue> {
+    if value.as_string().is_some() {
+        return Err(JsValue::from_str(&format!(
+            "{param}: expected a native JS object/array, got a string — \
+             pass the value directly, not JSON.stringify(...)"
+        )));
+    }
+    serde_wasm_bindgen::from_value(value).map_err(|e| JsValue::from_str(&format!("{param}: {e}")))
+}
+
 // ============================================================================
 // Input / output serde types
 // ============================================================================
@@ -371,10 +383,10 @@ fn solve_alns(
 // Public WASM entry point
 // ============================================================================
 
-/// Solve a capacitated VRP problem given as JSON.
+/// Solve a capacitated VRP problem.
 ///
 /// # Arguments
-/// * `problem_json` — A JS object matching the VRP input schema.
+/// * `problem` — A native JS object matching the VRP input schema.
 ///
 /// # Supported methods
 /// - `"nn"` — Nearest Neighbor (default, fast)
@@ -389,8 +401,8 @@ fn solve_alns(
 /// # Errors
 /// Returns a `JsValue` string describing the error if input is invalid.
 #[wasm_bindgen]
-pub fn solve_vrp(problem_json: JsValue) -> Result<JsValue, JsValue> {
-    let input: VrpInput = serde_wasm_bindgen::from_value(problem_json).map_err(js_err)?;
+pub fn solve_vrp(problem: JsValue) -> Result<JsValue, JsValue> {
+    let input: VrpInput = from_js(problem, "problem")?;
 
     let (customers, id_map) = build_customers(&input.depot, &input.customers);
 
