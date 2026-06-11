@@ -8,6 +8,22 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-12
+
+### Changed — BREAKING (WASM)
+
+- WASM input objects (`solve_vrp` — including nested customer, vehicle, depot,
+  and `config` objects) now **reject unknown keys** with an explicit
+  `unknown field` error instead of silently ignoring them
+  (`serde(deny_unknown_fields)`).
+- Known consumer pitfall this surfaces: GA options must be sent under
+  `config` (not `ga_config`) — previously a misnamed key was silently
+  dropped and the solver ran with default GA parameters.
+
+### Changed
+
+- Dependency: `u-metaheur` `^0.2` → `^0.3`.
+
 ## [0.2.4] - 2026-06-10
 
 ### Changed

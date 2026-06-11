@@ -74,7 +74,12 @@ fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Resul
              pass the value directly, not JSON.stringify(...)"
         )));
     }
-    serde_wasm_bindgen::from_value(value).map_err(|e| JsValue::from_str(&format!("{param}: {e}")))
+    // serde-wasm-bindgen reads only a struct's declared fields from a JS
+    // object, so `deny_unknown_fields` never sees extra keys. Round-trip
+    // through serde_json::Value so the strict wire schema is enforced.
+    let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
+        .map_err(|e| JsValue::from_str(&format!("{param}: {e}")))?;
+    serde_json::from_value(json).map_err(|e| JsValue::from_str(&format!("{param}: {e}")))
 }
 
 // ============================================================================
@@ -82,6 +87,7 @@ fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Resul
 // ============================================================================
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InputCustomer {
     id: usize,
     x: f64,
@@ -96,6 +102,7 @@ struct InputCustomer {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InputVehicle {
     #[serde(default = "default_capacity")]
     capacity: f64,
@@ -106,6 +113,7 @@ fn default_capacity() -> f64 {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InputDepot {
     x: f64,
     y: f64,
@@ -115,6 +123,7 @@ struct InputDepot {
 ///
 /// Fields are shared across methods; each method uses only the relevant ones.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct InputConfig {
     // --- GA parameters ---
     /// Population size for GA (default: 50).
@@ -142,6 +151,7 @@ struct InputConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VrpInput {
     customers: Vec<InputCustomer>,
     #[serde(default)]
@@ -741,5 +751,50 @@ mod tests {
         };
         let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
         assert!(result.is_ok(), "GA with 2 customers should succeed");
+    }
+}
+
+// ── Wire-schema strictness tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod dto_strictness_tests {
+    use serde_json::json;
+
+    fn assert_rejects_unknown<T: serde::de::DeserializeOwned>(v: serde_json::Value) {
+        match serde_json::from_value::<T>(v) {
+            Ok(_) => panic!("unknown key must be rejected"),
+            Err(e) => assert!(e.to_string().contains("unknown field"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn vrp_input_rejects_unknown_keys() {
+        // Real consumer defect class: GA options sent under `ga_config`
+        // (schema key is `config`) were silently dropped before this guard.
+        assert_rejects_unknown::<super::VrpInput>(json!({
+            "customers": [
+                { "id": 1, "x": 0.0, "y": 0.0 },
+                { "id": 2, "x": 1.0, "y": 1.0 }
+            ],
+            "depot": { "x": 0.0, "y": 0.0 },
+            "method": "ga",
+            "ga_config": { "population_size": 60 }
+        }));
+    }
+
+    #[test]
+    fn vrp_nested_structs_reject_unknown_keys() {
+        assert_rejects_unknown::<super::InputCustomer>(json!({
+            "id": 1, "x": 0.0, "y": 0.0, "priority": 2
+        }));
+        assert_rejects_unknown::<super::InputVehicle>(json!({
+            "capacity": 10.0, "speed": 1.0
+        }));
+        assert_rejects_unknown::<super::InputDepot>(json!({
+            "x": 0.0, "y": 0.0, "id": 0
+        }));
+        assert_rejects_unknown::<super::InputConfig>(json!({
+            "population_size": 60, "generations": 100
+        }));
     }
 }
