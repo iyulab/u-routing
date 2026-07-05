@@ -202,6 +202,19 @@ Errors are returned as rejected promises — they never cause `RuntimeError: unr
 }
 ```
 
+## npm (WebAssembly)
+
+```bash
+npm install @iyulab/u-routing
+```
+
+The package resolves per environment via a conditional `exports` map:
+
+| Environment | Entry |
+|---|---|
+| Bundlers (webpack, Vite, …) | ESM + WebAssembly ESM-integration (`default` condition) |
+| Node.js — `require()`, ESM `import`, CJS TS runners (`tsx`, `ts-node`) | CJS glue loading the wasm from the filesystem (`node` condition) — no loader hooks or flags |
+
 ## Related
 
 - [u-numflow](https://crates.io/crates/u-numflow) — Mathematical optimization primitives
