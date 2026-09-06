@@ -12,7 +12,7 @@
 //! Heuristic for the Pickup and Delivery Problem with Time Windows",
 //! *Transportation Science* 40(4), 455-472.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use u_metaheur::alns::DestroyOperator;
 
 use crate::distance::DistanceMatrix;
