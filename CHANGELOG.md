@@ -8,6 +8,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-07
+
+### Changed
+
+- **`rand` is now 0.10** and **`getrandom` 0.4** on WebAssembly targets. This
+  crate does not name `rand` types in its public signatures, so the change is
+  internal and the API is unaffected; the sequences produced for a given seed are
+  unchanged. The `RUSTFLAGS --cfg getrandom_backend="wasm_js"` that `getrandom`
+  0.3 required is no longer needed.
+- **`u-metaheur` is now required at 0.4 and `u-numflow` at 0.4** (previously 0.3
+  for both), following those crates' own `rand` 0.10 breaks.
+- **The minimum supported Rust version is now declared as 1.87** and is verified
+  by building on that exact toolchain; 1.86 and below fail. The requirement comes
+  from this crate's own use of `unsigned_is_multiple_of`, stabilised in 1.87.
+
 ## [0.3.2] - 2026-07-05
 
 ### Fixed
