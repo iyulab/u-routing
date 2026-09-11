@@ -27,6 +27,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 - **Breaking:** a customer `time_window` with `ready > due` is rejected, naming
   the customer. It used to be dropped, so the problem was solved without the
   constraint and reported as solved.
+- **Breaking:** a customer `demand` or vehicle `capacity` that is not a whole
+  number from 0 to 2147483647 is rejected, naming the customer or vehicle. The
+  wire takes JSON numbers but the model counts load in `i32`, and a value like
+  `2.4` was rounded to `2` -- a fractional demand in kilograms or cubic metres
+  was solved as a different problem and reported as solved. Negative values and
+  values beyond the range were rounded or clamped the same way.
 - JSON inputs parse to the nearest `f64` (`serde_json` `float_roundtrip`).
 - Both bindings report `unassigned`: the customers no route serves. When a
   fixed fleet could not carry every customer, the ones left out were simply

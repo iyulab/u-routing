@@ -188,6 +188,10 @@ Solve a capacitated VRP with optional time windows. Four solver methods availabl
 - Invalid JSON input (missing required fields, wrong types)
 - Unknown method name
 - A customer `time_window` with `ready > due`
+- A customer `demand` or vehicle `capacity` that is not a whole number from 0 to
+  2147483647. The solver counts load in whole units; a fractional amount is
+  refused rather than rounded, so scale the unit (kilograms to grams, say) to
+  keep it
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
 Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.

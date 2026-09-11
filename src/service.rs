@@ -159,8 +159,9 @@ impl Method {
 ///
 /// # Errors
 ///
-/// An unknown method, a time window that is not a window, or solver settings
-/// the chosen method rejects.
+/// An unknown method, a time window that is not a window, a demand or capacity
+/// that is not a whole number of units in range, or solver settings the chosen
+/// method rejects.
 pub(crate) fn solve(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
@@ -170,6 +171,7 @@ pub(crate) fn solve(
 ) -> Result<VrpOutput, String> {
     let method = Method::parse(method)?;
     let (customers, id_map) = build_customers(depot, input_customers)?;
+    let vehicles = build_vehicles(input_vehicles)?;
 
     if customers.len() <= 1 {
         return Ok(VrpOutput {
@@ -183,8 +185,8 @@ pub(crate) fn solve(
     }
 
     let dm = DistanceMatrix::from_customers(&customers);
-    let vehicles = build_vehicles(input_vehicles);
-    let capacity = vehicle_capacity(input_vehicles);
+    // GA and ALNS plan against one capacity: the first vehicle's.
+    let capacity = vehicles[0].capacity();
 
     let mut output = match method {
         Method::NearestNeighbor => solve_nn(&customers, &dm, &vehicles, &id_map),
@@ -226,7 +228,7 @@ fn build_customers(
     let mut id_map: Vec<usize> = Vec::with_capacity(input_customers.len());
 
     for ic in input_customers {
-        let demand = ic.demand.round() as i32;
+        let demand = whole_units(ic.demand, || format!("customer {}: demand", ic.id))?;
         let idx = customers.len();
         id_map.push(ic.id);
         let mut c = Customer::new(idx, ic.x, ic.y, demand, ic.service_time);
@@ -272,26 +274,38 @@ fn apply_local_search(routes: &[Vec<usize>], dm: &DistanceMatrix) -> (Vec<Vec<us
     (improved_routes, total)
 }
 
-/// Builds the vehicle list from input, falling back to a single unlimited vehicle.
-fn build_vehicles(input_vehicles: &[InputVehicle]) -> Vec<Vehicle> {
-    if input_vehicles.is_empty() {
-        vec![Vehicle::new(0, i32::MAX)]
+/// A demand or capacity as the whole number of units the model stores.
+///
+/// The model counts in `i32` and the wire carries JSON numbers. A value the
+/// model would have to round, or clamp into range, is refused: solving a
+/// demand of `2.4` as `2` answers a different problem from the one asked, and
+/// reports it as solved.
+fn whole_units(value: f64, what: impl FnOnce() -> String) -> Result<i32, String> {
+    if value.fract() == 0.0 && (0.0..=f64::from(i32::MAX)).contains(&value) {
+        Ok(value as i32)
     } else {
-        input_vehicles
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Vehicle::new(i, v.capacity.round().min(i32::MAX as f64) as i32))
-            .collect()
+        Err(format!(
+            "{} is {value}; it must be a whole number of units from 0 to {} -- \
+             scale the unit (kilograms to grams, say) to keep a fractional amount",
+            what(),
+            i32::MAX
+        ))
     }
 }
 
-/// Returns the vehicle capacity as i32, using the first vehicle or i32::MAX.
-fn vehicle_capacity(input_vehicles: &[InputVehicle]) -> i32 {
+/// Builds the vehicle list from input, falling back to a single unlimited vehicle.
+fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, String> {
     if input_vehicles.is_empty() {
-        i32::MAX
-    } else {
-        input_vehicles[0].capacity.round().min(i32::MAX as f64) as i32
+        return Ok(vec![Vehicle::new(0, i32::MAX)]);
     }
+    input_vehicles
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let capacity = whole_units(v.capacity, || format!("vehicle {i}: capacity"))?;
+            Ok(Vehicle::new(i, capacity))
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -465,6 +479,10 @@ mod tests {
         serde_json::from_value(json).expect("valid customer")
     }
 
+    fn vehicle(json: serde_json::Value) -> InputVehicle {
+        serde_json::from_value(json).expect("valid vehicle")
+    }
+
     // ---- entry point ----
 
     #[test]
@@ -499,6 +517,49 @@ mod tests {
         let out =
             solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default()).expect("solvable");
         assert_eq!(out.routes, vec![vec![1]]);
+    }
+
+    /// 0.3.3 rounded a demand of 2.4 to 2 and solved that problem instead.
+    #[test]
+    fn a_fractional_demand_is_refused_not_rounded() {
+        let customers = [customer(serde_json::json!({
+            "id": 7, "x": 1.0, "y": 1.0, "demand": 2.4
+        }))];
+        let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
+            .expect_err("fractional demand");
+        assert!(err.contains("customer 7: demand is 2.4"), "{err}");
+    }
+
+    #[test]
+    fn demand_and_capacity_must_be_whole_units_in_range() {
+        for bad in [-1.0, 0.5, 3e9] {
+            let customers = [customer(serde_json::json!({
+                "id": 1, "x": 1.0, "y": 1.0, "demand": bad
+            }))];
+            let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
+                .expect_err("demand out of whole units");
+            assert!(err.contains("customer 1: demand"), "{bad}: {err}");
+
+            // Checked before the empty-problem shortcut, so a fleet is
+            // validated even with nobody to serve.
+            let vehicles = [vehicle(serde_json::json!({ "capacity": bad }))];
+            let err = solve((0.0, 0.0), &[], &vehicles, "nn", &InputConfig::default())
+                .expect_err("capacity out of whole units");
+            assert!(err.contains("vehicle 0: capacity"), "{bad}: {err}");
+        }
+
+        let customers = [customer(serde_json::json!({
+            "id": 1, "x": 1.0, "y": 1.0, "demand": 0.0
+        }))];
+        let vehicles = [vehicle(serde_json::json!({ "capacity": 10.0 }))];
+        assert!(solve(
+            (0.0, 0.0),
+            &customers,
+            &vehicles,
+            "nn",
+            &InputConfig::default()
+        )
+        .is_ok());
     }
 
     // ---- GA: valid minimal input ----
