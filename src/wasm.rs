@@ -29,16 +29,16 @@
 //!   config: { population_size: 100, max_generations: 500 },
 //! });
 //!
-//! // ALNS with time windows
-//! const alnsResult = solve_vrp({
+//! // Time windows ("nn" and "ga" keep them; "savings" and "alns" refuse them)
+//! const twResult = solve_vrp({
 //!   customers: [
 //!     { id: 1, x: 1.0, y: 2.0, demand: 10.0, time_window: [8.0, 12.0] },
 //!     { id: 2, x: 3.0, y: 4.0, demand: 15.0, time_window: [10.0, 16.0] },
 //!   ],
 //!   vehicles: [{ capacity: 100.0 }],
 //!   depot: { x: 0.0, y: 0.0 },
-//!   method: "alns",
-//!   config: { max_iterations: 1000 },
+//!   method: "ga",
+//!   config: { population_size: 100, max_generations: 500 },
 //! });
 //! ```
 
@@ -111,8 +111,12 @@ struct VrpInput {
 /// # Supported methods
 /// - `"nn"` — Nearest Neighbor (default, fast)
 /// - `"savings"` — Clarke-Wright Savings
-/// - `"ga"` — Genetic Algorithm with Prins split + local search
+/// - `"ga"` — Genetic Algorithm with Prins split + local search (the local
+///   search is skipped when customers carry time windows)
 /// - `"alns"` — Adaptive Large Neighborhood Search + local search
+///
+/// Only `"nn"` reads each vehicle; the others plan with one capacity. Only
+/// `"nn"` and `"ga"` keep time windows.
 ///
 /// # Returns
 /// A JS object with `routes`, `total_distance`, `num_vehicles`,
@@ -120,8 +124,9 @@ struct VrpInput {
 ///
 /// # Errors
 /// Returns a `JsValue` string describing the error if input is invalid: an
-/// unknown method, a time window with `ready > due`, or solver settings the
-/// method rejects.
+/// unknown method, a time window with `ready > due`, a demand or capacity that
+/// is not a whole number of units, a mixed fleet or time windows the method
+/// cannot model, or solver settings the method rejects.
 #[wasm_bindgen]
 pub fn solve_vrp(problem: JsValue) -> Result<JsValue, JsValue> {
     let input: VrpInput = from_js(problem, "problem")?;

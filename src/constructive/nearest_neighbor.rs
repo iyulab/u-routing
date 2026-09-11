@@ -25,7 +25,8 @@ use crate::models::{Customer, Solution, Vehicle};
 ///
 /// * `customers` — All locations (index 0 = depot)
 /// * `distances` — Distance matrix
-/// * `vehicles` — Available vehicles (homogeneous fleet assumed)
+/// * `vehicles` — Available vehicles, used in order, each with its own capacity;
+///   customers left when they run out are reported as unassigned
 ///
 /// # Examples
 ///

@@ -180,7 +180,9 @@ pub(crate) fn solve(
         let first = vehicles[0].capacity();
         if let Some(other) = vehicles.iter().find(|v| v.capacity() != first) {
             return Err(format!(
-                "method \"{}\" plans every route with one vehicle capacity, but the                  fleet has capacities {first} and {}; give every vehicle the same                  capacity, or use \"nn\", which reads each vehicle",
+                "method \"{}\" plans every route with one vehicle capacity, but the \
+                 fleet has capacities {first} and {}; give every vehicle the same \
+                 capacity, or use \"nn\", which reads each vehicle",
                 method.name(),
                 other.capacity()
             ));
@@ -191,7 +193,8 @@ pub(crate) fn solve(
     // windows and still be reported as a plan.
     if has_time_windows(&customers) && matches!(method, Method::Savings | Method::Alns) {
         return Err(format!(
-            "method \"{}\" does not model time windows, and customers carry them;              use \"nn\" or \"ga\", which keep them",
+            "method \"{}\" does not model time windows, and customers carry them; \
+             use \"nn\" or \"ga\", which keep them",
             method.name()
         ));
     }
@@ -709,6 +712,25 @@ mod tests {
         for method in ["savings", "alns"] {
             let err = solve((0.0, 0.0), &customers, &[], method, &quick()).expect_err(method);
             assert!(err.contains("time window"), "{method}: {err}");
+        }
+    }
+
+    /// Each refusal is read verbatim by a caller, so a line continuation that
+    /// lost its backslash shows up as a run of spaces mid-sentence.
+    #[test]
+    fn refusals_read_as_one_sentence() {
+        let fraction = [customer(serde_json::json!({
+            "id": 1, "x": 1.0, "y": 0.0, "demand": 0.5
+        }))];
+        let errors = [
+            solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
+                .expect_err("mixed fleet"),
+            solve((0.0, 0.0), &clashing_windows(), &[], "alns", &quick())
+                .expect_err("time windows"),
+            solve((0.0, 0.0), &fraction, &[], "nn", &quick()).expect_err("fractional demand"),
+        ];
+        for e in errors {
+            assert!(!e.contains("  "), "{e}");
         }
     }
 

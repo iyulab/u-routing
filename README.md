@@ -14,6 +14,7 @@ TSP, CVRP, and VRPTW variants.
 - **Distance** — Dense distance/travel-time matrix with nearest-neighbor lookup
 - **Evaluation** — Route feasibility checking (capacity, time windows, max distance/duration)
 - **Constructive heuristics** — Nearest Neighbor (O(n²)), Clarke-Wright Savings (O(n² log n))
+- **Time windows** — time-window Nearest Neighbor, Solomon (1987) I1 insertion, and a time-window split for the GA
 - **Local search** — Intra-route 2-opt (Croes 1958), inter-route Relocate (Or 1976)
 - **Genetic algorithm** — Giant tour + Prins (2004) split DP, OX crossover, 2-opt refinement
 - **ALNS** — Random/Worst/Shaw removal + Greedy/Regret-k insertion (Ropke & Pisinger 2006)
@@ -147,7 +148,8 @@ const result = solve_vrp({
 
 #### `solve_vrp(input) -> VrpOutput`
 
-Solve a capacitated VRP with optional time windows. Four solver methods available.
+Solve a capacitated VRP with optional time windows. Four solver methods available;
+`"nn"` and `"ga"` keep time windows (see below).
 
 **Methods:** `"nn"` (Nearest Neighbor), `"savings"` (Clarke-Wright), `"ga"` (Genetic Algorithm + Split DP), `"alns"` (Adaptive Large Neighborhood Search).
 

@@ -4,7 +4,9 @@
 //!   0 = OK
 //!  -1 = null pointer input
 //!  -2 = request is not valid JSON of the expected shape
-//!  -3 = request rejected (unknown method, invalid time window, solver settings)
+//!  -3 = request rejected (unknown method, invalid time window, demand or
+//!       capacity, a mixed fleet or time windows the method cannot model,
+//!       solver settings)
 //!  -4 = internal panic
 //!
 //! Every non-zero status except `-1` comes with an `{"error": "..."}` body.
@@ -101,7 +103,8 @@ fn ffi_catch(
 
 // ── FFI exports ─────────────────────────────────────────────
 
-/// Solve a VRP (TSP, CVRP or VRPTW, by what the request carries).
+/// Solve a VRP (TSP, CVRP or VRPTW, by what the request carries -- time windows
+/// with `"nn"` or `"ga"`).
 ///
 /// `method` is one of `"nn"` (default), `"savings"`, `"ga"` or `"alns"`, and
 /// `config` carries the GA/ALNS settings -- the same methods and settings as
