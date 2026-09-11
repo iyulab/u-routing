@@ -1,95 +1,61 @@
 //! FFI module for u-routing — JSON-in/JSON-out pattern
 //!
-//! Error codes:
+//! Status codes:
 //!   0 = OK
 //!  -1 = null pointer input
-//!  -2 = JSON parse error
-//!  -3 = computation error
+//!  -2 = request is not valid JSON of the expected shape
+//!  -3 = request rejected (unknown method, invalid time window, solver settings)
 //!  -4 = internal panic
 //!
-//! All FFI entry points are wrapped in `catch_unwind` to prevent panic propagation.
+//! Every non-zero status except `-1` comes with an `{"error": "..."}` body.
+//! All entry points are wrapped in `catch_unwind` to prevent panic propagation.
+//!
+//! The solver itself is `crate::service`, shared with the WebAssembly binding;
+//! this module owns only the transport and the request's top-level shape.
 
-#[cfg(feature = "ffi")]
 use std::ffi::{CStr, CString};
-#[cfg(feature = "ffi")]
 use std::panic;
+use std::time::Instant;
 
-#[cfg(feature = "ffi")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ffi")]
-use crate::constructive::{clarke_wright_savings, nearest_neighbor};
-#[cfg(feature = "ffi")]
-use crate::distance::DistanceMatrix;
-#[cfg(feature = "ffi")]
-use crate::models::{Customer, TimeWindow, Vehicle};
+use crate::service::{self, InputConfig, InputCustomer, InputVehicle};
 
-// ── Types ───────────────────────────────────────────────────
+/// Status for a request whose JSON could not be read into the expected shape.
+const ERR_PARSE: i32 = -2;
 
-#[cfg(feature = "ffi")]
+/// Status for a well-formed request the solver rejected.
+const ERR_COMPUTE: i32 = -3;
+
+// ── Request shape ───────────────────────────────────────────
+//
+// Customers, vehicles and solver settings are the shared wire types. Only the
+// top level is this binding's own: the depot is two flat fields.
+
 #[derive(Deserialize)]
-struct InputCustomer {
-    id: usize,
-    x: f64,
-    y: f64,
-    #[serde(default)]
-    demand: f64,
-    #[serde(default)]
-    service_time: f64,
-    #[serde(default)]
-    time_window: Option<[f64; 2]>,
-}
-
-#[cfg(feature = "ffi")]
-#[derive(Deserialize)]
-struct InputVehicle {
-    #[serde(default = "default_capacity")]
-    capacity: f64,
-}
-
-#[cfg(feature = "ffi")]
-fn default_capacity() -> f64 {
-    1e9
-}
-
-#[cfg(feature = "ffi")]
-#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VrpInput {
     customers: Vec<InputCustomer>,
     #[serde(default)]
     vehicles: Vec<InputVehicle>,
     depot_x: f64,
     depot_y: f64,
-    #[serde(default = "default_method")]
+    #[serde(default = "service::default_method")]
     method: String,
-}
-
-#[cfg(feature = "ffi")]
-fn default_method() -> String {
-    "nn".to_string()
-}
-
-#[cfg(feature = "ffi")]
-#[derive(Serialize)]
-struct VrpOutput {
-    routes: Vec<Vec<usize>>,
-    total_distance: f64,
-    num_vehicles: usize,
-    method_used: String,
+    #[serde(default)]
+    config: Option<InputConfig>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────
 
-#[cfg(feature = "ffi")]
 unsafe fn read_json(ptr: *const libc::c_char) -> Result<String, i32> {
     if ptr.is_null() {
         return Err(-1);
     }
     let cstr = unsafe { CStr::from_ptr(ptr) };
-    cstr.to_str().map(|s| s.to_string()).map_err(|_| -2)
+    cstr.to_str().map(|s| s.to_string()).map_err(|_| ERR_PARSE)
 }
 
-#[cfg(feature = "ffi")]
 fn write_json<T: Serialize>(result_ptr: *mut *mut libc::c_char, value: &T) -> i32 {
     if result_ptr.is_null() {
         return -1;
@@ -100,20 +66,26 @@ fn write_json<T: Serialize>(result_ptr: *mut *mut libc::c_char, value: &T) -> i3
                 unsafe { *result_ptr = cstr.into_raw() };
                 0
             }
-            Err(_) => -3,
+            Err(_) => ERR_COMPUTE,
         },
-        Err(_) => -3,
+        Err(_) => ERR_COMPUTE,
     }
 }
 
-#[cfg(feature = "ffi")]
-fn write_error(result_ptr: *mut *mut libc::c_char, msg: &str) -> i32 {
+/// Writes `{"error": msg}` and returns `status`.
+///
+/// The status is the caller's to choose and is returned as given: the error
+/// body is a diagnostic, not a result, so writing it successfully must not
+/// turn the call into a success.
+fn write_error(result_ptr: *mut *mut libc::c_char, status: i32, msg: &str) -> i32 {
     let err = serde_json::json!({ "error": msg });
-    write_json(result_ptr, &err)
+    match write_json(result_ptr, &err) {
+        0 => status,
+        write_failure => write_failure,
+    }
 }
 
 /// Wraps an FFI body in `catch_unwind`, initializing `result_ptr` to null.
-#[cfg(feature = "ffi")]
 fn ffi_catch(
     result_ptr: *mut *mut libc::c_char,
     f: impl FnOnce() -> i32 + panic::UnwindSafe,
@@ -123,92 +95,24 @@ fn ffi_catch(
     }
     match panic::catch_unwind(f) {
         Ok(code) => code,
-        Err(_) => {
-            let _ = write_error(result_ptr, "internal panic");
-            -4
-        }
+        Err(_) => write_error(result_ptr, -4, "internal panic"),
     }
-}
-
-#[cfg(feature = "ffi")]
-fn solve_internal(input: &VrpInput) -> Result<VrpOutput, String> {
-    if input.customers.is_empty() {
-        return Err("customers must not be empty".into());
-    }
-
-    // Build customer list (index 0 = depot)
-    let mut customers = Vec::with_capacity(input.customers.len() + 1);
-    customers.push(Customer::depot(input.depot_x, input.depot_y));
-
-    let mut id_map = Vec::with_capacity(input.customers.len());
-    for ic in &input.customers {
-        let idx = customers.len();
-        id_map.push(ic.id);
-        let mut c = Customer::new(idx, ic.x, ic.y, ic.demand.round() as i32, ic.service_time);
-        if let Some([ready, due]) = ic.time_window {
-            if let Some(tw) = TimeWindow::new(ready, due) {
-                c = c.with_time_window(tw);
-            }
-        }
-        customers.push(c);
-    }
-
-    let dm = DistanceMatrix::from_customers(&customers);
-
-    let cap = input
-        .vehicles
-        .first()
-        .map(|v| v.capacity.round() as i32)
-        .unwrap_or(i32::MAX);
-
-    let vehicles: Vec<Vehicle> = if input.vehicles.is_empty() {
-        vec![Vehicle::new(0, cap)]
-    } else {
-        input
-            .vehicles
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Vehicle::new(i, v.capacity.round() as i32))
-            .collect()
-    };
-
-    let method = input.method.to_lowercase();
-
-    let solution = match method.as_str() {
-        "savings" => clarke_wright_savings(&customers, &dm, &vehicles[0]),
-        _ => nearest_neighbor(&customers, &dm, &vehicles),
-    };
-
-    // Extract routes with original customer IDs
-    let routes: Vec<Vec<usize>> = solution
-        .routes()
-        .iter()
-        .map(|r| {
-            r.customer_ids()
-                .into_iter()
-                .map(|i| {
-                    if i > 0 && i <= id_map.len() {
-                        id_map[i - 1]
-                    } else {
-                        i
-                    }
-                })
-                .collect()
-        })
-        .collect();
-
-    Ok(VrpOutput {
-        total_distance: solution.total_cost(),
-        num_vehicles: routes.len(),
-        routes,
-        method_used: method,
-    })
 }
 
 // ── FFI exports ─────────────────────────────────────────────
 
-/// Solve VRP (unified TSP/CVRP/VRPTW interface)
-#[cfg(feature = "ffi")]
+/// Solve a VRP (TSP, CVRP or VRPTW, by what the request carries).
+///
+/// `method` is one of `"nn"` (default), `"savings"`, `"ga"` or `"alns"`, and
+/// `config` carries the GA/ALNS settings -- the same methods and settings as
+/// the WebAssembly binding, from the same code.
+///
+/// # Safety
+///
+/// `request_json` must be null or point to a NUL-terminated string, and
+/// `result_ptr` must be null or valid for writing one pointer. A string written
+/// there is owned by the caller and must be released with
+/// [`urouting_free_string`].
 #[no_mangle]
 pub unsafe extern "C" fn urouting_solve_vrp(
     request_json: *const libc::c_char,
@@ -221,17 +125,33 @@ pub unsafe extern "C" fn urouting_solve_vrp(
         };
         let input: VrpInput = match serde_json::from_str(&json) {
             Ok(r) => r,
-            Err(e) => return write_error(result_ptr, &format!("JSON parse error: {e}")),
+            Err(e) => return write_error(result_ptr, ERR_PARSE, &format!("Invalid JSON: {e}")),
         };
-        match solve_internal(&input) {
-            Ok(output) => write_json(result_ptr, &output),
-            Err(e) => write_error(result_ptr, &e),
+        let config = input.config.unwrap_or_default();
+
+        let start = Instant::now();
+        match service::solve(
+            (input.depot_x, input.depot_y),
+            &input.customers,
+            &input.vehicles,
+            &input.method,
+            &config,
+        ) {
+            Ok(mut output) => {
+                output.computation_time_ms = start.elapsed().as_secs_f64() * 1e3;
+                write_json(result_ptr, &output)
+            }
+            Err(e) => write_error(result_ptr, ERR_COMPUTE, &e),
         }
     })
 }
 
-/// Free string allocated by u-routing FFI
-#[cfg(feature = "ffi")]
+/// Free a string allocated by u-routing FFI.
+///
+/// # Safety
+///
+/// `ptr` must be null or a string returned by this library that has not
+/// already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn urouting_free_string(ptr: *mut libc::c_char) {
     if !ptr.is_null() {
@@ -240,11 +160,169 @@ pub unsafe extern "C" fn urouting_free_string(ptr: *mut libc::c_char) {
 }
 
 /// Get u-routing version
-#[cfg(feature = "ffi")]
 #[no_mangle]
 pub extern "C" fn urouting_version() -> *mut libc::c_char {
     let version = env!("CARGO_PKG_VERSION");
     CString::new(version)
         .expect("version string has no interior NUL")
         .into_raw()
+}
+
+// ── Tests ───────────────────────────────────────────────────
+//
+// These drive the exported symbol as a C caller does -- a C string in, a C
+// string out, a status code -- so they pin the wire contract.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solve(request: &serde_json::Value) -> (i32, serde_json::Value) {
+        let request = CString::new(request.to_string()).expect("no interior NUL");
+        let mut out: *mut libc::c_char = std::ptr::null_mut();
+        let code = unsafe { urouting_solve_vrp(request.as_ptr(), &mut out) };
+        assert!(!out.is_null(), "every status must come with a JSON body");
+        let body = unsafe { CStr::from_ptr(out) }
+            .to_str()
+            .expect("body is UTF-8")
+            .to_owned();
+        unsafe { urouting_free_string(out) };
+        (code, serde_json::from_str(&body).expect("body is JSON"))
+    }
+
+    fn problem(method: &str) -> serde_json::Value {
+        serde_json::json!({
+            "customers": [
+                { "id": 11, "x": 1.0, "y": 2.0, "demand": 10.0 },
+                { "id": 12, "x": 3.0, "y": 1.0, "demand": 15.0 },
+                { "id": 13, "x": -2.0, "y": 4.0, "demand": 5.0 },
+                { "id": 14, "x": -1.0, "y": -3.0, "demand": 20.0 }
+            ],
+            "vehicles": [{ "capacity": 30.0 }],
+            "depot_x": 0.0,
+            "depot_y": 0.0,
+            "method": method
+        })
+    }
+
+    #[test]
+    fn a_rejected_request_reports_a_failure_status() {
+        // An error body under status 0 reaches the C# client as a successful
+        // result: it only raises on a non-zero status.
+        let (code, body) = solve(&problem("no-such-method"));
+        assert_eq!(code, -3, "{body}");
+        assert!(body["error"].is_string());
+    }
+
+    #[test]
+    fn malformed_json_reports_the_parse_status() {
+        let request = CString::new("{not json").expect("no interior NUL");
+        let mut out: *mut libc::c_char = std::ptr::null_mut();
+        let code = unsafe { urouting_solve_vrp(request.as_ptr(), &mut out) };
+        unsafe { urouting_free_string(out) };
+        assert_eq!(code, -2);
+    }
+
+    #[test]
+    fn every_documented_method_is_the_one_that_runs() {
+        for method in ["nn", "savings", "ga", "alns"] {
+            let mut request = problem(method);
+            request["config"] =
+                serde_json::json!({ "seed": 7, "max_generations": 20, "max_iterations": 50 });
+            let (code, body) = solve(&request);
+            assert_eq!(code, 0, "{method}: {body}");
+            assert_eq!(body["method_used"], method);
+            let served: usize = body["routes"]
+                .as_array()
+                .expect("routes")
+                .iter()
+                .map(|r| r.as_array().expect("route").len())
+                .sum();
+            let unassigned = body["unassigned"].as_array().expect("unassigned").len();
+            assert_eq!(
+                served + unassigned,
+                4,
+                "{method}: every customer is either routed or reported: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn customers_the_fleet_cannot_carry_are_reported() {
+        // One vehicle of 30 against 50 units of demand: nearest neighbour
+        // cannot serve everyone with the fleet it was given. The customers it
+        // leaves out used to be absent from the response with nothing saying
+        // so -- a partial plan that read as a complete one.
+        let (code, body) = solve(&problem("nn"));
+        assert_eq!(code, 0, "{body}");
+        let unassigned: Vec<u64> = body["unassigned"]
+            .as_array()
+            .expect("unassigned")
+            .iter()
+            .map(|v| v.as_u64().expect("id"))
+            .collect();
+        assert!(!unassigned.is_empty(), "{body}");
+        let routed: Vec<u64> = body["routes"]
+            .as_array()
+            .expect("routes")
+            .iter()
+            .flat_map(|r| r.as_array().expect("route").iter())
+            .map(|v| v.as_u64().expect("id"))
+            .collect();
+        for id in &unassigned {
+            assert!(!routed.contains(id), "{id} is both routed and unassigned");
+            assert!((11..=14).contains(id), "{id} is an input id");
+        }
+    }
+
+    #[test]
+    fn genetic_algorithm_settings_reach_the_solver() {
+        // A population of one cannot breed. If the request reaches the GA the
+        // settings are rejected; if it is quietly solved some other way, they
+        // are not.
+        let mut request = problem("ga");
+        request["config"] = serde_json::json!({ "population_size": 1 });
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .expect("error")
+                .contains("population_size"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn an_inverted_time_window_is_rejected_not_dropped() {
+        // Dropping it would solve the problem without the constraint the
+        // caller asked for.
+        let mut request = problem("nn");
+        request["customers"][0]["time_window"] = serde_json::json!([5.0, 1.0]);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert!(
+            body["error"].as_str().expect("error").contains("11"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn total_distance_is_the_length_of_the_routes() {
+        // Every customer sits away from the depot, so any tour has length.
+        for method in ["nn", "savings"] {
+            let (code, body) = solve(&problem(method));
+            assert_eq!(code, 0, "{method}: {body}");
+            let d = body["total_distance"].as_f64().expect("total_distance");
+            assert!(d > 0.0, "{method}: total_distance {d}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_is_rejected() {
+        let mut request = problem("nn");
+        request["customers"][0]["priority"] = serde_json::json!(2);
+        let (code, _) = solve(&request);
+        assert_eq!(code, -2);
+    }
 }

@@ -21,6 +21,9 @@ pub mod ga;
 pub mod local_search;
 pub mod models;
 
+#[cfg(any(feature = "wasm", feature = "ffi"))]
+mod service;
+
 #[cfg(feature = "wasm")]
 pub mod wasm;
 

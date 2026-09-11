@@ -187,6 +187,7 @@ Solve a capacitated VRP with optional time windows. Four solver methods availabl
 `solve_vrp()` returns a JS error (string) for:
 - Invalid JSON input (missing required fields, wrong types)
 - Unknown method name
+- A customer `time_window` with `ready > due`
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
 Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.
@@ -198,9 +199,14 @@ Errors are returned as rejected promises — they never cause `RuntimeError: unr
   "total_distance": 42.5,
   "num_vehicles": 2,
   "method_used": "ga",
-  "computation_time_ms": 120.0
+  "computation_time_ms": 120.0,
+  "unassigned": []
 }
 ```
+
+`unassigned` lists the customers (by `id`) that no route serves — for example
+when a fixed fleet under `"nn"` cannot carry the total demand. A non-empty list
+means the plan is partial.
 
 ## npm (WebAssembly)
 

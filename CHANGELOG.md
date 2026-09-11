@@ -8,6 +8,33 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Fixed
+
+- **Breaking (C FFI):** `urouting_solve_vrp` returns its failure status for a
+  rejected request (`-2` malformed JSON, `-3` rejected input). It returned `0`
+  with an `{"error": ...}` body, so a caller that branches on the status -- the
+  C# client does -- received the error as a successful result.
+- The C FFI solver was a separate, older copy of the WebAssembly one. It knew
+  only `"nn"` and `"savings"`, solved any other method name with nearest
+  neighbour while reporting the requested name as `method_used`, and ignored
+  `config`. Both bindings now call the same solver: all four methods and their
+  settings are available over the C FFI, and an unknown method is rejected.
+- **Breaking (C FFI):** request objects reject unknown keys, as the
+  WebAssembly binding's already do. An unrecognised key used to be dropped
+  without notice -- which is how `config` itself was being ignored.
+- **Breaking:** a customer `time_window` with `ready > due` is rejected, naming
+  the customer. It used to be dropped, so the problem was solved without the
+  constraint and reported as solved.
+- JSON inputs parse to the nearest `f64` (`serde_json` `float_roundtrip`).
+- Both bindings report `unassigned`: the customers no route serves. When a
+  fixed fleet could not carry every customer, the ones left out were simply
+  missing from `routes`, so a partial plan read as a complete one.
+
+### Changed
+
+- The C FFI response carries `computation_time_ms`, like the WebAssembly one.
+- An unknown method is reported even when the problem has no customers.
+
 ## [0.3.3] - 2026-09-07
 
 ### Changed
