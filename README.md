@@ -171,6 +171,14 @@ Solve a capacitated VRP with optional time windows. Four solver methods availabl
 **GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
 **ALNS config** uses `max_iterations`. Both accept `seed`.
 
+**How each method reads `vehicles`.** `"nn"` assigns every route to a vehicle
+in the list, so it uses at most that many vehicles, each with its own capacity;
+customers the fleet cannot carry come back in `unassigned`. `"savings"`, `"ga"`
+and `"alns"` plan every route with one capacity and open as many routes as the
+demand needs, so `num_vehicles` can exceed the length of `vehicles`; they
+reject a fleet whose vehicles differ in capacity. Without `vehicles`, there is
+one vehicle of unlimited capacity.
+
 **Config constraints:**
 
 | Parameter | Method | Constraint | Default |

@@ -172,6 +172,20 @@ pub(crate) fn solve(
     let method = Method::parse(method)?;
     let (customers, id_map) = build_customers(depot, input_customers)?;
     let vehicles = build_vehicles(input_vehicles)?;
+    // Only nearest neighbour assigns routes to particular vehicles. The other
+    // methods plan every route with one capacity, so a fleet of mixed
+    // capacities is not a problem they can state -- it used to be solved as a
+    // fleet of the first vehicle's capacity.
+    if method != Method::NearestNeighbor {
+        let first = vehicles[0].capacity();
+        if let Some(other) = vehicles.iter().find(|v| v.capacity() != first) {
+            return Err(format!(
+                "method \"{}\" plans every route with one vehicle capacity, but the                  fleet has capacities {first} and {}; give every vehicle the same                  capacity, or use \"nn\", which reads each vehicle",
+                method.name(),
+                other.capacity()
+            ));
+        }
+    }
 
     if customers.len() <= 1 {
         return Ok(VrpOutput {
@@ -185,7 +199,7 @@ pub(crate) fn solve(
     }
 
     let dm = DistanceMatrix::from_customers(&customers);
-    // GA and ALNS plan against one capacity: the first vehicle's.
+    // The capacity every route of savings, GA and ALNS is planned with.
     let capacity = vehicles[0].capacity();
 
     let mut output = match method {
@@ -560,6 +574,59 @@ mod tests {
             &InputConfig::default()
         )
         .is_ok());
+    }
+
+    fn fleet(capacities: &[f64]) -> Vec<InputVehicle> {
+        capacities
+            .iter()
+            .map(|c| vehicle(serde_json::json!({ "capacity": c })))
+            .collect()
+    }
+
+    fn ring(n: usize) -> Vec<InputCustomer> {
+        (1..=n)
+            .map(|i| {
+                let a = i as f64;
+                customer(serde_json::json!({
+                    "id": i, "x": a.cos() * 10.0, "y": a.sin() * 10.0, "demand": 5.0
+                }))
+            })
+            .collect()
+    }
+
+    fn quick() -> InputConfig {
+        InputConfig {
+            population_size: Some(10),
+            max_generations: Some(5),
+            max_iterations: Some(20),
+            seed: Some(1),
+            ..InputConfig::default()
+        }
+    }
+
+    /// Only nearest neighbour reads each vehicle. The other methods plan with
+    /// one capacity, and took the first vehicle's for the whole fleet: a
+    /// fleet of 10 and 100 was solved as two vehicles of 10.
+    #[test]
+    fn methods_that_plan_one_capacity_refuse_a_mixed_fleet() {
+        let customers = ring(4);
+        let mixed = fleet(&[10.0, 100.0]);
+        for method in ["savings", "ga", "alns"] {
+            let err = solve((0.0, 0.0), &customers, &mixed, method, &quick()).expect_err(method);
+            assert!(
+                err.contains(&format!("\"{method}\"")) && err.contains("capacit"),
+                "{method}: {err}"
+            );
+        }
+        assert!(solve((0.0, 0.0), &customers, &mixed, "nn", &quick()).is_ok());
+
+        let uniform = fleet(&[20.0, 20.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            assert!(
+                solve((0.0, 0.0), &customers, &uniform, method, &quick()).is_ok(),
+                "{method}"
+            );
+        }
     }
 
     // ---- GA: valid minimal input ----

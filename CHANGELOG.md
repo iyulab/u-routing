@@ -33,6 +33,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   `2.4` was rounded to `2` -- a fractional demand in kilograms or cubic metres
   was solved as a different problem and reported as solved. Negative values and
   values beyond the range were rounded or clamped the same way.
+- **Breaking:** `"savings"`, `"ga"` and `"alns"` reject a fleet whose vehicles
+  differ in capacity. They plan every route with one capacity and took the
+  first vehicle's for the whole fleet, so vehicles of 10 and 100 were solved as
+  two of 10. `"nn"`, which assigns routes to particular vehicles, takes a mixed
+  fleet as before. The README now states how each method reads `vehicles`.
 - JSON inputs parse to the nearest `f64` (`serde_json` `float_roundtrip`).
 - Both bindings report `unassigned`: the customers no route serves. When a
   fixed fleet could not carry every customer, the ones left out were simply
