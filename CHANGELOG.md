@@ -8,6 +8,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.4.0]
+
 ### Fixed
 
 - **Breaking (C FFI):** `urouting_solve_vrp` returns its failure status for a
