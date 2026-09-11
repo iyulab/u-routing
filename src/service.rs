@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::alns::destroy::RandomRemoval;
 use crate::alns::repair::GreedyInsertion;
 use crate::alns::RoutingAlnsProblem;
-use crate::constructive::{clarke_wright_savings, nearest_neighbor};
+use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
-use crate::ga::split;
 use crate::ga::RoutingGaProblem;
+use crate::ga::{split, split_tw};
 use crate::local_search::{or_opt_improve, two_opt_improve};
 use crate::models::{Customer, TimeWindow, Vehicle};
 use u_metaheur::alns::{AlnsConfig, AlnsRunner};
@@ -187,6 +187,15 @@ pub(crate) fn solve(
         }
     }
 
+    // Savings and ALNS have no notion of time: their routes would ignore the
+    // windows and still be reported as a plan.
+    if has_time_windows(&customers) && matches!(method, Method::Savings | Method::Alns) {
+        return Err(format!(
+            "method \"{}\" does not model time windows, and customers carry them;              use \"nn\" or \"ga\", which keep them",
+            method.name()
+        ));
+    }
+
     if customers.len() <= 1 {
         return Ok(VrpOutput {
             routes: vec![],
@@ -262,6 +271,11 @@ fn build_customers(
     Ok((customers, id_map))
 }
 
+/// Whether any customer carries a time window.
+fn has_time_windows(customers: &[Customer]) -> bool {
+    customers.iter().any(|c| c.time_window().is_some())
+}
+
 /// Converts internal route indices back to original customer IDs.
 fn map_routes(routes: &[Vec<usize>], id_map: &[usize]) -> Vec<Vec<usize>> {
     routes
@@ -332,7 +346,11 @@ fn solve_nn(
     vehicles: &[Vehicle],
     id_map: &[usize],
 ) -> VrpOutput {
-    let solution = nearest_neighbor(customers, dm, vehicles);
+    let solution = if has_time_windows(customers) {
+        nearest_neighbor_tw(customers, dm, vehicles)
+    } else {
+        nearest_neighbor(customers, dm, vehicles)
+    };
     let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     let mapped = map_routes(&routes, id_map);
     VrpOutput {
@@ -398,11 +416,16 @@ fn solve_ga(
     let ga_result =
         GaRunner::run(&problem, &ga_config).map_err(|e| format!("GA execution error: {}", e))?;
 
-    // Split the best individual to get routes
-    let split_result = split(ga_result.best.customers(), customers, dm, capacity);
-
-    // Apply local search to improve routes
-    let (improved_routes, total_distance) = apply_local_search(&split_result.routes, dm);
+    // Split the best individual into routes the way its fitness was computed.
+    // 2-opt and or-opt reorder a route without regard to time, so a problem
+    // with windows keeps the split routes as they are.
+    let tour = ga_result.best.customers();
+    let (improved_routes, total_distance) = if has_time_windows(customers) {
+        let result = split_tw(tour, customers, dm, capacity);
+        (result.routes, result.total_distance)
+    } else {
+        apply_local_search(&split(tour, customers, dm, capacity).routes, dm)
+    };
     let mapped = map_routes(&improved_routes, id_map);
 
     Ok(VrpOutput {
@@ -626,6 +649,66 @@ mod tests {
                 solve((0.0, 0.0), &customers, &uniform, method, &quick()).is_ok(),
                 "{method}"
             );
+        }
+    }
+
+    /// Two customers beside the depot whose windows cannot share a route:
+    /// serving customer 1 lasts until t = 6, and customer 2 closes at t = 3.
+    fn clashing_windows() -> Vec<InputCustomer> {
+        vec![
+            customer(serde_json::json!({
+                "id": 1, "x": 1.0, "y": 0.0, "service_time": 5.0, "time_window": [0.0, 2.0]
+            })),
+            customer(serde_json::json!({
+                "id": 2, "x": 0.0, "y": 1.0, "service_time": 5.0, "time_window": [0.0, 3.0]
+            })),
+        ]
+    }
+
+    /// Customers reached after their window closed, driving each route from
+    /// the depot at time 0 with travel time equal to distance.
+    fn late_arrivals(out: &VrpOutput, customers: &[InputCustomer]) -> Vec<usize> {
+        let by_id = |id: usize| customers.iter().find(|c| c.id == id).expect("known id");
+        let mut late = Vec::new();
+        for route in &out.routes {
+            let (mut x, mut y, mut t) = (0.0_f64, 0.0_f64, 0.0_f64);
+            for &id in route {
+                let c = by_id(id);
+                t += ((c.x - x).powi(2) + (c.y - y).powi(2)).sqrt();
+                if let Some([ready, due]) = c.time_window {
+                    if t > due + 1e-9 {
+                        late.push(id);
+                    }
+                    t = t.max(ready);
+                }
+                t += c.service_time;
+                (x, y) = (c.x, c.y);
+            }
+        }
+        late
+    }
+
+    #[test]
+    fn methods_that_model_time_windows_keep_them() {
+        let customers = clashing_windows();
+        let two = fleet(&[100.0, 100.0]);
+        for method in ["nn", "ga"] {
+            let out = solve((0.0, 0.0), &customers, &two, method, &quick()).expect(method);
+            assert!(
+                late_arrivals(&out, &customers).is_empty(),
+                "{method}: {:?}",
+                out.routes
+            );
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+        }
+    }
+
+    #[test]
+    fn methods_without_time_windows_refuse_them() {
+        let customers = clashing_windows();
+        for method in ["savings", "alns"] {
+            let err = solve((0.0, 0.0), &customers, &[], method, &quick()).expect_err(method);
+            assert!(err.contains("time window"), "{method}: {err}");
         }
     }
 

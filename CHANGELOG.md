@@ -33,6 +33,19 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   `2.4` was rounded to `2` -- a fractional demand in kilograms or cubic metres
   was solved as a different problem and reported as solved. Negative values and
   values beyond the range were rounded or clamped the same way.
+- **Breaking:** customer time windows are kept. Every method used to solve as
+  if there were none -- the crate's time-window algorithms were never called
+  -- while the documentation said windows were honoured. `"nn"` now uses the
+  time-window nearest neighbour, and `"ga"` splits with time windows both when
+  scoring a tour and for the final routes, without the 2-opt pass that would
+  reorder them. A customer no feasible route reaches is reported in
+  `unassigned`. `"savings"` and `"alns"` have no time model and reject a
+  problem whose customers carry windows.
+- `RoutingGaProblem` keeps customers' time windows: it splits with `split_tw`
+  and skips 2-opt when any customer has one, and ranks a tour that leaves
+  customers unserved behind every tour that serves them all. The time-window
+  split's partial cost used to make dropping a customer look cheaper than
+  serving it.
 - **Breaking:** `"savings"`, `"ga"` and `"alns"` reject a fleet whose vehicles
   differ in capacity. They plan every route with one capacity and took the
   first vehicle's for the whole fleet, so vehicles of 10 and 100 were solved as

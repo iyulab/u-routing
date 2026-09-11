@@ -24,12 +24,20 @@ use crate::models::Customer;
 
 use super::chromosome::GiantTour;
 use super::split::split;
+use super::split_tw::split_tw;
 
-/// GA problem for capacitated vehicle routing.
+/// GA problem for capacitated vehicle routing, with time windows where
+/// customers carry them.
 ///
 /// Uses giant tour encoding: each individual is a permutation of customer IDs.
 /// Fitness is evaluated by splitting the permutation into feasible routes using
 /// the Prins (2004) split DP algorithm, optionally followed by intra-route 2-opt.
+///
+/// When any customer has a time window, the split is [`split_tw`] and 2-opt is
+/// skipped -- it reverses route segments without regard to time. A tour whose
+/// split leaves customers unserved is ranked behind every tour that serves
+/// them all: the split's partial cost would otherwise make dropping a customer
+/// look cheaper than serving it.
 ///
 /// # Examples
 ///
@@ -60,6 +68,11 @@ pub struct RoutingGaProblem {
     distances: DistanceMatrix,
     capacity: i32,
     apply_local_search: bool,
+    /// Whether any customer carries a time window.
+    time_windows: bool,
+    /// Added per unserved customer: more than any complete solution costs,
+    /// which is at most a separate round trip to the farthest pair per customer.
+    unserved_penalty: f64,
 }
 
 impl RoutingGaProblem {
@@ -71,11 +84,19 @@ impl RoutingGaProblem {
     /// * `distances` — Distance matrix
     /// * `capacity` — Vehicle capacity
     pub fn new(customers: Vec<Customer>, distances: DistanceMatrix, capacity: i32) -> Self {
+        let n = customers.len();
+        let time_windows = customers.iter().any(|c| c.time_window().is_some());
+        let farthest = (0..n)
+            .flat_map(|i| (0..n).map(move |j| (i, j)))
+            .map(|(i, j)| distances.get(i, j))
+            .fold(0.0, f64::max);
         Self {
             customers,
             distances,
             capacity,
             apply_local_search: true,
+            time_windows,
+            unserved_penalty: 2.0 * farthest * n as f64 + 1.0,
         }
     }
 
@@ -108,14 +129,20 @@ impl GaProblem for RoutingGaProblem {
     }
 
     fn evaluate(&self, individual: &GiantTour) -> f64 {
-        let result = split(
+        let split_fn = if self.time_windows { split_tw } else { split };
+        let result = split_fn(
             individual.customers(),
             &self.customers,
             &self.distances,
             self.capacity,
         );
 
-        if !self.apply_local_search {
+        let served: usize = result.routes.iter().map(Vec::len).sum();
+        let unserved = self.num_customers().saturating_sub(served);
+        if unserved > 0 {
+            return result.total_distance + self.unserved_penalty * unserved as f64;
+        }
+        if !self.apply_local_search || self.time_windows {
             return result.total_distance;
         }
 
@@ -269,5 +296,48 @@ mod tests {
         let result = GaRunner::run(&problem, &config).unwrap();
         assert!(result.best_fitness < f64::INFINITY);
         // Must split into at least 2 routes
+    }
+}
+
+#[cfg(test)]
+mod time_window_tests {
+    use super::*;
+    use crate::models::TimeWindow;
+
+    /// Customer 1's service lasts until t = 6 and customer 2 closes at t = 3,
+    /// so they cannot share a route; customer 3 is too far to reach by t = 5.
+    fn problem(with_far_customer: bool) -> RoutingGaProblem {
+        let mut customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 10, 5.0)
+                .with_time_window(TimeWindow::new(0.0, 2.0).expect("valid")),
+            Customer::new(2, 0.0, 1.0, 10, 5.0)
+                .with_time_window(TimeWindow::new(0.0, 3.0).expect("valid")),
+        ];
+        if with_far_customer {
+            customers.push(
+                Customer::new(3, 10.0, 0.0, 10, 0.0)
+                    .with_time_window(TimeWindow::new(0.0, 5.0).expect("valid")),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        RoutingGaProblem::new(customers, dm, 100)
+    }
+
+    #[test]
+    fn a_tour_is_split_where_the_windows_require() {
+        // Two round trips of 2, not one route of 1 + sqrt(2) + 1.
+        let cost = problem(false).evaluate(&GiantTour::new(vec![1, 2]));
+        assert!((cost - 4.0).abs() < 1e-9, "{cost}");
+    }
+
+    #[test]
+    fn a_tour_that_serves_more_customers_ranks_ahead() {
+        let p = problem(true);
+        // [1, 2, 3] serves 1 and 2 before failing on 3; [3, 1, 2] fails at
+        // once and serves nobody -- its partial cost is 0.
+        let serves_two = p.evaluate(&GiantTour::new(vec![1, 2, 3]));
+        let serves_none = p.evaluate(&GiantTour::new(vec![3, 1, 2]));
+        assert!(serves_two < serves_none, "{serves_two} vs {serves_none}");
     }
 }

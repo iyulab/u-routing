@@ -179,6 +179,13 @@ demand needs, so `num_vehicles` can exceed the length of `vehicles`; they
 reject a fleet whose vehicles differ in capacity. Without `vehicles`, there is
 one vehicle of unlimited capacity.
 
+**Time windows.** `time_window: [ready, due]` is measured in distance units: a
+vehicle leaves the depot at time 0, travels one distance unit per time unit,
+waits if it arrives before `ready`, and must arrive by `due`; `service_time`
+is spent at the customer. `"nn"` and `"ga"` keep the windows, and a customer
+no feasible route reaches comes back in `unassigned`. `"savings"` and `"alns"`
+have no time model and reject a problem whose customers carry windows.
+
 **Config constraints:**
 
 | Parameter | Method | Constraint | Default |
@@ -200,6 +207,8 @@ one vehicle of unlimited capacity.
   2147483647. The solver counts load in whole units; a fractional amount is
   refused rather than rounded, so scale the unit (kilograms to grams, say) to
   keep it
+- A fleet whose vehicles differ in capacity, with `"savings"`, `"ga"` or `"alns"`
+- Customers with time windows, with `"savings"` or `"alns"`
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
 Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.
