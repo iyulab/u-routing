@@ -19,7 +19,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   served late), and the five local-search moves. The service therefore no
   longer refuses `"savings"` and `"alns"` for a problem with windows, and
   the GA polishes its time-window split with 2-opt and or-opt instead of
-  skipping them.
+  skipping them. `URouting` NuGet 0.3.0 → **0.4.0**: the C# surface is unchanged,
+  but the bundled engine now keeps time windows in every method.
 
 ### Changed
 
