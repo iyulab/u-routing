@@ -14,8 +14,8 @@ TSP, CVRP, and VRPTW variants.
 - **Distance** — Dense distance/travel-time matrix with nearest-neighbor lookup
 - **Evaluation** — Route feasibility checking (capacity, time windows, max distance/duration)
 - **Constructive heuristics** — Nearest Neighbor (O(n²)), Clarke-Wright Savings (O(n² log n))
-- **Time windows** — time-window Nearest Neighbor, Solomon (1987) I1 insertion, and a time-window split for the GA
-- **Local search** — Intra-route 2-opt (Croes 1958), inter-route Relocate (Or 1976)
+- **Time windows** — time-window Nearest Neighbor, Solomon (1987) I1 insertion, a time-window split for the GA, and every local-search move, savings merge and ALNS insertion gated on the windows
+- **Local search** — Intra-route 2-opt (Croes 1958), or-opt, 3-opt; inter-route Relocate (Or 1976), cross-exchange — all of them window-aware
 - **Genetic algorithm** — Giant tour + Prins (2004) split DP, OX crossover, 2-opt refinement
 - **ALNS** — Random/Worst/Shaw removal + Greedy/Regret-k insertion (Ropke & Pisinger 2006)
 
@@ -148,8 +148,8 @@ const result = solve_vrp({
 
 #### `solve_vrp(input) -> VrpOutput`
 
-Solve a capacitated VRP with optional time windows. Four solver methods available;
-`"nn"` and `"ga"` keep time windows (see below).
+Solve a capacitated VRP with optional time windows. Four solver methods available,
+all of which keep time windows (see below).
 
 **Methods:** `"nn"` (Nearest Neighbor), `"savings"` (Clarke-Wright), `"ga"` (Genetic Algorithm + Split DP), `"alns"` (Adaptive Large Neighborhood Search).
 
@@ -184,9 +184,11 @@ one vehicle of unlimited capacity.
 **Time windows.** `time_window: [ready, due]` is measured in distance units: a
 vehicle leaves the depot at time 0, travels one distance unit per time unit,
 waits if it arrives before `ready`, and must arrive by `due`; `service_time`
-is spent at the customer. `"nn"` and `"ga"` keep the windows, and a customer
-no feasible route reaches comes back in `unassigned`. `"savings"` and `"alns"`
-have no time model and reject a problem whose customers carry windows.
+is spent at the customer. Every method keeps the windows: a savings merge, an
+ALNS insertion and every local-search move (2-opt, or-opt, 3-opt, relocate,
+exchange) are taken only when the resulting route reaches each customer by its
+`due`. A customer no route can reach on time comes back in `unassigned` rather
+than being served late.
 
 **Config constraints:**
 
@@ -210,7 +212,6 @@ have no time model and reject a problem whose customers carry windows.
   refused rather than rounded, so scale the unit (kilograms to grams, say) to
   keep it
 - A fleet whose vehicles differ in capacity, with `"savings"`, `"ga"` or `"alns"`
-- Customers with time windows, with `"savings"` or `"alns"`
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
 Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.

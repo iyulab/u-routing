@@ -25,6 +25,7 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
+use crate::evaluation::{has_time_windows, time_windows_respected};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A savings value for merging two customers' routes.
@@ -103,10 +104,15 @@ pub fn clarke_wright_savings(
     let mut route_load = vec![0i32; n];
     let mut route_members: Vec<Vec<usize>> = vec![Vec::new(); n];
 
+    // A customer that cannot be reached on time even on its own route has
+    // no route at all: it is left unassigned rather than served late.
+    let windowed = has_time_windows(customers);
     for i in 1..n {
         route_of[i] = i;
         route_load[i] = customers[i].demand();
-        route_members[i].push(i);
+        if !windowed || time_windows_respected(&[i], depot, distances, customers) {
+            route_members[i].push(i);
+        }
     }
 
     // Merge routes
@@ -116,6 +122,11 @@ pub fn clarke_wright_savings(
 
         // Skip if same route
         if ri == rj {
+            continue;
+        }
+
+        // Skip customers that have no route
+        if route_members[ri].is_empty() || route_members[rj].is_empty() {
             continue;
         }
 
@@ -143,7 +154,22 @@ pub fn clarke_wright_savings(
             continue;
         };
 
-        // Merge: append members of merge_from into merge_into
+        // Merge: append members of merge_from into merge_into -- unless the
+        // merged route would reach a customer after its window closes.
+        if windowed {
+            let mut candidate: Vec<usize> = route_members[merge_into].clone();
+            if reverse_into {
+                candidate.reverse();
+            }
+            if reverse_from {
+                candidate.extend(route_members[merge_from].iter().rev());
+            } else {
+                candidate.extend(route_members[merge_from].iter());
+            }
+            if !time_windows_respected(&candidate, depot, distances, customers) {
+                continue;
+            }
+        }
         let mut from_members = std::mem::take(&mut route_members[merge_from]);
         if reverse_from {
             from_members.reverse();

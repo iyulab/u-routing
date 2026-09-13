@@ -8,6 +8,25 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- **Every method keeps time windows.** `evaluation::has_time_windows` and
+  `evaluation::time_windows_respected` -- the O(n), allocation-free check of
+  a route against the windows, with the same clock as `RouteEvaluator` --
+  now gate every place a route is built or changed: the Clarke-Wright merge,
+  the ALNS greedy and regret insertions (a customer that cannot be placed on
+  time, not even on a route of its own, is left unassigned rather than
+  served late), and the five local-search moves. The service therefore no
+  longer refuses `"savings"` and `"alns"` for a problem with windows, and
+  the GA polishes its time-window split with 2-opt and or-opt instead of
+  skipping them.
+
+### Changed
+
+- **Breaking:** `two_opt_improve`, `or_opt_improve` and `three_opt_improve`
+  take the customers as a fourth argument, so that the moves can see the
+  windows. `relocate_improve` and `exchange_improve` already did.
+
 ## [0.4.0] - 2026-09-12
 
 ### Fixed

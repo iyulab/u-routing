@@ -15,6 +15,7 @@ use crate::alns::repair::GreedyInsertion;
 use crate::alns::RoutingAlnsProblem;
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
+use crate::evaluation::has_time_windows;
 use crate::ga::RoutingGaProblem;
 use crate::ga::{split, split_tw};
 use crate::local_search::{or_opt_improve, two_opt_improve};
@@ -189,16 +190,6 @@ pub(crate) fn solve(
         }
     }
 
-    // Savings and ALNS have no notion of time: their routes would ignore the
-    // windows and still be reported as a plan.
-    if has_time_windows(&customers) && matches!(method, Method::Savings | Method::Alns) {
-        return Err(format!(
-            "method \"{}\" does not model time windows, and customers carry them; \
-             use \"nn\" or \"ga\", which keep them",
-            method.name()
-        ));
-    }
-
     if customers.len() <= 1 {
         return Ok(VrpOutput {
             routes: vec![],
@@ -274,11 +265,6 @@ fn build_customers(
     Ok((customers, id_map))
 }
 
-/// Whether any customer carries a time window.
-fn has_time_windows(customers: &[Customer]) -> bool {
-    customers.iter().any(|c| c.time_window().is_some())
-}
-
 /// Converts internal route indices back to original customer IDs.
 fn map_routes(routes: &[Vec<usize>], id_map: &[usize]) -> Vec<Vec<usize>> {
     routes
@@ -292,13 +278,19 @@ fn map_routes(routes: &[Vec<usize>], id_map: &[usize]) -> Vec<Vec<usize>> {
         .collect()
 }
 
-/// Applies intra-route 2-opt + or-opt local search to improve routes.
-fn apply_local_search(routes: &[Vec<usize>], dm: &DistanceMatrix) -> (Vec<Vec<usize>>, f64) {
+/// Applies intra-route 2-opt + or-opt local search to improve routes. With
+/// time windows the moves only reorder a route in ways that keep every
+/// customer on time.
+fn apply_local_search(
+    routes: &[Vec<usize>],
+    dm: &DistanceMatrix,
+    customers: &[Customer],
+) -> (Vec<Vec<usize>>, f64) {
     let mut improved_routes = Vec::with_capacity(routes.len());
     let mut total = 0.0;
     for route in routes {
-        let (r1, _) = two_opt_improve(route, 0, dm);
-        let (r2, dist) = or_opt_improve(&r1, 0, dm);
+        let (r1, _) = two_opt_improve(route, 0, dm, customers);
+        let (r2, dist) = or_opt_improve(&r1, 0, dm, customers);
         total += dist;
         improved_routes.push(r2);
     }
@@ -422,13 +414,15 @@ fn solve_ga(
     // Split the best individual into routes the way its fitness was computed.
     // 2-opt and or-opt reorder a route without regard to time, so a problem
     // with windows keeps the split routes as they are.
+    // 2-opt and or-opt only take moves that keep every customer on time, so
+    // the split routes can be polished either way.
     let tour = ga_result.best.customers();
-    let (improved_routes, total_distance) = if has_time_windows(customers) {
-        let result = split_tw(tour, customers, dm, capacity);
-        (result.routes, result.total_distance)
+    let routes = if has_time_windows(customers) {
+        split_tw(tour, customers, dm, capacity).routes
     } else {
-        apply_local_search(&split(tour, customers, dm, capacity).routes, dm)
+        split(tour, customers, dm, capacity).routes
     };
+    let (improved_routes, total_distance) = apply_local_search(&routes, dm, customers);
     let mapped = map_routes(&improved_routes, id_map);
 
     Ok(VrpOutput {
@@ -473,7 +467,7 @@ fn solve_alns(
 
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
-    let (improved_routes, total_distance) = apply_local_search(&alns_routes, dm);
+    let (improved_routes, total_distance) = apply_local_search(&alns_routes, dm, customers);
     let mapped = map_routes(&improved_routes, id_map);
 
     Ok(VrpOutput {
@@ -692,10 +686,10 @@ mod tests {
     }
 
     #[test]
-    fn methods_that_model_time_windows_keep_them() {
+    fn every_method_keeps_time_windows() {
         let customers = clashing_windows();
         let two = fleet(&[100.0, 100.0]);
-        for method in ["nn", "ga"] {
+        for method in ["nn", "savings", "ga", "alns"] {
             let out = solve((0.0, 0.0), &customers, &two, method, &quick()).expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
@@ -706,12 +700,58 @@ mod tests {
         }
     }
 
+    /// Eight customers on a ring whose windows open in ring order but close
+    /// tightly, so the shortest tour (the ring) is the only one that is on
+    /// time and every method has to find it with its windows, not against
+    /// them. The local search then has plenty of tempting reversals that
+    /// would shorten nothing and make someone late.
+    fn ordered_ring() -> Vec<InputCustomer> {
+        (1..=8)
+            .map(|i| {
+                let angle = std::f64::consts::TAU * (i - 1) as f64 / 8.0;
+                // Walking the ring, customer i is reached after about i - 1
+                // chords of length 2·sin(π/8) ≈ 0.765 plus the radius.
+                let due = 1.0 + 0.766 * (i - 1) as f64 + 0.3;
+                customer(serde_json::json!({
+                    "id": i, "x": angle.cos(), "y": angle.sin(), "service_time": 0.0,
+                    "time_window": [0.0, due]
+                }))
+            })
+            .collect()
+    }
+
     #[test]
-    fn methods_without_time_windows_refuse_them() {
-        let customers = clashing_windows();
-        for method in ["savings", "alns"] {
-            let err = solve((0.0, 0.0), &customers, &[], method, &quick()).expect_err(method);
-            assert!(err.contains("time window"), "{method}: {err}");
+    fn every_method_keeps_windows_on_a_ring_that_tempts_reversals() {
+        let customers = ordered_ring();
+        let fleet = fleet(&[100.0, 100.0, 100.0, 100.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick()).expect(method);
+            assert!(
+                late_arrivals(&out, &customers).is_empty(),
+                "{method}: {:?}",
+                out.routes
+            );
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+        }
+    }
+
+    /// A customer no route can reach on time is reported unassigned rather
+    /// than served late, by every method.
+    #[test]
+    fn an_unreachable_window_is_reported_unassigned_not_served_late() {
+        let mut customers = clashing_windows();
+        customers.push(customer(serde_json::json!({
+            "id": 3, "x": 10.0, "y": 0.0, "service_time": 0.0, "time_window": [0.0, 5.0]
+        })));
+        let fleet = fleet(&[100.0, 100.0, 100.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick()).expect(method);
+            assert!(
+                late_arrivals(&out, &customers).is_empty(),
+                "{method}: {:?}",
+                out.routes
+            );
+            assert_eq!(out.unassigned, vec![3], "{method}: {:?}", out.routes);
         }
     }
 
@@ -725,8 +765,6 @@ mod tests {
         let errors = [
             solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
                 .expect_err("mixed fleet"),
-            solve((0.0, 0.0), &clashing_windows(), &[], "alns", &quick())
-                .expect_err("time windows"),
             solve((0.0, 0.0), &fraction, &[], "nn", &quick()).expect_err("fractional demand"),
         ];
         for e in errors {

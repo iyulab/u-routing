@@ -142,14 +142,15 @@ impl GaProblem for RoutingGaProblem {
         if unserved > 0 {
             return result.total_distance + self.unserved_penalty * unserved as f64;
         }
-        if !self.apply_local_search || self.time_windows {
+        if !self.apply_local_search {
             return result.total_distance;
         }
 
-        // Apply 2-opt to each route
+        // Apply 2-opt to each route. With time windows, 2-opt only takes
+        // reversals that keep every customer on time.
         let mut total = 0.0;
         for route in &result.routes {
-            let (_, dist) = two_opt_improve(route, 0, &self.distances);
+            let (_, dist) = two_opt_improve(route, 0, &self.distances, &self.customers);
             total += dist;
         }
         total

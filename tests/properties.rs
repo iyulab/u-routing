@@ -11,14 +11,20 @@
 //!   guarantee.
 
 use proptest::prelude::*;
-use u_routing::constructive::{clarke_wright_savings, nearest_neighbor, sweep};
+use u_metaheur::alns::RepairOperator;
+use u_routing::alns::repair::{GreedyInsertion, RegretInsertion};
+use u_routing::alns::RoutingSolution;
+use u_routing::constructive::{
+    clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw, sweep,
+};
 use u_routing::distance::DistanceMatrix;
+use u_routing::evaluation::time_windows_respected;
 use u_routing::ga::split;
 use u_routing::local_search::{
     exchange_improve, or_opt_improve, relocate_improve, route_distance, three_opt_improve,
     two_opt_improve,
 };
-use u_routing::models::{Customer, Solution, Vehicle};
+use u_routing::models::{Customer, Solution, TimeWindow, Vehicle};
 
 const EPS: f64 = 1e-9;
 
@@ -42,6 +48,41 @@ fn instance(
 /// A capacity that admits every single customer, so a feasible split exists.
 fn capacity_for(customers: &[Customer], slack: i32) -> i32 {
     customers.iter().map(Customer::demand).max().unwrap_or(0) + slack
+}
+
+/// The instance with a window on every customer, cut so that visiting them
+/// in id order on one vehicle is on time with `slack` to spare: the windows
+/// close at the arrival time of that tour plus the slack. A feasible plan
+/// therefore exists, and a search has real windows to respect.
+fn windowed(customers: &[Customer], slack: f64) -> Vec<Customer> {
+    let dm = DistanceMatrix::from_customers(customers);
+    let mut out = vec![customers[0].clone()];
+    let mut time = 0.0;
+    let mut prev = 0;
+    for c in customers.iter().skip(1) {
+        time += dm.get(prev, c.id());
+        let tw = TimeWindow::new(0.0, time + slack).expect("due after ready");
+        out.push(
+            Customer::new(c.id(), c.x(), c.y(), c.demand(), c.service_duration())
+                .with_time_window(tw),
+        );
+        prev = c.id();
+    }
+    out
+}
+
+fn routes_on_time(
+    routes: &[Vec<usize>],
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+) -> Result<(), TestCaseError> {
+    for route in routes {
+        prop_assert!(
+            time_windows_respected(route, 0, dm, customers),
+            "route {route:?} reaches a customer after its window closes"
+        );
+    }
+    Ok(())
 }
 
 fn sorted(mut ids: Vec<usize>) -> Vec<usize> {
@@ -160,11 +201,11 @@ proptest! {
         let before = route_distance(&route, 0, &dm);
 
         for (name, improve) in [
-            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix) -> (Vec<usize>, f64)),
+            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer]) -> (Vec<usize>, f64)),
             ("or_opt", or_opt_improve),
             ("three_opt", three_opt_improve),
         ] {
-            let (after_route, after_dist) = improve(&route, 0, &dm);
+            let (after_route, after_dist) = improve(&route, 0, &dm, &customers);
             prop_assert_eq!(sorted(after_route.clone()), route.clone(), "{} lost or duplicated a customer", name);
             let priced = route_distance(&after_route, 0, &dm);
             prop_assert!(
@@ -231,6 +272,62 @@ proptest! {
                 initial.total_distance(),
                 improved.total_distance()
             );
+        }
+    }
+
+    /// With time windows every move and every constructive keeps each route on
+    /// time: the intra-route moves leave a feasible route feasible, savings
+    /// and nearest-neighbour build only on-time routes, and the ALNS repairs
+    /// insert only on time -- a customer that cannot be placed on time is
+    /// left unassigned, never served late.
+    #[test]
+    fn with_time_windows_nothing_is_served_late(
+        base in instance(2..=12usize, 10),
+        slack in 0.0f64..50.0,
+    ) {
+        let customers = windowed(&base, slack);
+        let dm = DistanceMatrix::from_customers(&customers);
+        let capacity = capacity_for(&customers, 200);
+        let route = all_customer_ids(&customers);
+        prop_assert!(time_windows_respected(&route, 0, &dm, &customers), "the seed tour is on time by construction");
+
+        for (name, improve) in [
+            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer]) -> (Vec<usize>, f64)),
+            ("or_opt", or_opt_improve),
+            ("three_opt", three_opt_improve),
+        ] {
+            let (after, _) = improve(&route, 0, &dm, &customers);
+            prop_assert_eq!(sorted(after.clone()), route.clone(), "{} lost a customer", name);
+            prop_assert!(time_windows_respected(&after, 0, &dm, &customers), "{} made a customer late: {:?}", name, after);
+        }
+
+        let vehicle = Vehicle::new(0, capacity);
+        let vehicles: Vec<Vehicle> = (0..customers.len()).map(|i| Vehicle::new(i, capacity)).collect();
+        for (name, solution) in [
+            ("savings", clarke_wright_savings(&customers, &dm, &vehicle)),
+            ("nn_tw", nearest_neighbor_tw(&customers, &dm, &vehicles)),
+        ] {
+            let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
+            routes_on_time(&routes, &customers, &dm)?;
+            let served: usize = routes.iter().map(Vec::len).sum();
+            prop_assert_eq!(served + solution.num_unassigned(), customers.len() - 1, "{} lost a customer", name);
+            let improved = relocate_improve(&solution, &customers, &dm, &vehicle);
+            let improved = exchange_improve(&improved, &customers, &dm, &vehicle);
+            let routes: Vec<Vec<usize>> = improved.routes().iter().map(|r| r.customer_ids()).collect();
+            routes_on_time(&routes, &customers, &dm)?;
+        }
+
+        let empty = RoutingSolution::new(Vec::new(), route.clone(), &customers, &dm);
+        let mut rng = u_numflow::random::create_rng(7);
+        for (name, repaired) in [
+            ("greedy", GreedyInsertion::new(dm.clone(), customers.clone(), capacity).repair(&empty, &mut rng)),
+            ("regret", RegretInsertion::new(dm.clone(), customers.clone(), capacity).repair(&empty, &mut rng)),
+        ] {
+            routes_on_time(repaired.routes(), &customers, &dm)?;
+            let served: usize = repaired.routes().iter().map(Vec::len).sum();
+            prop_assert_eq!(served + repaired.unassigned().len(), customers.len() - 1, "{} lost a customer", name);
+            // Every customer is reachable on its own, so nothing stays unassigned.
+            prop_assert!(repaired.unassigned().is_empty(), "{} left {:?} unassigned", name, repaired.unassigned());
         }
     }
 }

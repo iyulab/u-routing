@@ -19,6 +19,8 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::models::Customer;
 
 /// Applies Or-opt improvement to a single route.
 ///
@@ -47,7 +49,7 @@ use crate::distance::DistanceMatrix;
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
 /// // Try a suboptimal order
-/// let (improved, dist) = or_opt_improve(&[1, 3, 2], 0, &dm);
+/// let (improved, dist) = or_opt_improve(&[1, 3, 2], 0, &dm, &customers);
 /// let orig_dist = route_distance(&[1, 3, 2], 0, &dm);
 /// assert!(dist <= orig_dist + 1e-10);
 /// ```
@@ -55,6 +57,7 @@ pub fn or_opt_improve(
     route: &[usize],
     depot: usize,
     distances: &DistanceMatrix,
+    customers: &[Customer],
 ) -> (Vec<usize>, f64) {
     if route.len() < 2 {
         let dist = if route.is_empty() {
@@ -65,6 +68,7 @@ pub fn or_opt_improve(
         return (route.to_vec(), dist);
     }
 
+    let windowed = has_time_windows(customers);
     let mut current = route.to_vec();
     let mut improved = true;
 
@@ -73,7 +77,10 @@ pub fn or_opt_improve(
 
         // Try segment sizes 1, 2, 3
         for seg_len in 1..=3.min(current.len()) {
-            if try_or_opt_pass(&mut current, depot, distances, seg_len) {
+            let gate = |candidate: &[usize]| {
+                !windowed || time_windows_respected(candidate, depot, distances, customers)
+            };
+            if try_or_opt_pass(&mut current, depot, distances, seg_len, &gate) {
                 improved = true;
             }
         }
@@ -102,6 +109,7 @@ fn try_or_opt_pass(
     depot: usize,
     distances: &DistanceMatrix,
     seg_len: usize,
+    accepts: &dyn Fn(&[usize]) -> bool,
 ) -> bool {
     let n = route.len();
     if n < seg_len + 1 {
@@ -160,7 +168,7 @@ fn try_or_opt_pass(
 
             let delta = insertion_cost - removal_gain;
 
-            if delta < best_delta {
+            if delta < best_delta && accepts(&moved(route, from, to, seg_len)) {
                 best_delta = delta;
                 best_from = from;
                 best_to = to;
@@ -169,20 +177,23 @@ fn try_or_opt_pass(
     }
 
     if best_delta < -1e-10 {
-        // Execute the move: remove segment, then insert at new position
-        let segment: Vec<usize> = route.drain(best_from..best_from + seg_len).collect();
-        let insert_pos = if best_to > best_from {
-            best_to - seg_len
-        } else {
-            best_to
-        };
-        for (i, &cid) in segment.iter().enumerate() {
-            route.insert(insert_pos + i, cid);
-        }
+        *route = moved(route, best_from, best_to, seg_len);
         true
     } else {
         false
     }
+}
+
+/// The route with the segment `[from, from + seg_len)` moved to position
+/// `to` of the original indexing.
+fn moved(route: &[usize], from: usize, to: usize, seg_len: usize) -> Vec<usize> {
+    let mut out = route.to_vec();
+    let segment: Vec<usize> = out.drain(from..from + seg_len).collect();
+    let insert_pos = if to > from { to - seg_len } else { to };
+    for (i, &cid) in segment.iter().enumerate() {
+        out.insert(insert_pos + i, cid);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -203,24 +214,24 @@ mod tests {
 
     #[test]
     fn test_or_opt_already_optimal() {
-        let (_, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[1, 2, 3], 0, &dm);
+        let (customers, dm) = line_customers();
+        let (improved, dist) = or_opt_improve(&[1, 2, 3], 0, &dm, &customers);
         assert_eq!(improved, vec![1, 2, 3]);
         assert!((dist - 6.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_or_opt_empty() {
-        let (_, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[], 0, &dm);
+        let (customers, dm) = line_customers();
+        let (improved, dist) = or_opt_improve(&[], 0, &dm, &customers);
         assert!(improved.is_empty());
         assert_eq!(dist, 0.0);
     }
 
     #[test]
     fn test_or_opt_single() {
-        let (_, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[2], 0, &dm);
+        let (customers, dm) = line_customers();
+        let (improved, dist) = or_opt_improve(&[2], 0, &dm, &customers);
         assert_eq!(improved, vec![2]);
         assert!((dist - 4.0).abs() < 1e-10);
     }
@@ -237,14 +248,14 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 4, 2, 3]; // deliberately bad order
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm);
+        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
     #[test]
     fn test_or_opt_two_customers() {
-        let (_, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[2, 1], 0, &dm);
+        let (customers, dm) = line_customers();
+        let (improved, dist) = or_opt_improve(&[2, 1], 0, &dm, &customers);
         // 0→2→1→0 = 2+1+1 = 4 vs 0→1→2→0 = 1+1+2 = 4 (same distance on line)
         assert_eq!(improved.len(), 2);
         assert!(dist <= 4.0 + 1e-10);
@@ -261,7 +272,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 2]; // crosses
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm);
+        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 

@@ -21,6 +21,8 @@
 
 use super::or_opt::route_distance;
 use crate::distance::DistanceMatrix;
+use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::models::Customer;
 
 /// Applies 3-opt improvement to a single route.
 ///
@@ -48,7 +50,7 @@ use crate::distance::DistanceMatrix;
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
-/// let (improved, dist) = three_opt_improve(&[1, 3, 2], 0, &dm);
+/// let (improved, dist) = three_opt_improve(&[1, 3, 2], 0, &dm, &customers);
 /// let orig_dist = route_distance(&[1, 3, 2], 0, &dm);
 /// assert!(dist <= orig_dist + 1e-10);
 /// ```
@@ -56,6 +58,7 @@ pub fn three_opt_improve(
     route: &[usize],
     depot: usize,
     distances: &DistanceMatrix,
+    customers: &[Customer],
 ) -> (Vec<usize>, f64) {
     if route.len() < 4 {
         // 3-opt needs at least 4 customers to have 3 non-adjacent edges
@@ -63,6 +66,10 @@ pub fn three_opt_improve(
         return (route.to_vec(), dist);
     }
 
+    let windowed = has_time_windows(customers);
+    let accepts = |candidate: &[usize]| {
+        !windowed || time_windows_respected(candidate, depot, distances, customers)
+    };
     let mut current = route.to_vec();
     let mut improved = true;
 
@@ -73,7 +80,8 @@ pub fn three_opt_improve(
         'outer: for i in 0..n - 2 {
             for j in (i + 1)..n - 1 {
                 for k in (j + 1)..n {
-                    if let Some(new_route) = try_three_opt_move(&current, depot, distances, i, j, k)
+                    if let Some(new_route) =
+                        try_three_opt_move(&current, depot, distances, i, j, k, &accepts)
                     {
                         current = new_route;
                         improved = true;
@@ -103,6 +111,7 @@ fn try_three_opt_move(
     i: usize,
     j: usize,
     k: usize,
+    accepts: &dyn Fn(&[usize]) -> bool,
 ) -> Option<Vec<usize>> {
     let n = route.len();
 
@@ -125,17 +134,17 @@ fn try_three_opt_move(
     let seg_c = &route[j + 1..=k];
     let seg_d = &route[k + 1..];
 
-    let mut best_delta = -1e-10;
-    let mut best_pattern = 0u8;
+    // Every improving pattern, best first; the first one the gate accepts is
+    // taken, so a window-violating reconnection yields to the next best.
+    let mut improving: Vec<(f64, u8)> = Vec::with_capacity(7);
 
     // Pattern 1: A - B - C' - D (reverse C only, = 2-opt on (j, k))
     let cost1 = distances.get(a_end, b_start)
         + distances.get(b_end, c_end)
         + distances.get(c_start, d_start);
     let delta1 = cost1 - old_cost;
-    if delta1 < best_delta {
-        best_delta = delta1;
-        best_pattern = 1;
+    if delta1 < -1e-10 {
+        improving.push((delta1, 1));
     }
 
     // Pattern 2: A - B' - C - D (reverse B only, = 2-opt on (i, j))
@@ -143,9 +152,8 @@ fn try_three_opt_move(
         + distances.get(b_start, c_start)
         + distances.get(c_end, d_start);
     let delta2 = cost2 - old_cost;
-    if delta2 < best_delta {
-        best_delta = delta2;
-        best_pattern = 2;
+    if delta2 < -1e-10 {
+        improving.push((delta2, 2));
     }
 
     // Pattern 3: A - B' - C' - D (reverse both B and C)
@@ -153,9 +161,8 @@ fn try_three_opt_move(
         + distances.get(b_start, c_end)
         + distances.get(c_start, d_start);
     let delta3 = cost3 - old_cost;
-    if delta3 < best_delta {
-        best_delta = delta3;
-        best_pattern = 3;
+    if delta3 < -1e-10 {
+        improving.push((delta3, 3));
     }
 
     // Pattern 4: A - C - B - D (swap B and C)
@@ -163,9 +170,8 @@ fn try_three_opt_move(
         + distances.get(c_end, b_start)
         + distances.get(b_end, d_start);
     let delta4 = cost4 - old_cost;
-    if delta4 < best_delta {
-        best_delta = delta4;
-        best_pattern = 4;
+    if delta4 < -1e-10 {
+        improving.push((delta4, 4));
     }
 
     // Pattern 5: A - C - B' - D (swap, reverse B)
@@ -173,9 +179,8 @@ fn try_three_opt_move(
         + distances.get(c_end, b_end)
         + distances.get(b_start, d_start);
     let delta5 = cost5 - old_cost;
-    if delta5 < best_delta {
-        best_delta = delta5;
-        best_pattern = 5;
+    if delta5 < -1e-10 {
+        improving.push((delta5, 5));
     }
 
     // Pattern 6: A - C' - B - D (swap, reverse C)
@@ -183,9 +188,8 @@ fn try_three_opt_move(
         + distances.get(c_start, b_start)
         + distances.get(b_end, d_start);
     let delta6 = cost6 - old_cost;
-    if delta6 < best_delta {
-        best_delta = delta6;
-        best_pattern = 6;
+    if delta6 < -1e-10 {
+        improving.push((delta6, 6));
     }
 
     // Pattern 7: A - C' - B' - D (swap, reverse both)
@@ -193,20 +197,29 @@ fn try_three_opt_move(
         + distances.get(c_start, b_end)
         + distances.get(b_start, d_start);
     let delta7 = cost7 - old_cost;
-    if delta7 < best_delta {
-        best_delta = delta7;
-        best_pattern = 7;
+    if delta7 < -1e-10 {
+        improving.push((delta7, 7));
     }
 
-    if best_pattern == 0 {
-        return None;
-    }
+    improving.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite deltas"));
+    improving
+        .into_iter()
+        .map(|(_, pattern)| reconnect(seg_a, seg_b, seg_c, seg_d, pattern))
+        .find(|candidate| accepts(candidate))
+}
 
-    // Reconstruct route based on best pattern
-    let mut new_route = Vec::with_capacity(route.len());
+/// The route `A · (B, C in the order and orientation of `pattern`) · D`.
+fn reconnect(
+    seg_a: &[usize],
+    seg_b: &[usize],
+    seg_c: &[usize],
+    seg_d: &[usize],
+    pattern: u8,
+) -> Vec<usize> {
+    let mut new_route = Vec::with_capacity(seg_a.len() + seg_b.len() + seg_c.len() + seg_d.len());
     new_route.extend_from_slice(seg_a);
 
-    match best_pattern {
+    match pattern {
         1 => {
             // A - B - C' - D
             new_route.extend_from_slice(seg_b);
@@ -246,8 +259,7 @@ fn try_three_opt_move(
     }
 
     new_route.extend_from_slice(seg_d);
-    let _ = best_delta;
-    Some(new_route)
+    new_route
 }
 
 #[cfg(test)]
@@ -270,9 +282,9 @@ mod tests {
 
     #[test]
     fn test_3opt_already_optimal() {
-        let (_, dm) = square_customers();
+        let (customers, dm) = square_customers();
         // Optimal tour around the square: 1→2→3→4
-        let (improved, dist) = three_opt_improve(&[1, 2, 3, 4], 0, &dm);
+        let (improved, dist) = three_opt_improve(&[1, 2, 3, 4], 0, &dm, &customers);
         let orig_dist = route_distance(&[1, 2, 3, 4], 0, &dm);
         assert!((dist - orig_dist).abs() < 1e-10);
         assert_eq!(improved.len(), 4);
@@ -280,10 +292,10 @@ mod tests {
 
     #[test]
     fn test_3opt_does_not_worsen() {
-        let (_, dm) = square_customers();
+        let (customers, dm) = square_customers();
         let initial = vec![1, 3, 2, 4]; // deliberately bad
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm);
+        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
@@ -301,31 +313,31 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 5, 2, 6, 4]; // scrambled
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm);
+        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
     #[test]
     fn test_3opt_small_routes_passthrough() {
-        let (_, dm) = square_customers();
+        let (customers, dm) = square_customers();
         // Routes with < 4 customers should pass through unchanged
-        let (r1, d1) = three_opt_improve(&[1], 0, &dm);
+        let (r1, d1) = three_opt_improve(&[1], 0, &dm, &customers);
         assert_eq!(r1, vec![1]);
         assert!(d1 > 0.0);
 
-        let (r2, d2) = three_opt_improve(&[1, 2], 0, &dm);
+        let (r2, d2) = three_opt_improve(&[1, 2], 0, &dm, &customers);
         assert_eq!(r2.len(), 2);
         assert!(d2 > 0.0);
 
-        let (r3, d3) = three_opt_improve(&[1, 2, 3], 0, &dm);
+        let (r3, d3) = three_opt_improve(&[1, 2, 3], 0, &dm, &customers);
         assert_eq!(r3.len(), 3);
         assert!(d3 > 0.0);
     }
 
     #[test]
     fn test_3opt_empty() {
-        let (_, dm) = square_customers();
-        let (improved, dist) = three_opt_improve(&[], 0, &dm);
+        let (customers, dm) = square_customers();
+        let (improved, dist) = three_opt_improve(&[], 0, &dm, &customers);
         assert!(improved.is_empty());
         assert_eq!(dist, 0.0);
     }
@@ -342,7 +354,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 4, 2, 5, 3];
-        let (improved, _) = three_opt_improve(&initial, 0, &dm);
+        let (improved, _) = three_opt_improve(&initial, 0, &dm, &customers);
         let mut sorted = improved.clone();
         sorted.sort();
         assert_eq!(sorted, vec![1, 2, 3, 4, 5]);
@@ -361,7 +373,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 2, 4]; // crosses edges
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm);
+        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 }

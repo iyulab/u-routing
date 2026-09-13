@@ -6,8 +6,9 @@
 use rand::Rng;
 use u_metaheur::alns::AlnsProblem;
 
-use crate::constructive::nearest_neighbor;
+use crate::constructive::{nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
+use crate::evaluation::has_time_windows;
 use crate::models::{Customer, Vehicle};
 
 use super::solution_repr::RoutingSolution;
@@ -69,7 +70,13 @@ impl AlnsProblem for RoutingAlnsProblem {
             .map(|i| Vehicle::new(i, self.capacity))
             .collect();
 
-        let nn_sol = nearest_neighbor(&self.customers, &self.distances, &vehicles);
+        // With time windows the seed must already respect them: the repair
+        // operators only ever insert on time, so a late seed would stay late.
+        let nn_sol = if has_time_windows(&self.customers) {
+            nearest_neighbor_tw(&self.customers, &self.distances, &vehicles)
+        } else {
+            nearest_neighbor(&self.customers, &self.distances, &vehicles)
+        };
 
         let routes: Vec<Vec<usize>> = nn_sol.routes().iter().map(|r| r.customer_ids()).collect();
         let unassigned: Vec<usize> = nn_sol.unassigned().to_vec();

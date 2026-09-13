@@ -15,13 +15,41 @@ use rand::Rng;
 use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::{has_time_windows, time_windows_respected};
 use crate::models::Customer;
 
 use super::solution_repr::RoutingSolution;
 
+/// Whether inserting `customer_id` at `pos` of `route` keeps every customer
+/// of the route on time. Always true when no customer carries a window.
+fn insertion_on_time(
+    route: &[usize],
+    pos: usize,
+    customer_id: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    windowed: bool,
+) -> bool {
+    if !windowed {
+        return true;
+    }
+    let mut candidate = Vec::with_capacity(route.len() + 1);
+    candidate.extend_from_slice(&route[..pos]);
+    candidate.push(customer_id);
+    candidate.extend_from_slice(&route[pos..]);
+    time_windows_respected(&candidate, 0, distances, customers)
+}
+
+/// Whether a route of this one customer reaches it on time. Always true
+/// when no customer carries a window.
+fn open_route(customer_id: usize, distances: &DistanceMatrix, customers: &[Customer]) -> bool {
+    !has_time_windows(customers) || time_windows_respected(&[customer_id], 0, distances, customers)
+}
+
 /// Finds the best insertion position for a customer across all routes.
 ///
-/// Returns `(route_index, position, cost_increase)`.
+/// Returns `(route_index, position, cost_increase)`. A position that would
+/// make a customer late is not a candidate.
 fn best_insertion(
     routes: &[Vec<usize>],
     customer_id: usize,
@@ -30,6 +58,7 @@ fn best_insertion(
     capacity: i32,
 ) -> Option<(usize, usize, f64)> {
     let depot = 0;
+    let windowed = has_time_windows(customers);
     let mut best: Option<(usize, usize, f64)> = None;
 
     for (ri, route) in routes.iter().enumerate() {
@@ -50,7 +79,9 @@ fn best_insertion(
             let cost = distances.get(prev, customer_id) + distances.get(customer_id, next)
                 - distances.get(prev, next);
 
-            if best.as_ref().is_none_or(|b| cost < b.2) {
+            if best.as_ref().is_none_or(|b| cost < b.2)
+                && insertion_on_time(route, pos, customer_id, distances, customers, windowed)
+            {
                 best = Some((ri, pos, cost));
             }
         }
@@ -138,9 +169,14 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
             }
 
             if !found {
-                // No feasible insertion — create new route for first unassigned
+                // No feasible insertion — open a route for the first unassigned
+                // customer, or leave it unassigned if even that arrives late.
                 let cid = unassigned.remove(0);
-                sol.routes_mut().push(vec![cid]);
+                if open_route(cid, &self.distances, &self.customers) {
+                    sol.routes_mut().push(vec![cid]);
+                } else {
+                    sol.unassigned_mut().push(cid);
+                }
             } else {
                 let cid = unassigned.remove(best_cust_idx);
                 sol.routes_mut()[best_route].insert(best_pos, cid);
@@ -190,6 +226,7 @@ impl RegretInsertion {
         customer_id: usize,
     ) -> Vec<(usize, usize, f64)> {
         let depot = 0;
+        let windowed = has_time_windows(&self.customers);
         let mut costs = Vec::new();
 
         for (ri, route) in routes.iter().enumerate() {
@@ -198,7 +235,7 @@ impl RegretInsertion {
                 continue;
             }
 
-            // Find best position in this route
+            // Find best on-time position in this route
             let mut best_pos = 0;
             let mut best_cost = f64::INFINITY;
             for pos in 0..=route.len() {
@@ -211,12 +248,23 @@ impl RegretInsertion {
                 let cost = self.distances.get(prev, customer_id)
                     + self.distances.get(customer_id, next)
                     - self.distances.get(prev, next);
-                if cost < best_cost {
+                if cost < best_cost
+                    && insertion_on_time(
+                        route,
+                        pos,
+                        customer_id,
+                        &self.distances,
+                        &self.customers,
+                        windowed,
+                    )
+                {
                     best_cost = cost;
                     best_pos = pos;
                 }
             }
-            costs.push((ri, best_pos, best_cost));
+            if best_cost.is_finite() {
+                costs.push((ri, best_pos, best_cost));
+            }
         }
 
         costs.sort_by(|a, b| {
@@ -276,9 +324,14 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
             }
 
             if !found {
-                // Create new route for the first unassigned
+                // Open a route for the first unassigned customer, or leave it
+                // unassigned if even that arrives late.
                 let cid = unassigned.remove(0);
-                sol.routes_mut().push(vec![cid]);
+                if open_route(cid, &self.distances, &self.customers) {
+                    sol.routes_mut().push(vec![cid]);
+                } else {
+                    sol.unassigned_mut().push(cid);
+                }
             } else {
                 let cid = unassigned.remove(best_cust_idx);
                 sol.routes_mut()[best_route].insert(best_pos, cid);
