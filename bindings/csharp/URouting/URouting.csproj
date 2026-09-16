@@ -8,12 +8,17 @@
     <RootNamespace>URouting</RootNamespace>
     <AssemblyName>URouting</AssemblyName>
     <PackageId>URouting</PackageId>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Version>0.4.0</Version>
     <Authors>iyulab</Authors>
     <Description>Vehicle routing optimization (TSP, CVRP, VRPTW) — Rust engine with C# bindings.</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Native library bundling (4 platforms) -->
