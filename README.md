@@ -181,6 +181,22 @@ demand needs, so `num_vehicles` can exceed the length of `vehicles`; they
 reject a fleet whose vehicles differ in capacity. Without `vehicles`, there is
 one vehicle of unlimited capacity.
 
+**How many routes a plan may use: `config.max_vehicles`.** The length of
+`vehicles` is not that number. For `"savings"`, `"ga"` and `"alns"` a
+single-entry list is how a caller states one capacity, which is why the
+example above passes `vehicles: [{ capacity: 100 }]` and still gets as many
+routes as the demand needs. A caller whose fleet really is fixed says so with
+`config.max_vehicles`, and a plan that would need more routes is refused --
+naming both the routes needed and the limit -- rather than returned as if the
+fleet could run it. Every method reads it, `"nn"` included: `"nn"` cannot
+exceed its vehicle list, but it can exceed a smaller `max_vehicles`. Left out,
+nothing is capped and the methods behave exactly as before.
+
+Note what this does *not* do: it refuses, it does not re-plan. Fitting the
+customers into a fixed fleet at some cost in tour length is a different
+algorithm (a route-limited split), and choosing which customers to drop is a
+decision the crate will not make for a caller.
+
 **Time windows.** `time_window: [ready, due]` is measured in distance units: a
 vehicle leaves the depot at time 0, travels one distance unit per time unit,
 waits if it arrives before `ready`, and must arrive by `due`; `service_time`
@@ -200,6 +216,7 @@ than being served late.
 | `elite_ratio` | GA | 0.0 – 1.0; must not fill entire population | 0.1 |
 | `max_iterations` | ALNS | >= 1 | 500 |
 | `seed` | Both | any u64 (optional) | random |
+| `max_vehicles` | All | >= 1 (optional) | no limit |
 
 **Error handling:**
 
@@ -212,6 +229,8 @@ than being served late.
   refused rather than rounded, so scale the unit (kilograms to grams, say) to
   keep it
 - A fleet whose vehicles differ in capacity, with `"savings"`, `"ga"` or `"alns"`
+- A plan that needs more routes than `config.max_vehicles` allows, or a
+  `max_vehicles` of 0
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
 Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.

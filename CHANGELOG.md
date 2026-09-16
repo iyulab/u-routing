@@ -8,10 +8,31 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-16
+
+### Added
+
+- **`config.max_vehicles` -- a plan may be told how many routes it may use.**
+  `"savings"`, `"ga"` and `"alns"` open as many routes as the demand needs, and
+  nothing in the result said whether that exceeded the caller's own fleet, so a
+  caller with a fixed fleet received a plan it could not run. Stating
+  `max_vehicles` makes the solver refuse such a plan, naming both the number of
+  routes needed and the limit. Read by every method: `"nn"` cannot exceed its
+  vehicle list, but it can exceed a smaller `max_vehicles`. A `max_vehicles` of
+  0 is refused where it is stated.
+
+  The refusal is checked against the same number the result reports as
+  `num_vehicles`, so a caller comparing that field to its own fleet and the
+  crate refusing can never disagree.
+
+  This is additive: the length of `vehicles` keeps its meaning (for the three
+  methods above, a single entry states one capacity for an unbounded fleet),
+  and a request without `max_vehicles` behaves exactly as before.
+
 ### Changed
 
 - `u-numflow` pin moves to 0.6 (tail-precise normal functions). No change in
-  this crate's own code or output; not a release on its own.
+  this crate's own code or output.
 
 ## [0.5.0] - 2026-09-13
 

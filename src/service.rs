@@ -56,6 +56,8 @@ fn default_capacity() -> f64 {
 /// Optional solver configuration.
 ///
 /// Fields are shared across methods; each method uses only the relevant ones.
+/// Besides the per-method parameters, it carries limits the solver has to
+/// respect whichever method runs -- `max_vehicles` is one.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputConfig {
@@ -82,6 +84,15 @@ pub(crate) struct InputConfig {
     /// Random seed for reproducibility.
     #[serde(default)]
     seed: Option<u64>,
+    /// The number of routes the plan may use at most.
+    ///
+    /// The length of `vehicles` is not this number: it says which capacities
+    /// exist, and for `"savings"`, `"ga"` and `"alns"` a single-entry list is
+    /// how a caller states one capacity for an unbounded fleet. A caller with
+    /// a fixed fleet says so here, and a plan that would need more routes is
+    /// refused rather than returned as if the fleet could run it.
+    #[serde(default)]
+    max_vehicles: Option<usize>,
 }
 
 /// The method a request names when it names none.
@@ -161,8 +172,9 @@ impl Method {
 /// # Errors
 ///
 /// An unknown method, a time window that is not a window, a demand or capacity
-/// that is not a whole number of units in range, or solver settings the chosen
-/// method rejects.
+/// that is not a whole number of units in range, solver settings the chosen
+/// method rejects, or a plan that needs more routes than `config.max_vehicles`
+/// allows.
 pub(crate) fn solve(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
@@ -171,6 +183,13 @@ pub(crate) fn solve(
     config: &InputConfig,
 ) -> Result<VrpOutput, String> {
     let method = Method::parse(method)?;
+    if config.max_vehicles == Some(0) {
+        return Err(
+            "config.max_vehicles is 0, so no route may exist; give at least 1, \
+             or leave it out to accept as many routes as the plan needs"
+                .to_string(),
+        );
+    }
     let (customers, id_map) = build_customers(depot, input_customers)?;
     let vehicles = build_vehicles(input_vehicles)?;
     // Only nearest neighbour assigns routes to particular vehicles. The other
@@ -211,6 +230,21 @@ pub(crate) fn solve(
         Method::Genetic => solve_ga(&customers, &dm, capacity, &id_map, config)?,
         Method::Alns => solve_alns(&customers, &dm, capacity, &id_map, config)?,
     };
+    // Checked against the number the output reports, so the crate refuses
+    // exactly when the caller comparing `num_vehicles` to its own fleet would
+    // have. Applied to every method alike: `"nn"` cannot exceed the vehicle
+    // list, but it can exceed a smaller `max_vehicles`.
+    if let Some(max) = config.max_vehicles {
+        if output.num_vehicles > max {
+            return Err(format!(
+                "method \"{}\" needs {} routes to serve these customers, but \
+                 config.max_vehicles is {max}; raise max_vehicles, raise the \
+                 vehicle capacity, or leave max_vehicles out to accept the plan",
+                method.name(),
+                output.num_vehicles
+            ));
+        }
+    }
     // Derived from the routes rather than from each solver's own bookkeeping,
     // so it holds for every method alike.
     let served: std::collections::HashSet<usize> =
@@ -624,6 +658,121 @@ mod tests {
         }
     }
 
+    // ---- max_vehicles ----
+
+    /// Negative control for the whole group below: with no `max_vehicles`,
+    /// a single-entry `vehicles` list still means "one capacity", not "one
+    /// vehicle". That is what the README documents and what its own example
+    /// relies on, so the fix must not quietly turn the list length into a cap.
+    #[test]
+    fn a_single_capacity_entry_still_plans_as_many_routes_as_demand_needs() {
+        let customers = ring(8);
+        let one_capacity = fleet(&[10.0]);
+        for method in ["savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &one_capacity, method, &quick()).expect(method);
+            assert!(
+                out.num_vehicles > one_capacity.len(),
+                "{method}: expected more routes than the list length, got {}",
+                out.num_vehicles
+            );
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+        }
+    }
+
+    /// A caller that states its fleet gets a refusal naming both numbers,
+    /// in the shape the mixed-capacity refusal already uses.
+    #[test]
+    fn a_plan_needing_more_routes_than_max_vehicles_is_refused() {
+        let customers = ring(8);
+        let one_capacity = fleet(&[10.0]);
+        let limited = InputConfig {
+            max_vehicles: Some(2),
+            ..quick()
+        };
+        for method in ["savings", "ga", "alns"] {
+            let err =
+                solve((0.0, 0.0), &customers, &one_capacity, method, &limited).expect_err(method);
+            assert!(
+                err.contains("max_vehicles is 2") && err.contains(method),
+                "{method}: {err}"
+            );
+        }
+    }
+
+    /// The number in the refusal is the number the output would have
+    /// reported, so a caller comparing `num_vehicles` to its own fleet and
+    /// the crate refusing never disagree.
+    #[test]
+    fn the_refusal_names_the_route_count_the_output_would_have_reported() {
+        let customers = ring(8);
+        let one_capacity = fleet(&[10.0]);
+        for method in ["savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &one_capacity, method, &quick()).expect(method);
+            let needed = out.num_vehicles;
+            let limited = InputConfig {
+                max_vehicles: Some(needed - 1),
+                ..quick()
+            };
+            let err =
+                solve((0.0, 0.0), &customers, &one_capacity, method, &limited).expect_err(method);
+            assert!(
+                err.contains(&format!("needs {needed} routes")),
+                "{method}: expected the refusal to name {needed}, got: {err}"
+            );
+        }
+    }
+
+    /// A limit the plan fits is not a refusal -- the constraint is "at most",
+    /// not "exactly".
+    #[test]
+    fn a_max_vehicles_the_plan_fits_is_accepted() {
+        let customers = ring(8);
+        let one_capacity = fleet(&[10.0]);
+        let roomy = InputConfig {
+            max_vehicles: Some(8),
+            ..quick()
+        };
+        for method in ["savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &one_capacity, method, &roomy).expect(method);
+            assert!(out.num_vehicles <= 8, "{method}: {}", out.num_vehicles);
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+        }
+    }
+
+    /// `"nn"` cannot exceed its vehicle list, but it can exceed a smaller
+    /// `max_vehicles` -- so the limit is read by every method alike rather
+    /// than being a three-method special case.
+    #[test]
+    fn max_vehicles_is_read_by_nearest_neighbour_too() {
+        let customers = ring(8);
+        let four = fleet(&[10.0, 10.0, 10.0, 10.0]);
+        let unlimited = solve((0.0, 0.0), &customers, &four, "nn", &quick()).expect("nn");
+        assert!(unlimited.num_vehicles > 1, "{}", unlimited.num_vehicles);
+
+        let limited = InputConfig {
+            max_vehicles: Some(1),
+            ..quick()
+        };
+        let err =
+            solve((0.0, 0.0), &customers, &four, "nn", &limited).expect_err("nn over the limit");
+        assert!(
+            err.contains("max_vehicles is 1") && err.contains("\"nn\""),
+            "{err}"
+        );
+    }
+
+    /// Zero routes cannot serve a customer, so it is refused where it is
+    /// stated rather than turning every solve into a route-count failure.
+    #[test]
+    fn a_max_vehicles_of_zero_is_refused_as_stated() {
+        let zero = InputConfig {
+            max_vehicles: Some(0),
+            ..quick()
+        };
+        let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), "ga", &zero).expect_err("zero");
+        assert!(err.contains("max_vehicles is 0"), "{err}");
+    }
+
     /// Only nearest neighbour reads each vehicle. The other methods plan with
     /// one capacity, and took the first vehicle's for the whole fleet: a
     /// fleet of 10 and 100 was solved as two vehicles of 10.
@@ -762,10 +911,22 @@ mod tests {
         let fraction = [customer(serde_json::json!({
             "id": 1, "x": 1.0, "y": 0.0, "demand": 0.5
         }))];
+        let over_fleet = InputConfig {
+            max_vehicles: Some(1),
+            ..quick()
+        };
+        let no_fleet = InputConfig {
+            max_vehicles: Some(0),
+            ..quick()
+        };
         let errors = [
             solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
                 .expect_err("mixed fleet"),
             solve((0.0, 0.0), &fraction, &[], "nn", &quick()).expect_err("fractional demand"),
+            solve((0.0, 0.0), &ring(8), &fleet(&[10.0]), "ga", &over_fleet)
+                .expect_err("over max_vehicles"),
+            solve((0.0, 0.0), &ring(8), &fleet(&[10.0]), "ga", &no_fleet)
+                .expect_err("zero max_vehicles"),
         ];
         for e in errors {
             assert!(!e.contains("  "), "{e}");

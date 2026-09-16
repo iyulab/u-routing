@@ -217,6 +217,35 @@ mod tests {
         assert!(body["error"].is_string());
     }
 
+    /// The C transport carries `max_vehicles` from the same shared wire type
+    /// the WebAssembly binding uses, and a plan over the limit has to arrive
+    /// as a *failure status* -- the C# client raises on the status alone, so
+    /// an error body under status 0 would reach it as a successful result.
+    #[test]
+    fn a_plan_over_max_vehicles_reports_a_failure_status() {
+        let mut request = problem("savings");
+        request["config"] = serde_json::json!({ "max_vehicles": 1 });
+        let (code, body) = solve(&request);
+        assert_ne!(code, 0, "{body}");
+        let message = body["error"].as_str().expect("an error string");
+        assert!(
+            message.contains("max_vehicles is 1") && message.contains("routes"),
+            "{message}"
+        );
+    }
+
+    /// The same request without the limit is planned, not refused -- so the
+    /// test above is measuring the limit rather than a broken problem.
+    #[test]
+    fn the_same_plan_without_a_limit_is_not_refused() {
+        let (code, body) = solve(&problem("savings"));
+        assert_eq!(code, 0, "{body}");
+        assert!(
+            body["num_vehicles"].as_u64().expect("a route count") > 1,
+            "{body}"
+        );
+    }
+
     #[test]
     fn malformed_json_reports_the_parse_status() {
         let request = CString::new("{not json").expect("no interior NUL");
