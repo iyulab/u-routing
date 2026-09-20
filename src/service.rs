@@ -101,6 +101,7 @@ pub(crate) fn default_method() -> String {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 pub(crate) struct VrpOutput {
     pub(crate) routes: Vec<Vec<usize>>,
     pub(crate) total_distance: f64,

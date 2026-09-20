@@ -127,7 +127,7 @@ struct VrpInput {
 /// unknown method, a time window with `ready > due`, a demand or capacity that
 /// is not a whole number of units, a mixed fleet or time windows the method
 /// cannot model, or solver settings the method rejects.
-#[wasm_bindgen]
+#[wasm_bindgen(unchecked_return_type = "VrpOutput")]
 pub fn solve_vrp(problem: JsValue) -> Result<JsValue, JsValue> {
     let input: VrpInput = from_js(problem, "problem")?;
     let config = input.config.unwrap_or_default();
