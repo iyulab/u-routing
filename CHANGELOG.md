@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Changed
+
+- **`solve_vrp` declares its parameter type.** The problem was typed `any`; it
+  is `VrpInput`, declared from the structs the binding deserialises, with
+  `method` as `"nn" | "savings" | "ga" | "alns"`. **TypeScript code that passed
+  a wrong shape or an unknown method now fails to compile**; the runtime path
+  is unchanged.
+- The publishing workflow now also fails if an exported function takes a
+  parameter typed `any` (`check-typed-dts.sh --params`).
+
 ## [0.6.1] - 2026-09-20
 
 C# `URouting` NuGet 0.4.0 → **0.5.0** (2026-09-25, binding only): rebuilt on

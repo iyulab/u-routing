@@ -79,23 +79,28 @@ fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Resul
 // Customers, vehicles and solver settings are the shared wire types in
 // `service`. Only the top level is this binding's own: the depot is an object.
 
-#[derive(Deserialize)]
+#[derive(Deserialize, tsify::Tsify)]
 #[serde(deny_unknown_fields)]
 struct InputDepot {
     x: f64,
     y: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, tsify::Tsify)]
 #[serde(deny_unknown_fields)]
 struct VrpInput {
     customers: Vec<InputCustomer>,
     #[serde(default)]
+    #[tsify(optional)]
     vehicles: Vec<InputVehicle>,
     depot: InputDepot,
     #[serde(default = "service::default_method")]
+    #[tsify(optional)]
+    #[tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")]
     method: String,
     #[serde(default)]
+    #[tsify(optional)]
+    #[tsify(type = "InputConfig | null")]
     config: Option<InputConfig>,
 }
 
@@ -128,7 +133,9 @@ struct VrpInput {
 /// is not a whole number of units, a mixed fleet or time windows the method
 /// cannot model, or solver settings the method rejects.
 #[wasm_bindgen(unchecked_return_type = "VrpOutput")]
-pub fn solve_vrp(problem: JsValue) -> Result<JsValue, JsValue> {
+pub fn solve_vrp(
+    #[wasm_bindgen(unchecked_param_type = "VrpInput")] problem: JsValue,
+) -> Result<JsValue, JsValue> {
     let input: VrpInput = from_js(problem, "problem")?;
     let config = input.config.unwrap_or_default();
 

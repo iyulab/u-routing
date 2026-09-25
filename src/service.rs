@@ -28,24 +28,31 @@ use u_metaheur::ga::{GaConfig, GaRunner};
 // ============================================================================
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputCustomer {
     id: usize,
     x: f64,
     y: f64,
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
     demand: f64,
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
     service_time: f64,
     /// Optional time window as `[ready, due]`.
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, number] | null"))]
     time_window: Option<[f64; 2]>,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputVehicle {
     #[serde(default = "default_capacity")]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
     capacity: f64,
 }
 
@@ -59,30 +66,43 @@ fn default_capacity() -> f64 {
 /// Besides the per-method parameters, it carries limits the solver has to
 /// respect whichever method runs -- `max_vehicles` is one.
 #[derive(Deserialize, Default)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputConfig {
     // --- GA parameters ---
     /// Population size for GA (default: 50).
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     population_size: Option<usize>,
     /// Maximum generations for GA (default: 200).
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     max_generations: Option<usize>,
     /// Mutation rate for GA in (0, 1] (default: 0.1).
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     mutation_rate: Option<f64>,
     /// Elite ratio for GA in (0, 1] (default: 0.1).
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     elite_ratio: Option<f64>,
 
     // --- ALNS parameters ---
     /// Maximum iterations for ALNS (default: 500).
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     max_iterations: Option<usize>,
 
     // --- Shared ---
     /// Random seed for reproducibility.
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     seed: Option<u64>,
     /// The number of routes the plan may use at most.
     ///
@@ -92,6 +112,8 @@ pub(crate) struct InputConfig {
     /// a fixed fleet says so here, and a plan that would need more routes is
     /// refused rather than returned as if the fleet could run it.
     #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     max_vehicles: Option<usize>,
 }
 
