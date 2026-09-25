@@ -8,6 +8,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [0.6.1] - 2026-09-20
 
+C# `URouting` NuGet 0.4.0 → **0.5.0** (2026-09-25, binding only): rebuilt on
+this release. 0.4.0 shipped the 0.5.0 engine, so `config.max_vehicles` (0.6.0)
+did not reach .NET; a `SolveVrp` request may now state it. The C# surface is
+unchanged.
+
 ### Added
 
 - **Every exported WASM function declares its return type.** They were typed
