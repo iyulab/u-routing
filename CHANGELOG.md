@@ -8,6 +8,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
 ### Changed
 
 - **`solve_vrp` declares its parameter type.** The problem was typed `any`; it
@@ -16,7 +18,7 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   a wrong shape or an unknown method now fails to compile**; the runtime path
   is unchanged.
 - The publishing workflow now also fails if an exported function takes a
-  parameter typed `any` (`check-typed-dts.sh --params`).
+  parameter typed `any` (`check-typed-dts.sh`).
 
 ## [0.6.1] - 2026-09-20
 
