@@ -25,7 +25,7 @@ TSP, CVRP, and VRPTW variants.
 use u_routing::models::{Customer, Vehicle};
 use u_routing::distance::DistanceMatrix;
 use u_routing::constructive::nearest_neighbor;
-use u_routing::local_search::{two_opt_improve, relocate_improve};
+use u_routing::local_search::relocate_improve;
 
 let customers = vec![
     Customer::depot(0.0, 0.0),
@@ -63,7 +63,7 @@ let config = GaConfig::default()
     .with_population_size(50)
     .with_max_generations(200);
 
-let result = GaRunner::run(&problem, &config);
+let result = GaRunner::run(&problem, &config).expect("valid GA config");
 println!("Best distance: {}", result.best_fitness);
 ```
 
@@ -88,13 +88,13 @@ let destroy = vec![RandomRemoval];
 let repair = vec![GreedyInsertion::new(dm, customers, 30)];
 let config = AlnsConfig::default().with_max_iterations(5000).with_seed(42);
 
-let result = AlnsRunner::run(&problem, &destroy, &repair, &config);
+let result = AlnsRunner::run(&problem, &destroy, &repair, &config).expect("valid ALNS config");
 println!("Best cost: {}", result.best_cost);
 ```
 
 ## Architecture
 
-```
+```text
 u-routing
 ├── models/          Domain types (Customer, Vehicle, Route, Solution)
 ├── distance/        Distance matrix

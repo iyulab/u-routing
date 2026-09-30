@@ -27,6 +27,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   positions. The output names customers by id alone, so such a plan came back
   as `routes: [[1, 1]]` with no way to tell which point was visited when.
   Input that used to be accepted is now refused.
+- The README's GA and ALNS examples did not compile: both runners return a
+  `Result`, which the examples read fields from directly.
+  The README's Rust examples are now compiled and run with the doc-tests,
+  so an example that stops matching the API fails CI.
 
 ## [0.7.0] - 2026-09-29
 
