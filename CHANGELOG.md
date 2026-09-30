@@ -8,6 +8,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
+C# `URouting` NuGet 0.5.0 → **0.5.1** (binding only): rebuilt on this release so the
+refusal of a repeated customer `id` reaches .NET. The C# surface is unchanged.
+
 ### Changed
 
 - The publishing workflow runs the README's JavaScript examples against the
