@@ -8,6 +8,22 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- The publishing workflow runs the README's JavaScript examples against the
+  built package before it publishes, so an example that throws is caught
+  before a reader copies it.
+
+### Fixed
+
+- The README's JavaScript example imported a default `init` and called
+  `await init()`. This package has no default export -- it initialises when it
+  is imported, in Node and in bundlers alike -- so the example threw
+  `init is not a function` on its first line. It now imports the functions
+  directly.
+- The README said rejected inputs come back as rejected promises. `solve_vrp`
+  is synchronous and throws the message string; the README now says so.
+
 ## [0.7.0] - 2026-09-29
 
 ### Changed

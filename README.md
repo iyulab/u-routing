@@ -149,9 +149,8 @@ through a cast, and a rejected one says what was wrong.
 ### Quick Start
 
 ```javascript
-import init, { solve_vrp } from '@iyulab/u-routing';
+import { solve_vrp } from '@iyulab/u-routing';
 
-await init();
 const result = solve_vrp({
   customers: [
     { id: 1, x: 1.0, y: 2.0, demand: 10 },
@@ -252,7 +251,9 @@ than being served late.
   `max_vehicles` of 0
 - Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
 
-Errors are returned as rejected promises — they never cause `RuntimeError: unreachable` panics.
+`solve_vrp` is synchronous: a rejected input is thrown as the message string, so
+catch it with `try`/`catch` (there is no promise to reject). It never surfaces as a
+`RuntimeError: unreachable` panic.
 
 **Output:**
 ```json
