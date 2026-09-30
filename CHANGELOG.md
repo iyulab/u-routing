@@ -6,9 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
-## [Unreleased]
+## [0.9.0] - 2026-09-30
 
 ### Changed
+
+- C# `URouting` NuGet 0.5.1 → **0.6.0**: `RoutingException.Reason` and
+  `Details` (below).
+- Depends on u-numflow 0.7 and u-metaheur 0.5.
 
 - **Breaking:** every refusal now carries a stable `code` and the values behind
   it (`duplicate_id` with `id`, `first`, `second`; `not_whole_units` with
