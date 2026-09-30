@@ -74,7 +74,8 @@ fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Resul
     let refuse = |message: String| js_err(ServiceError::malformed_input(param, message));
     if value.as_string().is_some() {
         return Err(refuse(format!(
-            "{param}: expected a native JS object/array, got a string —              pass the value directly, not JSON.stringify(...)"
+            "{param}: expected a native JS object/array, got a string — \
+             pass the value directly, not JSON.stringify(...)"
         )));
     }
     // serde-wasm-bindgen reads only a struct's declared fields from a JS
