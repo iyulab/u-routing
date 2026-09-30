@@ -292,6 +292,10 @@ pub(crate) fn solve(
 /// A time window the model cannot represent is an error. It used to be
 /// dropped, which solved the problem without the constraint the caller had
 /// asked for and reported that as success.
+///
+/// So is an `id` given to two customers. The output names customers by `id`
+/// alone, so a route through both would read `[1, 1]` and the caller could not
+/// tell which point was visited when.
 fn build_customers(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
@@ -300,8 +304,18 @@ fn build_customers(
     customers.push(Customer::depot(depot.0, depot.1));
 
     let mut id_map: Vec<usize> = Vec::with_capacity(input_customers.len());
+    let mut first_at: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::with_capacity(input_customers.len());
 
-    for ic in input_customers {
+    for (position, ic) in input_customers.iter().enumerate() {
+        if let Some(first) = first_at.insert(ic.id, position) {
+            return Err(format!(
+                "customer {}: the id is given twice, at positions {first} and \
+                 {position} of customers (counting from 0); routes and unassigned \
+                 name customers by id, so every customer needs its own",
+                ic.id
+            ));
+        }
         let demand = whole_units(ic.demand, || format!("customer {}: demand", ic.id))?;
         let idx = customers.len();
         id_map.push(ic.id);
@@ -598,6 +612,21 @@ mod tests {
         let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
             .expect_err("inverted window");
         assert!(err.contains("customer 42"), "{err}");
+    }
+
+    #[test]
+    fn a_repeated_customer_id_is_refused_naming_both_positions() {
+        let customers = [
+            customer(serde_json::json!({ "id": 1, "x": 1.0, "y": 1.0 })),
+            customer(serde_json::json!({ "id": 7, "x": 2.0, "y": 0.0 })),
+            customer(serde_json::json!({ "id": 1, "x": 2.0, "y": 2.0 })),
+        ];
+        for method in ["nn", "savings", "ga", "alns"] {
+            let err = solve((0.0, 0.0), &customers, &[], method, &InputConfig::default())
+                .expect_err("a repeated id cannot be told apart in the routes");
+            assert!(err.contains("customer 1"), "{method}: {err}");
+            assert!(err.contains("0 and 2"), "{method}: {err}");
+        }
     }
 
     #[test]

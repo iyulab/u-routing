@@ -23,6 +23,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   directly.
 - The README said rejected inputs come back as rejected promises. `solve_vrp`
   is synchronous and throws the message string; the README now says so.
+- **A customer `id` given to two customers is refused**, naming the id and both
+  positions. The output names customers by id alone, so such a plan came back
+  as `routes: [[1, 1]]` with no way to tell which point was visited when.
+  Input that used to be accepted is now refused.
 
 ## [0.7.0] - 2026-09-29
 

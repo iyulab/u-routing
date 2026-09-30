@@ -242,6 +242,8 @@ than being served late.
 - Invalid JSON input (missing required fields, wrong types)
 - Unknown method name
 - A customer `time_window` with `ready > due`
+- A customer `id` given to two customers -- `routes` and `unassigned` name
+  customers by id, so each needs its own
 - A customer `demand` or vehicle `capacity` that is not a whole number from 0 to
   2147483647. The solver counts load in whole units; a fractional amount is
   refused rather than rounded, so scale the unit (kilograms to grams, say) to
