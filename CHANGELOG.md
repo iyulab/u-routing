@@ -8,6 +8,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- The README says a browser without a bundler is not supported (the package
+  loads its `.wasm` through an ES module import, which browsers refuse), instead
+  of listing only the environments that work.
+
 ## [0.8.0] - 2026-09-30
 
 C# `URouting` NuGet 0.5.0 → **0.5.1** (binding only): rebuilt on this release so the
