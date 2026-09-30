@@ -10,6 +10,17 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- **Breaking:** every refusal now carries a stable `code` and the values behind
+  it (`duplicate_id` with `id`, `first`, `second`; `not_whole_units` with
+  `parameter`, `index`, `id`, `value`; ...). The WebAssembly binding throws an
+  `Error` with these as properties instead of a bare string — `err.message`
+  reads as before, but `String(err)` now starts with `Error: ` and
+  `typeof err` is `"object"`. The C library writes them next to `"error"` in its
+  error body. The README lists every code and its fields.
+- C# `RoutingException` takes its `Message` from the error body's text instead
+  of the whole JSON body, and exposes `Reason` (the code) and `Details` (the
+  body with its fields).
+
 - The README says a browser without a bundler is not supported (the package
   loads its `.wasm` through an ES module import, which browsers refuse), instead
   of listing only the environments that work.

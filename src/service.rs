@@ -9,6 +9,7 @@
 //! the one it had used.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::alns::destroy::RandomRemoval;
 use crate::alns::repair::GreedyInsertion;
@@ -22,6 +23,69 @@ use crate::local_search::{or_opt_improve, two_opt_improve};
 use crate::models::{Customer, TimeWindow, Vehicle};
 use u_metaheur::alns::{AlnsConfig, AlnsRunner};
 use u_metaheur::ga::{GaConfig, GaRunner};
+
+// ============================================================================
+// Refusals
+// ============================================================================
+
+/// A refusal on its way to a caller: readable text for people, and `fields` --
+/// `code` first among them -- for programs.
+///
+/// `code` is a stable name for the reason and the other fields are the values
+/// behind it (which customer, which positions, which setting). The message is
+/// free to change; a program that branches on it, or pulls a number out of it,
+/// breaks when it does. Both bindings carry the same pair: the WebAssembly one
+/// copies `fields` onto the thrown `Error`, the C one writes them next to
+/// `"error"` in its error body.
+#[derive(Debug)]
+pub(crate) struct ServiceError {
+    pub(crate) message: String,
+    pub(crate) fields: serde_json::Value,
+}
+
+impl ServiceError {
+    fn new(code: &str, message: String, mut fields: serde_json::Value) -> Self {
+        let mut all = serde_json::Map::new();
+        all.insert("code".into(), json!(code));
+        if let Some(extra) = fields.as_object_mut() {
+            all.append(extra);
+        }
+        ServiceError {
+            message,
+            fields: serde_json::Value::Object(all),
+        }
+    }
+
+    /// The input is not the shape the solver takes: a wrong type, a missing or
+    /// unknown key. `parameter` names the argument.
+    pub(crate) fn malformed_input(parameter: &str, message: String) -> Self {
+        Self::new(
+            "malformed_input",
+            message,
+            json!({ "parameter": parameter }),
+        )
+    }
+
+    /// A failure inside the library rather than a refusal of the input.
+    #[cfg(feature = "ffi")]
+    pub(crate) fn internal(message: &str) -> Self {
+        Self::new("internal", message.to_string(), json!({}))
+    }
+
+    /// The stable reason, as the `code` field carries it.
+    #[cfg(test)]
+    pub(crate) fn code(&self) -> &str {
+        self.fields["code"]
+            .as_str()
+            .expect("every refusal carries a code")
+    }
+}
+
+impl std::fmt::Display for ServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 // ============================================================================
 // Wire types shared by both bindings
@@ -166,18 +230,17 @@ impl Method {
         }
     }
 
-    fn parse(name: &str) -> Result<Self, String> {
+    fn parse(name: &str) -> Result<Self, ServiceError> {
         Self::ALL
             .into_iter()
             .find(|m| m.name() == name)
             .ok_or_else(|| {
-                let supported: Vec<String> = Self::ALL
-                    .iter()
-                    .map(|m| format!("\"{}\"", m.name()))
-                    .collect();
-                format!(
-                    "unknown method '{name}'. Supported: {}",
-                    supported.join(", ")
+                let expected: Vec<&str> = Self::ALL.iter().map(|m| m.name()).collect();
+                let quoted: Vec<String> = expected.iter().map(|m| format!("\"{m}\"")).collect();
+                ServiceError::new(
+                    "unknown_option",
+                    format!("unknown method '{name}'. Supported: {}", quoted.join(", ")),
+                    json!({ "parameter": "method", "got": name, "expected": expected }),
                 )
             })
     }
@@ -197,21 +260,23 @@ impl Method {
 /// An unknown method, a time window that is not a window, a demand or capacity
 /// that is not a whole number of units in range, solver settings the chosen
 /// method rejects, or a plan that needs more routes than `config.max_vehicles`
-/// allows.
+/// allows. Each carries its own `code` (see [`ServiceError`]).
 pub(crate) fn solve(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
     input_vehicles: &[InputVehicle],
     method: &str,
     config: &InputConfig,
-) -> Result<VrpOutput, String> {
+) -> Result<VrpOutput, ServiceError> {
     let method = Method::parse(method)?;
     if config.max_vehicles == Some(0) {
-        return Err(
+        return Err(ServiceError::new(
+            "invalid_option",
             "config.max_vehicles is 0, so no route may exist; give at least 1, \
              or leave it out to accept as many routes as the plan needs"
                 .to_string(),
-        );
+            json!({ "parameter": "max_vehicles", "value": 0 }),
+        ));
     }
     let (customers, id_map) = build_customers(depot, input_customers)?;
     let vehicles = build_vehicles(input_vehicles)?;
@@ -221,13 +286,25 @@ pub(crate) fn solve(
     // fleet of the first vehicle's capacity.
     if method != Method::NearestNeighbor {
         let first = vehicles[0].capacity();
-        if let Some(other) = vehicles.iter().find(|v| v.capacity() != first) {
-            return Err(format!(
-                "method \"{}\" plans every route with one vehicle capacity, but the \
-                 fleet has capacities {first} and {}; give every vehicle the same \
-                 capacity, or use \"nn\", which reads each vehicle",
-                method.name(),
-                other.capacity()
+        if let Some((index, other)) = vehicles
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.capacity() != first)
+        {
+            return Err(ServiceError::new(
+                "mixed_fleet",
+                format!(
+                    "method \"{}\" plans every route with one vehicle capacity, but the \
+                     fleet has capacities {first} and {}; give every vehicle the same \
+                     capacity, or use \"nn\", which reads each vehicle",
+                    method.name(),
+                    other.capacity()
+                ),
+                json!({
+                    "method": method.name(),
+                    "capacities": [first, other.capacity()],
+                    "index": index,
+                }),
             ));
         }
     }
@@ -259,12 +336,20 @@ pub(crate) fn solve(
     // list, but it can exceed a smaller `max_vehicles`.
     if let Some(max) = config.max_vehicles {
         if output.num_vehicles > max {
-            return Err(format!(
-                "method \"{}\" needs {} routes to serve these customers, but \
-                 config.max_vehicles is {max}; raise max_vehicles, raise the \
-                 vehicle capacity, or leave max_vehicles out to accept the plan",
-                method.name(),
-                output.num_vehicles
+            return Err(ServiceError::new(
+                "routes_exceed_max_vehicles",
+                format!(
+                    "method \"{}\" needs {} routes to serve these customers, but \
+                     config.max_vehicles is {max}; raise max_vehicles, raise the \
+                     vehicle capacity, or leave max_vehicles out to accept the plan",
+                    method.name(),
+                    output.num_vehicles
+                ),
+                json!({
+                    "method": method.name(),
+                    "needed": output.num_vehicles,
+                    "max_vehicles": max,
+                }),
             ));
         }
     }
@@ -299,7 +384,7 @@ pub(crate) fn solve(
 fn build_customers(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
-) -> Result<(Vec<Customer>, Vec<usize>), String> {
+) -> Result<(Vec<Customer>, Vec<usize>), ServiceError> {
     let mut customers: Vec<Customer> = Vec::with_capacity(input_customers.len() + 1);
     customers.push(Customer::depot(depot.0, depot.1));
 
@@ -309,23 +394,33 @@ fn build_customers(
 
     for (position, ic) in input_customers.iter().enumerate() {
         if let Some(first) = first_at.insert(ic.id, position) {
-            return Err(format!(
-                "customer {}: the id is given twice, at positions {first} and \
-                 {position} of customers (counting from 0); routes and unassigned \
-                 name customers by id, so every customer needs its own",
-                ic.id
+            return Err(ServiceError::new(
+                "duplicate_id",
+                format!(
+                    "customer {}: the id is given twice, at positions {first} and \
+                     {position} of customers (counting from 0); routes and unassigned \
+                     name customers by id, so every customer needs its own",
+                    ic.id
+                ),
+                json!({ "id": ic.id, "first": first, "second": position }),
             ));
         }
-        let demand = whole_units(ic.demand, || format!("customer {}: demand", ic.id))?;
+        let demand = whole_units(ic.demand, "demand", position, Some(ic.id), || {
+            format!("customer {}: demand", ic.id)
+        })?;
         let idx = customers.len();
         id_map.push(ic.id);
         let mut c = Customer::new(idx, ic.x, ic.y, demand, ic.service_time);
         if let Some([ready, due]) = ic.time_window {
             let tw = TimeWindow::new(ready, due).ok_or_else(|| {
-                format!(
-                    "customer {}: time_window [{ready}, {due}] is not a window \
-                     (it needs ready <= due)",
-                    ic.id
+                ServiceError::new(
+                    "invalid_time_window",
+                    format!(
+                        "customer {}: time_window [{ready}, {due}] is not a window \
+                         (it needs ready <= due)",
+                        ic.id
+                    ),
+                    json!({ "id": ic.id, "index": position, "ready": ready, "due": due }),
                 )
             })?;
             c = c.with_time_window(tw);
@@ -334,6 +429,17 @@ fn build_customers(
     }
 
     Ok((customers, id_map))
+}
+
+/// Solver settings the method's runner refused (a population of 1, zero
+/// generations or iterations). The runner reports these in its own words, so
+/// the refusal carries its text and names the method and the `config` it read.
+fn settings_refused(method: Method, e: impl std::fmt::Display) -> ServiceError {
+    ServiceError::new(
+        "invalid_option",
+        format!("method \"{}\": config refused: {e}", method.name()),
+        json!({ "parameter": "config", "method": method.name() }),
+    )
 }
 
 /// Converts internal route indices back to original customer IDs.
@@ -374,21 +480,35 @@ fn apply_local_search(
 /// model would have to round, or clamp into range, is refused: solving a
 /// demand of `2.4` as `2` answers a different problem from the one asked, and
 /// reports it as solved.
-fn whole_units(value: f64, what: impl FnOnce() -> String) -> Result<i32, String> {
+///
+/// The refusal names the field (`"demand"` or `"capacity"`), the position of
+/// the entry in its list, and the customer's `id` when there is one.
+fn whole_units(
+    value: f64,
+    parameter: &str,
+    index: usize,
+    id: Option<usize>,
+    what: impl FnOnce() -> String,
+) -> Result<i32, ServiceError> {
     if value.fract() == 0.0 && (0.0..=f64::from(i32::MAX)).contains(&value) {
         Ok(value as i32)
     } else {
-        Err(format!(
-            "{} is {value}; it must be a whole number of units from 0 to {} -- \
-             scale the unit (kilograms to grams, say) to keep a fractional amount",
-            what(),
-            i32::MAX
+        Err(ServiceError::new(
+            "not_whole_units",
+            format!(
+                "{} is {value}; it must be a whole number of units from 0 to {} -- \
+                 scale the unit (kilograms to grams, say) to keep a fractional amount",
+                what(),
+                i32::MAX
+            ),
+            // A NaN or an infinity is not a JSON number; it crosses as `null`.
+            json!({ "parameter": parameter, "index": index, "id": id, "value": value }),
         ))
     }
 }
 
 /// Builds the vehicle list from input, falling back to a single unlimited vehicle.
-fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, String> {
+fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, ServiceError> {
     if input_vehicles.is_empty() {
         return Ok(vec![Vehicle::new(0, i32::MAX)]);
     }
@@ -396,7 +516,9 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, Strin
         .iter()
         .enumerate()
         .map(|(i, v)| {
-            let capacity = whole_units(v.capacity, || format!("vehicle {i}: capacity"))?;
+            let capacity = whole_units(v.capacity, "capacity", i, None, || {
+                format!("vehicle {i}: capacity")
+            })?;
             Ok(Vehicle::new(i, capacity))
         })
         .collect()
@@ -455,7 +577,7 @@ fn solve_ga(
     capacity: i32,
     id_map: &[usize],
     cfg: &InputConfig,
-) -> Result<VrpOutput, String> {
+) -> Result<VrpOutput, ServiceError> {
     let problem = RoutingGaProblem::new(customers.to_vec(), dm.clone(), capacity);
 
     // Sequential on every target: rayon is unavailable in WebAssembly, and a
@@ -477,10 +599,10 @@ fn solve_ga(
 
     ga_config
         .validate()
-        .map_err(|e| format!("GA config error: {}", e))?;
+        .map_err(|e| settings_refused(Method::Genetic, e))?;
 
     let ga_result =
-        GaRunner::run(&problem, &ga_config).map_err(|e| format!("GA execution error: {}", e))?;
+        GaRunner::run(&problem, &ga_config).map_err(|e| settings_refused(Method::Genetic, e))?;
 
     // Split the best individual into routes the way its fitness was computed.
     // 2-opt and or-opt reorder a route without regard to time, so a problem
@@ -512,7 +634,7 @@ fn solve_alns(
     capacity: i32,
     id_map: &[usize],
     cfg: &InputConfig,
-) -> Result<VrpOutput, String> {
+) -> Result<VrpOutput, ServiceError> {
     let problem = RoutingAlnsProblem::new(customers.to_vec(), dm.clone(), capacity);
 
     let destroy_ops = vec![RandomRemoval];
@@ -531,10 +653,10 @@ fn solve_alns(
 
     alns_config
         .validate()
-        .map_err(|e| format!("ALNS config error: {}", e))?;
+        .map_err(|e| settings_refused(Method::Alns, e))?;
 
     let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &alns_config)
-        .map_err(|e| format!("ALNS execution error: {}", e))?;
+        .map_err(|e| settings_refused(Method::Alns, e))?;
 
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
@@ -594,7 +716,10 @@ mod tests {
     fn an_unknown_method_is_rejected_even_with_no_customers() {
         let err = solve((0.0, 0.0), &[], &[], "tabu", &InputConfig::default())
             .expect_err("unknown method");
-        assert!(err.contains("tabu") && err.contains("\"alns\""), "{err}");
+        assert!(
+            err.message.contains("tabu") && err.message.contains("\"alns\""),
+            "{err}"
+        );
     }
 
     #[test]
@@ -611,7 +736,7 @@ mod tests {
         }))];
         let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
             .expect_err("inverted window");
-        assert!(err.contains("customer 42"), "{err}");
+        assert!(err.message.contains("customer 42"), "{err}");
     }
 
     #[test]
@@ -624,8 +749,8 @@ mod tests {
         for method in ["nn", "savings", "ga", "alns"] {
             let err = solve((0.0, 0.0), &customers, &[], method, &InputConfig::default())
                 .expect_err("a repeated id cannot be told apart in the routes");
-            assert!(err.contains("customer 1"), "{method}: {err}");
-            assert!(err.contains("0 and 2"), "{method}: {err}");
+            assert!(err.message.contains("customer 1"), "{method}: {err}");
+            assert!(err.message.contains("0 and 2"), "{method}: {err}");
         }
     }
 
@@ -647,7 +772,7 @@ mod tests {
         }))];
         let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
             .expect_err("fractional demand");
-        assert!(err.contains("customer 7: demand is 2.4"), "{err}");
+        assert!(err.message.contains("customer 7: demand is 2.4"), "{err}");
     }
 
     #[test]
@@ -658,14 +783,14 @@ mod tests {
             }))];
             let err = solve((0.0, 0.0), &customers, &[], "nn", &InputConfig::default())
                 .expect_err("demand out of whole units");
-            assert!(err.contains("customer 1: demand"), "{bad}: {err}");
+            assert!(err.message.contains("customer 1: demand"), "{bad}: {err}");
 
             // Checked before the empty-problem shortcut, so a fleet is
             // validated even with nobody to serve.
             let vehicles = [vehicle(serde_json::json!({ "capacity": bad }))];
             let err = solve((0.0, 0.0), &[], &vehicles, "nn", &InputConfig::default())
                 .expect_err("capacity out of whole units");
-            assert!(err.contains("vehicle 0: capacity"), "{bad}: {err}");
+            assert!(err.message.contains("vehicle 0: capacity"), "{bad}: {err}");
         }
 
         let customers = [customer(serde_json::json!({
@@ -745,7 +870,7 @@ mod tests {
             let err =
                 solve((0.0, 0.0), &customers, &one_capacity, method, &limited).expect_err(method);
             assert!(
-                err.contains("max_vehicles is 2") && err.contains(method),
+                err.message.contains("max_vehicles is 2") && err.message.contains(method),
                 "{method}: {err}"
             );
         }
@@ -768,7 +893,7 @@ mod tests {
             let err =
                 solve((0.0, 0.0), &customers, &one_capacity, method, &limited).expect_err(method);
             assert!(
-                err.contains(&format!("needs {needed} routes")),
+                err.message.contains(&format!("needs {needed} routes")),
                 "{method}: expected the refusal to name {needed}, got: {err}"
             );
         }
@@ -808,7 +933,7 @@ mod tests {
         let err =
             solve((0.0, 0.0), &customers, &four, "nn", &limited).expect_err("nn over the limit");
         assert!(
-            err.contains("max_vehicles is 1") && err.contains("\"nn\""),
+            err.message.contains("max_vehicles is 1") && err.message.contains("\"nn\""),
             "{err}"
         );
     }
@@ -822,7 +947,7 @@ mod tests {
             ..quick()
         };
         let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), "ga", &zero).expect_err("zero");
-        assert!(err.contains("max_vehicles is 0"), "{err}");
+        assert!(err.message.contains("max_vehicles is 0"), "{err}");
     }
 
     /// Only nearest neighbour reads each vehicle. The other methods plan with
@@ -835,7 +960,7 @@ mod tests {
         for method in ["savings", "ga", "alns"] {
             let err = solve((0.0, 0.0), &customers, &mixed, method, &quick()).expect_err(method);
             assert!(
-                err.contains(&format!("\"{method}\"")) && err.contains("capacit"),
+                err.message.contains(&format!("\"{method}\"")) && err.message.contains("capacit"),
                 "{method}: {err}"
             );
         }
@@ -981,7 +1106,123 @@ mod tests {
                 .expect_err("zero max_vehicles"),
         ];
         for e in errors {
-            assert!(!e.contains("  "), "{e}");
+            assert!(!e.message.contains("  "), "{e}");
+        }
+    }
+
+    /// Every refusal names its reason as a `code` and carries the values
+    /// behind it, so a caller branches on the code rather than on the text.
+    #[test]
+    fn every_refusal_carries_its_code_and_values() {
+        let one = |json: serde_json::Value| [customer(json)];
+        let cases: Vec<(ServiceError, &str, serde_json::Value)> = vec![
+            (
+                solve((0.0, 0.0), &[], &[], "tabu", &quick()).expect_err("method"),
+                "unknown_option",
+                serde_json::json!({ "parameter": "method", "got": "tabu" }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &[
+                        customer(serde_json::json!({ "id": 5, "x": 1.0, "y": 0.0 })),
+                        customer(serde_json::json!({ "id": 5, "x": 2.0, "y": 0.0 })),
+                    ],
+                    &[],
+                    "nn",
+                    &quick(),
+                )
+                .expect_err("duplicate"),
+                "duplicate_id",
+                serde_json::json!({ "id": 5, "first": 0, "second": 1 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": 0.5 })),
+                    &[],
+                    "nn",
+                    &quick(),
+                )
+                .expect_err("fraction"),
+                "not_whole_units",
+                serde_json::json!({ "parameter": "demand", "index": 0, "id": 9, "value": 0.5 }),
+            ),
+            (
+                solve((0.0, 0.0), &[], &fleet(&[10.0, 2.5]), "nn", &quick())
+                    .expect_err("capacity"),
+                "not_whole_units",
+                serde_json::json!({ "parameter": "capacity", "index": 1, "id": null }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &one(serde_json::json!({ "id": 3, "x": 1.0, "y": 0.0, "time_window": [4.0, 1.0] })),
+                    &[],
+                    "nn",
+                    &quick(),
+                )
+                .expect_err("window"),
+                "invalid_time_window",
+                serde_json::json!({ "id": 3, "index": 0, "ready": 4.0, "due": 1.0 }),
+            ),
+            (
+                solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
+                    .expect_err("mixed"),
+                "mixed_fleet",
+                serde_json::json!({ "method": "ga", "capacities": [10, 100], "index": 1 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &ring(8),
+                    &fleet(&[10.0]),
+                    "ga",
+                    &InputConfig {
+                        max_vehicles: Some(1),
+                        ..quick()
+                    },
+                )
+                .expect_err("over"),
+                "routes_exceed_max_vehicles",
+                serde_json::json!({ "method": "ga", "max_vehicles": 1 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &ring(8),
+                    &fleet(&[10.0]),
+                    "ga",
+                    &InputConfig {
+                        max_vehicles: Some(0),
+                        ..quick()
+                    },
+                )
+                .expect_err("zero"),
+                "invalid_option",
+                serde_json::json!({ "parameter": "max_vehicles", "value": 0 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &ring(4),
+                    &fleet(&[10.0]),
+                    "ga",
+                    &InputConfig {
+                        population_size: Some(1),
+                        ..quick()
+                    },
+                )
+                .expect_err("settings"),
+                "invalid_option",
+                serde_json::json!({ "parameter": "config", "method": "ga" }),
+            ),
+        ];
+        for (err, code, expected) in cases {
+            assert_eq!(err.code(), code, "{err}");
+            for (key, value) in expected.as_object().expect("fields") {
+                assert_eq!(&err.fields[key], value, "{code}.{key}: {}", err.fields);
+            }
         }
     }
 
@@ -1019,7 +1260,7 @@ mod tests {
         assert!(result.is_err(), "population_size=1 should fail validation");
         let err = result.unwrap_err();
         assert!(
-            err.contains("population_size"),
+            err.message.contains("population_size"),
             "error should mention population_size: {}",
             err
         );
@@ -1053,7 +1294,7 @@ mod tests {
         assert!(result.is_err(), "max_generations=0 should fail validation");
         let err = result.unwrap_err();
         assert!(
-            err.contains("max_generations"),
+            err.message.contains("max_generations"),
             "error should mention max_generations: {}",
             err
         );
@@ -1147,7 +1388,7 @@ mod tests {
         assert!(result.is_err(), "max_iterations=0 should fail validation");
         let err = result.unwrap_err();
         assert!(
-            err.contains("max_iterations"),
+            err.message.contains("max_iterations"),
             "error should mention max_iterations: {}",
             err
         );

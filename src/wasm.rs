@@ -5,8 +5,7 @@
 //!
 //! # Usage (JavaScript)
 //! ```js
-//! import init, { solve_vrp } from '@iyulab/u-routing';
-//! await init();
+//! import { solve_vrp } from '@iyulab/u-routing';
 //!
 //! // Nearest neighbor (default)
 //! const result = solve_vrp({
@@ -29,7 +28,7 @@
 //!   config: { population_size: 100, max_generations: 500 },
 //! });
 //!
-//! // Time windows ("nn" and "ga" keep them; "savings" and "alns" refuse them)
+//! // Time windows (every method keeps them)
 //! const twResult = solve_vrp({
 //!   customers: [
 //!     { id: 1, x: 1.0, y: 2.0, demand: 10.0, time_window: [8.0, 12.0] },
@@ -42,34 +41,48 @@
 //! });
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use crate::service::{self, InputConfig, InputCustomer, InputVehicle};
+use crate::service::{self, InputConfig, InputCustomer, InputVehicle, ServiceError};
 
 // ============================================================================
 // Error helper
 // ============================================================================
 
-fn js_err(e: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&e.to_string())
+/// Every refusal crosses into JavaScript as an `Error` whose `message` is the
+/// readable text and which carries `code` -- a stable reason -- and the values
+/// behind it as further properties (`id`, `index`, `parameter`, ...). A program
+/// branches on `err.code` and reads the fields; `err.message` reads as it
+/// always did.
+fn js_err(error: ServiceError) -> JsValue {
+    let js = js_sys::Error::new(&error.message);
+    // `json_compatible` turns the map into a plain object; the default would
+    // produce a JavaScript `Map`, which `Object.assign` does not read.
+    if let Ok(fields) = error
+        .fields
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    {
+        js_sys::Object::assign(&js, &fields.into());
+    }
+    js.into()
 }
 
 /// Deserialize a native JS value, rejecting JSON strings with an actionable
 /// message and prefixing the offending parameter name to any serde error.
 fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Result<T, JsValue> {
+    let refuse = |message: String| js_err(ServiceError::malformed_input(param, message));
     if value.as_string().is_some() {
-        return Err(JsValue::from_str(&format!(
-            "{param}: expected a native JS object/array, got a string — \
-             pass the value directly, not JSON.stringify(...)"
+        return Err(refuse(format!(
+            "{param}: expected a native JS object/array, got a string —              pass the value directly, not JSON.stringify(...)"
         )));
     }
     // serde-wasm-bindgen reads only a struct's declared fields from a JS
     // object, so `deny_unknown_fields` never sees extra keys. Round-trip
     // through serde_json::Value so the strict wire schema is enforced.
-    let json: serde_json::Value = serde_wasm_bindgen::from_value(value)
-        .map_err(|e| JsValue::from_str(&format!("{param}: {e}")))?;
-    serde_json::from_value(json).map_err(|e| JsValue::from_str(&format!("{param}: {e}")))
+    let json: serde_json::Value =
+        serde_wasm_bindgen::from_value(value).map_err(|e| refuse(format!("{param}: {e}")))?;
+    serde_json::from_value(json).map_err(|e| refuse(format!("{param}: {e}")))
 }
 
 // ============================================================================
@@ -120,18 +133,21 @@ struct VrpInput {
 ///   search is skipped when customers carry time windows)
 /// - `"alns"` — Adaptive Large Neighborhood Search + local search
 ///
-/// Only `"nn"` reads each vehicle; the others plan with one capacity. Only
-/// `"nn"` and `"ga"` keep time windows.
+/// Only `"nn"` reads each vehicle; the others plan with one capacity. Every
+/// method keeps time windows.
 ///
 /// # Returns
 /// A JS object with `routes`, `total_distance`, `num_vehicles`,
 /// `method_used`, and `computation_time_ms`.
 ///
 /// # Errors
-/// Returns a `JsValue` string describing the error if input is invalid: an
-/// unknown method, a time window with `ready > due`, a demand or capacity that
-/// is not a whole number of units, a mixed fleet or time windows the method
-/// cannot model, or solver settings the method rejects.
+/// Throws an `Error` carrying `code` and the values behind it: an unknown
+/// method (`unknown_option`), a repeated customer id (`duplicate_id`), a time
+/// window with `ready > due` (`invalid_time_window`), a demand or capacity
+/// that is not a whole number of units (`not_whole_units`), a mixed fleet the
+/// method cannot model (`mixed_fleet`), a plan over `max_vehicles`
+/// (`routes_exceed_max_vehicles`), solver settings the method rejects
+/// (`invalid_option`), or an input of the wrong shape (`malformed_input`).
 #[wasm_bindgen(unchecked_return_type = "VrpOutput")]
 pub fn solve_vrp(
     #[wasm_bindgen(unchecked_param_type = "VrpInput")] problem: JsValue,
@@ -150,7 +166,8 @@ pub fn solve_vrp(
     .map_err(js_err)?;
     output.computation_time_ms = elapsed_ms(start);
 
-    serde_wasm_bindgen::to_value(&output).map_err(js_err)
+    serde_wasm_bindgen::to_value(&output)
+        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
 }
 
 // ============================================================================

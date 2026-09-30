@@ -38,7 +38,7 @@ public sealed class RoutingClient : IDisposable
                 throw new RoutingException(code, "Empty result from engine");
 
             if (code != 0)
-                throw new RoutingException(code, resultJson);
+                throw RoutingException.FromErrorBody(code, resultJson);
 
             return JsonDocument.Parse(resultJson).RootElement.Clone();
         }
@@ -59,8 +59,59 @@ public sealed class RoutingClient : IDisposable
     }
 }
 
+/// <summary>
+/// A request the engine refused. <see cref="Exception.Message"/> is human-readable;
+/// <see cref="Reason"/> and <see cref="Details"/> are for programs.
+/// </summary>
 public class RoutingException : Exception
 {
+    /// <summary>Native status: -1 null pointer, -2 malformed request, -3 refused request, -4 internal panic.</summary>
     public int Code { get; }
-    public RoutingException(int code, string message) : base(message) { Code = code; }
+
+    /// <summary>
+    /// Stable, machine-readable reason, e.g. <c>unknown_option</c>, <c>duplicate_id</c>,
+    /// <c>invalid_time_window</c>, <c>not_whole_units</c>, <c>mixed_fleet</c>,
+    /// <c>routes_exceed_max_vehicles</c>, <c>invalid_option</c>, <c>malformed_input</c>,
+    /// <c>internal</c>. <c>null</c> when the engine returned no readable body.
+    /// </summary>
+    public string? Reason { get; }
+
+    /// <summary>
+    /// The whole error body: <c>error</c>, <c>code</c> and the values behind the reason
+    /// (<c>id</c>, <c>index</c>, <c>parameter</c>, ...). <c>null</c> when there is no body.
+    /// </summary>
+    public JsonElement? Details { get; }
+
+    public RoutingException(int code, string message) : base(message)
+    {
+        Code = code;
+    }
+
+    public RoutingException(int code, string message, string? reason, JsonElement? details) : base(message)
+    {
+        Code = code;
+        Reason = reason;
+        Details = details;
+    }
+
+    /// <summary>Reads the engine's <c>{"error", "code", ...}</c> error body.</summary>
+    internal static RoutingException FromErrorBody(int code, string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var message = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String
+                ? e.GetString()!
+                : body;
+            string? reason = root.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String
+                ? c.GetString()
+                : null;
+            return new RoutingException(code, message, reason, root.Clone());
+        }
+        catch (JsonException)
+        {
+            return new RoutingException(code, body);
+        }
+    }
 }

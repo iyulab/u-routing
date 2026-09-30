@@ -9,7 +9,11 @@
 //!       solver settings)
 //!  -4 = internal panic
 //!
-//! Every non-zero status except `-1` comes with an `{"error": "..."}` body.
+//! Every non-zero status except `-1` comes with an error body:
+//! `{"error": "<readable text>", "code": "<stable reason>", ...}`. `code` and
+//! the fields beside it (`id`, `index`, `parameter`, ...) are the same ones the
+//! WebAssembly binding puts on its thrown `Error`; `error` is the text, free to
+//! change. A request that is not JSON is `malformed_input`, a panic `internal`.
 //! All entry points are wrapped in `catch_unwind` to prevent panic propagation.
 //!
 //! The solver itself is `crate::service`, shared with the WebAssembly binding;
@@ -21,7 +25,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::{self, InputConfig, InputCustomer, InputVehicle};
+use crate::service::{self, InputConfig, InputCustomer, InputVehicle, ServiceError};
 
 /// Status for a request whose JSON could not be read into the expected shape.
 const ERR_PARSE: i32 = -2;
@@ -74,14 +78,18 @@ fn write_json<T: Serialize>(result_ptr: *mut *mut libc::c_char, value: &T) -> i3
     }
 }
 
-/// Writes `{"error": msg}` and returns `status`.
+/// Writes `{"error": message, "code": ..., ...fields}` and returns `status`.
 ///
 /// The status is the caller's to choose and is returned as given: the error
 /// body is a diagnostic, not a result, so writing it successfully must not
 /// turn the call into a success.
-fn write_error(result_ptr: *mut *mut libc::c_char, status: i32, msg: &str) -> i32 {
-    let err = serde_json::json!({ "error": msg });
-    match write_json(result_ptr, &err) {
+fn write_error(result_ptr: *mut *mut libc::c_char, status: i32, error: ServiceError) -> i32 {
+    let mut body = serde_json::Map::new();
+    body.insert("error".into(), error.message.into());
+    if let serde_json::Value::Object(fields) = error.fields {
+        body.extend(fields);
+    }
+    match write_json(result_ptr, &body) {
         0 => status,
         write_failure => write_failure,
     }
@@ -97,7 +105,7 @@ fn ffi_catch(
     }
     match panic::catch_unwind(f) {
         Ok(code) => code,
-        Err(_) => write_error(result_ptr, -4, "internal panic"),
+        Err(_) => write_error(result_ptr, -4, ServiceError::internal("internal panic")),
     }
 }
 
@@ -128,7 +136,13 @@ pub unsafe extern "C" fn urouting_solve_vrp(
         };
         let input: VrpInput = match serde_json::from_str(&json) {
             Ok(r) => r,
-            Err(e) => return write_error(result_ptr, ERR_PARSE, &format!("Invalid JSON: {e}")),
+            Err(e) => {
+                return write_error(
+                    result_ptr,
+                    ERR_PARSE,
+                    ServiceError::malformed_input("request", format!("Invalid JSON: {e}")),
+                )
+            }
         };
         let config = input.config.unwrap_or_default();
 
@@ -144,7 +158,7 @@ pub unsafe extern "C" fn urouting_solve_vrp(
                 output.computation_time_ms = start.elapsed().as_secs_f64() * 1e3;
                 write_json(result_ptr, &output)
             }
-            Err(e) => write_error(result_ptr, ERR_COMPUTE, &e),
+            Err(e) => write_error(result_ptr, ERR_COMPUTE, e),
         }
     })
 }
@@ -215,6 +229,15 @@ mod tests {
         let (code, body) = solve(&problem("no-such-method"));
         assert_eq!(code, -3, "{body}");
         assert!(body["error"].is_string());
+        // The reason and the values behind it sit next to the text, so a
+        // caller does not have to read them out of it.
+        assert_eq!(body["code"], "unknown_option", "{body}");
+        assert_eq!(body["parameter"], "method", "{body}");
+        assert_eq!(body["got"], "no-such-method", "{body}");
+        assert_eq!(
+            body["expected"],
+            serde_json::json!(["nn", "savings", "ga", "alns"])
+        );
     }
 
     /// The C transport carries `max_vehicles` from the same shared wire type
@@ -232,6 +255,9 @@ mod tests {
             message.contains("max_vehicles is 1") && message.contains("routes"),
             "{message}"
         );
+        assert_eq!(body["code"], "routes_exceed_max_vehicles", "{body}");
+        assert_eq!(body["max_vehicles"], 1, "{body}");
+        assert!(body["needed"].as_u64().expect("needed") > 1, "{body}");
     }
 
     /// The same request without the limit is planned, not refused -- so the
@@ -251,8 +277,16 @@ mod tests {
         let request = CString::new("{not json").expect("no interior NUL");
         let mut out: *mut libc::c_char = std::ptr::null_mut();
         let code = unsafe { urouting_solve_vrp(request.as_ptr(), &mut out) };
+        let body: serde_json::Value = serde_json::from_str(
+            unsafe { CStr::from_ptr(out) }
+                .to_str()
+                .expect("body is UTF-8"),
+        )
+        .expect("body is JSON");
         unsafe { urouting_free_string(out) };
         assert_eq!(code, -2);
+        assert_eq!(body["code"], "malformed_input", "{body}");
+        assert_eq!(body["parameter"], "request", "{body}");
     }
 
     #[test]
@@ -337,6 +371,9 @@ mod tests {
             body["error"].as_str().expect("error").contains("11"),
             "{body}"
         );
+        assert_eq!(body["code"], "invalid_time_window", "{body}");
+        assert_eq!(body["id"], 11, "{body}");
+        assert_eq!(body["index"], 0, "{body}");
     }
 
     #[test]

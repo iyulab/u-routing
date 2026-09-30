@@ -236,26 +236,44 @@ than being served late.
 | `seed` | Both | any u64 (optional) | random |
 | `max_vehicles` | All | >= 1 (optional) | no limit |
 
-**Error handling:**
+**Errors:**
 
-`solve_vrp()` returns a JS error (string) for:
-- Invalid JSON input (missing required fields, wrong types)
-- Unknown method name
-- A customer `time_window` with `ready > due`
-- A customer `id` given to two customers -- `routes` and `unassigned` name
-  customers by id, so each needs its own
-- A customer `demand` or vehicle `capacity` that is not a whole number from 0 to
-  2147483647. The solver counts load in whole units; a fractional amount is
-  refused rather than rounded, so scale the unit (kilograms to grams, say) to
-  keep it
-- A fleet whose vehicles differ in capacity, with `"savings"`, `"ga"` or `"alns"`
-- A plan that needs more routes than `config.max_vehicles` allows, or a
-  `max_vehicles` of 0
-- Invalid config values (e.g., `population_size: 0`, `max_iterations: 0`)
+`solve_vrp` throws an `Error` whose `message` is readable text and which
+carries a `code` naming the reason, next to the values behind it — so a program
+can explain a refusal and point at what to change without parsing the message.
+It is synchronous, so catch it with `try`/`catch` (there is no promise to
+reject); it never surfaces as a `RuntimeError: unreachable` panic.
 
-`solve_vrp` is synchronous: a rejected input is thrown as the message string, so
-catch it with `try`/`catch` (there is no promise to reject). It never surfaces as a
-`RuntimeError: unreachable` panic.
+```js
+import { solve_vrp } from '@iyulab/u-routing';
+
+try {
+  solve_vrp({
+    customers: [
+      { id: 1, x: 1.0, y: 0.0 },
+      { id: 1, x: 2.0, y: 0.0 },
+    ],
+    depot: { x: 0.0, y: 0.0 },
+  });
+} catch (err) {
+  console.log(err.code, err.id, err.first, err.second); // duplicate_id 1 0 1
+}
+```
+
+| `code` | Fields | Meaning |
+|---|---|---|
+| `unknown_option` | `parameter`, `got`, `expected` | A `method` that names none of `"nn"`, `"savings"`, `"ga"`, `"alns"` |
+| `duplicate_id` | `id`, `first`, `second` | Two customers share an `id` (at positions `first` and `second`, from 0) — `routes` and `unassigned` name customers by id, so each needs its own |
+| `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
+| `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity that is not a whole number from 0 to 2147483647. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
+| `mixed_fleet` | `method`, `capacities`, `index` | Vehicles of different capacities with `"savings"`, `"ga"` or `"alns"`, which plan every route with one capacity |
+| `routes_exceed_max_vehicles` | `method`, `needed`, `max_vehicles` | The plan needs more routes than `config.max_vehicles` allows |
+| `invalid_option` | `parameter`, and `value` or `method` | A `max_vehicles` of 0, or solver settings the method rejects (`population_size: 1`, `max_iterations: 0`, ...) |
+| `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |
+
+The C library and the .NET package report the same `code` and fields: the C
+error body is `{"error": "<message>", "code": ..., ...}`, and `RoutingException`
+exposes them as `Reason` and `Details`.
 
 **Output:**
 ```json

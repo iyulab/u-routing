@@ -49,8 +49,23 @@ The request is serialized with snake_case names, so anonymous objects can be
 written as above. The result is a `System.Text.Json.JsonElement` carrying
 `routes`, `total_distance`, `num_vehicles`, `method_used` and `unassigned`.
 
-A request the solver cannot honour raises `RoutingException`, which carries the
-status code alongside the message.
+A request the solver cannot honour raises `RoutingException`. `Message` is
+readable text; `Reason` is a stable code to branch on and `Details` is the
+error body with the values behind it:
+
+```csharp
+try
+{
+    client.SolveVrp(request);
+}
+catch (RoutingException ex) when (ex.Reason == "duplicate_id")
+{
+    var id = ex.Details!.Value.GetProperty("id").GetInt64();
+    Console.WriteLine($"customer {id} appears twice");
+}
+```
+
+The codes and their fields are listed in the crate README's *Errors* section.
 
 ## Platforms
 
