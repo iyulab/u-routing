@@ -269,6 +269,7 @@ try {
 | `mixed_fleet` | `method`, `capacities`, `index` | Vehicles of different capacities with `"savings"`, `"ga"` or `"alns"`, which plan every route with one capacity |
 | `routes_exceed_max_vehicles` | `method`, `needed`, `max_vehicles` | The plan needs more routes than `config.max_vehicles` allows |
 | `invalid_option` | `parameter`, and `value` or `method` | A `max_vehicles` of 0, or solver settings the method rejects (`population_size: 1`, `max_iterations: 0`, ...) |
+| `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |
 
 The C library and the .NET package report the same `code` and fields: the C

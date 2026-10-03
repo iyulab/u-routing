@@ -66,6 +66,13 @@ impl ServiceError {
         )
     }
 
+    /// A NaN or ±Infinity where a finite number belongs; `fields` carries
+    /// `parameter` and `index`. Only JavaScript can send one: JSON has none.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn value_not_finite(message: String, fields: serde_json::Value) -> Self {
+        Self::new("value_not_finite", message, fields)
+    }
+
     /// A failure inside the library rather than a refusal of the input.
     #[cfg(feature = "ffi")]
     pub(crate) fn internal(message: &str) -> Self {
