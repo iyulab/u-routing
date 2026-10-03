@@ -230,8 +230,8 @@ than being served late.
 |---|---|---|---|
 | `population_size` | GA | >= 2 | 50 |
 | `max_generations` | GA | >= 1 | 200 |
-| `mutation_rate` | GA | 0.0 – 1.0 (clamped) | 0.1 |
-| `elite_ratio` | GA | 0.0 – 1.0; must not fill entire population | 0.1 |
+| `mutation_rate` | GA | (0, 1] — outside is refused (`parameter_out_of_range`) | 0.1 |
+| `elite_ratio` | GA | (0, 1] — outside is refused; must not fill entire population | 0.1 |
 | `max_iterations` | ALNS | >= 1 | 500 |
 | `seed` | Both | any u64 (optional) | random |
 | `max_vehicles` | All | >= 1 (optional) | no limit |

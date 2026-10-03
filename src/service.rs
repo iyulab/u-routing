@@ -594,6 +594,19 @@ fn solve_ga(
         .with_max_generations(cfg.max_generations.unwrap_or(200))
         .with_parallel(false);
 
+    // Both are rates in (0, 1]: a value outside is refused, not clamped.
+    for (parameter, value) in [
+        ("config.mutation_rate", cfg.mutation_rate),
+        ("config.elite_ratio", cfg.elite_ratio),
+    ] {
+        if let Some(v) = value.filter(|v| !(*v > 0.0 && *v <= 1.0)) {
+            return Err(ServiceError::new(
+                "parameter_out_of_range",
+                format!("{parameter} must be in (0, 1], got {v}"),
+                json!({ "parameter": parameter, "min": 0.0, "max": 1.0, "got": v }),
+            ));
+        }
+    }
     if let Some(mr) = cfg.mutation_rate {
         ga_config = ga_config.with_mutation_rate(mr);
     }
@@ -1312,11 +1325,11 @@ mod tests {
     #[test]
     fn ga_elite_ratio_fills_population() {
         let (customers, dm, id_map) = test_customers(3);
-        // elite_ratio is clamped to 1.0, so with pop=2 all are elite → validation error
+        // elite_ratio 1.0 with pop=2 makes every individual elite → validation error
         let cfg = InputConfig {
             population_size: Some(2),
             max_generations: Some(5),
-            elite_ratio: Some(1.5),
+            elite_ratio: Some(1.0),
             seed: Some(42),
             ..InputConfig::default()
         };
@@ -1344,24 +1357,31 @@ mod tests {
         assert_eq!(output.routes.len(), 1);
     }
 
-    // ---- GA: mutation_rate clamped (not an error, just verifies no panic) ----
+    // ---- GA: rates outside (0, 1] are refused, not clamped ----
 
     #[test]
-    fn ga_extreme_mutation_rate() {
+    fn ga_rates_outside_0_1_are_refused() {
         let (customers, dm, id_map) = test_customers(3);
-        // mutation_rate > 1.0 is clamped by GaConfig::with_mutation_rate
-        let cfg = InputConfig {
-            population_size: Some(10),
-            max_generations: Some(5),
-            mutation_rate: Some(5.0),
-            seed: Some(42),
-            ..InputConfig::default()
-        };
-        let result = solve_ga(&customers, &dm, 100, &id_map, &cfg);
-        assert!(
-            result.is_ok(),
-            "clamped mutation_rate should not cause error"
-        );
+        for (mutation_rate, elite_ratio, parameter, got) in [
+            (Some(5.0), None, "config.mutation_rate", 5.0),
+            (Some(0.0), None, "config.mutation_rate", 0.0),
+            (None, Some(1.5), "config.elite_ratio", 1.5),
+        ] {
+            let cfg = InputConfig {
+                population_size: Some(10),
+                max_generations: Some(5),
+                mutation_rate,
+                elite_ratio,
+                seed: Some(42),
+                ..InputConfig::default()
+            };
+            let err = solve_ga(&customers, &dm, 100, &id_map, &cfg).expect_err("out of (0, 1]");
+            assert_eq!(
+                err.fields,
+                json!({ "code": "parameter_out_of_range", "parameter": parameter,
+                        "min": 0.0, "max": 1.0, "got": got })
+            );
+        }
     }
 
     // ---- ALNS: valid minimal input ----

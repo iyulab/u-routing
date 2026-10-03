@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Fixed
+
+- **Breaking:** a GA `config.mutation_rate` or `config.elite_ratio` outside
+  (0, 1] is refused with `parameter_out_of_range` (`parameter`, `min`, `max`,
+  `got`). A mutation rate above 1 used to be clamped to 1 without a word,
+  although the documented range was (0, 1].
+
 ## [0.9.1] - 2026-10-03
 
 ### Fixed
