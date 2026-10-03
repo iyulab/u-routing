@@ -204,16 +204,32 @@ one vehicle of unlimited capacity.
 single-entry list is how a caller states one capacity, which is why the
 example above passes `vehicles: [{ capacity: 100 }]` and still gets as many
 routes as the demand needs. A caller whose fleet really is fixed says so with
-`config.max_vehicles`, and a plan that would need more routes is refused --
-naming both the routes needed and the limit -- rather than returned as if the
-fleet could run it. Every method reads it, `"nn"` included: `"nn"` cannot
-exceed its vehicle list, but it can exceed a smaller `max_vehicles`. Left out,
+`config.max_vehicles`, and every method keeps to it, `"nn"` included (`"nn"`
+cannot exceed its vehicle list, but it can exceed a smaller `max_vehicles`).
+When the plan a method found needs more routes, the lightest routes are
+emptied one at a time and their customers moved, cheapest insertion first, into
+the routes that remain -- never past a vehicle's capacity and never making a
+customer late. Customers that fit nowhere are listed in `unassigned`, so the
+result is always a plan the fleet can run, and what it leaves out is named.
+Emptying the lightest route first keeps the most demand served. Left out,
 nothing is capped and the methods behave exactly as before.
 
-Note what this does *not* do: it refuses, it does not re-plan. Fitting the
-customers into a fixed fleet at some cost in tour length is a different
-algorithm (a route-limited split), and choosing which customers to drop is a
-decision the crate will not make for a caller.
+```js
+import { solve_vrp } from '@iyulab/u-routing';
+
+// Six customers of demand 10, two trucks of 20: one route's worth does not fit.
+const customers = [1, 2, 3, 4, 5, 6].map((id) => {
+  const a = (2 * Math.PI * id) / 6;
+  return { id, x: 10 * Math.cos(a), y: 10 * Math.sin(a), demand: 10 };
+});
+const out = solve_vrp({ depot: { x: 0, y: 0 }, customers, vehicles: [{ capacity: 20 }],
+                        method: "ga", config: { max_vehicles: 2, seed: 1 } });
+console.log(out.num_vehicles, out.unassigned); // 2, the two customers no truck can take
+if (out.num_vehicles > 2 || out.unassigned.length !== 2) throw new Error("fleet not kept");
+```
+
+In Rust the same step is `u_routing::fleet::limit_routes`, which takes any
+plan, a capacity per route and the limit.
 
 **Time windows.** `time_window: [ready, due]` is measured in distance units: a
 vehicle leaves the depot at time 0, travels one distance unit per time unit,
@@ -267,7 +283,6 @@ try {
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity that is not a whole number from 0 to 2147483647. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
 | `mixed_fleet` | `method`, `capacities`, `index` | Vehicles of different capacities with `"savings"`, `"ga"` or `"alns"`, which plan every route with one capacity |
-| `routes_exceed_max_vehicles` | `method`, `needed`, `max_vehicles` | The plan needs more routes than `config.max_vehicles` allows |
 | `invalid_option` | `parameter`, and `value` or `method` | A `max_vehicles` of 0, or solver settings the method rejects (`population_size: 1`, `max_iterations: 0`, ...) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |

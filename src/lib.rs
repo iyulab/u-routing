@@ -12,11 +12,13 @@
 //! - [`local_search`] — Local search operators (2-opt, Relocate)
 //! - [`ga`] — Genetic algorithm with Prins split (giant tour encoding)
 //! - [`alns`] — ALNS with destroy/repair operators
+//! - [`fleet`] — Bringing a plan within a fixed number of vehicles
 
 pub mod alns;
 pub mod constructive;
 pub mod distance;
 pub mod evaluation;
+pub mod fleet;
 pub mod ga;
 pub mod local_search;
 pub mod models;

@@ -96,50 +96,42 @@ jobs:
           cd "$RUNNER_TEMP/smoke"
           node "$GITHUB_WORKSPACE/scripts/check-readme-snippets.mjs" "$PKG_NAME"
 
-      - name: Node behaviour gate (max_vehicles is kept or refused, never ignored)
+      - name: Node behaviour gate (max_vehicles is kept, never ignored)
         run: |
           PKG_NAME=$(node -p "require('./pkg/package.json').name")
           cd "$RUNNER_TEMP/smoke"
           node -e "
           const m = require('$PKG_NAME');
-          const customers = [];
-          for (let i = 1; i <= 8; i++) {
-            customers.push({ id: i, x: Math.cos(i) * 10, y: Math.sin(i) * 10, demand: 5 });
-          }
           const depot = { x: 0, y: 0 };
           const base = { population_size: 10, max_generations: 5, max_iterations: 20, seed: 1 };
-          const four = [{ capacity: 10 }, { capacity: 10 }, { capacity: 10 }, { capacity: 10 }];
-
-          // Every method, including nn: a plan over the stated limit is refused,
-          // and the refusal names both the limit and the route count the result
-          // itself would have reported.
+          // Six customers of demand 10, two vehicles of 20: one route's worth
+          // cannot be carried.
+          const customers = [];
+          for (let i = 1; i <= 6; i++) {
+            const a = 2 * Math.PI * i / 6;
+            customers.push({ id: i, x: Math.cos(a) * 10, y: Math.sin(a) * 10, demand: 10 });
+          }
+          const two = [{ capacity: 20 }, { capacity: 20 }];
           for (const method of ['nn', 'savings', 'ga', 'alns']) {
-            const out = m.solve_vrp({ depot, customers, vehicles: four, method, config: base });
-            if (!(out.num_vehicles > 1)) {
-              throw new Error(method + ': expected more than one route, got ' + out.num_vehicles);
+            const out = m.solve_vrp({ depot, customers, vehicles: two, method,
+                                      config: Object.assign({}, base, { max_vehicles: 2 }) });
+            if (out.num_vehicles > 2) throw new Error(method + ': ' + out.num_vehicles + ' routes');
+            const served = out.routes.reduce((n, r) => n + r.length, 0);
+            if (out.unassigned.length === 0 || served + out.unassigned.length !== 6) {
+              throw new Error(method + ': unassigned ' + JSON.stringify(out.unassigned));
             }
-            const limit = out.num_vehicles - 1;
-            let msg = null;
-            try {
-              m.solve_vrp({ depot, customers, vehicles: four, method,
-                            config: Object.assign({}, base, { max_vehicles: limit }) });
-            } catch (e) { msg = String(e); }
-            if (msg === null) throw new Error(method + ': a plan over max_vehicles was not refused');
-            if (!msg.includes('max_vehicles is ' + limit)) {
-              throw new Error(method + ': refusal does not name the limit: ' + msg);
-            }
-            if (!msg.includes('needs ' + out.num_vehicles + ' routes')) {
-              throw new Error(method + ': refusal does not name the route count: ' + msg);
-            }
-            // A limit the plan fits is not a refusal -- the constraint is 'at most'.
-            m.solve_vrp({ depot, customers, vehicles: four, method,
-                          config: Object.assign({}, base, { max_vehicles: out.num_vehicles }) });
+          }
+          // Without the limit the same request needs a third route, so the
+          // check above measures the limit.
+          for (const method of ['savings', 'ga', 'alns']) {
+            const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base });
+            if (out.num_vehicles !== 3) throw new Error(method + ': unlimited gave ' + out.num_vehicles);
           }
 
           // The length of vehicles is not a limit: a single entry states one
           // capacity, and savings/ga/alns still open as many routes as needed.
           for (const method of ['savings', 'ga', 'alns']) {
-            const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 10 }],
+            const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20 }],
                                       method, config: base });
             if (!(out.num_vehicles > 1)) {
               throw new Error(method + ': a single capacity entry became a fleet cap');

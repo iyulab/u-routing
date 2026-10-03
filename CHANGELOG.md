@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** `config.max_vehicles` is kept, not only checked. A plan that
+  needs more routes has its lightest routes emptied into the others (cheapest
+  insertion, within capacity and time windows), and the customers that fit
+  nowhere are reported in `unassigned` -- every method, `"nn"` included. It
+  used to be refused with `routes_exceed_max_vehicles`; that code no longer
+  occurs. A fixed fleet now gets a plan it can run instead of an error.
+
+### Added
+
+- `fleet::limit_routes` and `fleet::cheapest_insertion`: bring any plan within
+  a route limit, keeping each route's own capacity and every time window.
+
 ## [0.10.0] - 2026-10-03
 
 ### Changed

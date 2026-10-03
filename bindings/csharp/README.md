@@ -12,8 +12,8 @@
   unassigned rather than being served late
 - **Capacities**: load is counted in whole units, and a fractional demand is
   refused rather than rounded
-- **Fleet size**: `max_vehicles` states how many routes a plan may use, and a
-  plan that would need more is refused, naming both numbers
+- **Fleet size**: `max_vehicles` states how many routes a plan may use; every
+  method keeps to it and lists the customers that do not fit in `Unassigned`
 
 ## Installation
 

@@ -16,29 +16,10 @@ use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::fleet::insertion_on_time;
 use crate::models::Customer;
 
 use super::solution_repr::RoutingSolution;
-
-/// Whether inserting `customer_id` at `pos` of `route` keeps every customer
-/// of the route on time. Always true when no customer carries a window.
-fn insertion_on_time(
-    route: &[usize],
-    pos: usize,
-    customer_id: usize,
-    distances: &DistanceMatrix,
-    customers: &[Customer],
-    windowed: bool,
-) -> bool {
-    if !windowed {
-        return true;
-    }
-    let mut candidate = Vec::with_capacity(route.len() + 1);
-    candidate.extend_from_slice(&route[..pos]);
-    candidate.push(customer_id);
-    candidate.extend_from_slice(&route[pos..]);
-    time_windows_respected(&candidate, 0, distances, customers)
-}
 
 /// Whether a route of this one customer reaches it on time. Always true
 /// when no customer carries a window.
@@ -46,10 +27,9 @@ fn open_route(customer_id: usize, distances: &DistanceMatrix, customers: &[Custo
     !has_time_windows(customers) || time_windows_respected(&[customer_id], 0, distances, customers)
 }
 
-/// Finds the best insertion position for a customer across all routes.
-///
-/// Returns `(route_index, position, cost_increase)`. A position that would
-/// make a customer late is not a candidate.
+/// Finds the best insertion position for a customer across all routes of one
+/// capacity. Returns `(route_index, position, cost_increase)`. A position that
+/// would make a customer late is not a candidate.
 fn best_insertion(
     routes: &[Vec<usize>],
     customer_id: usize,
@@ -57,37 +37,7 @@ fn best_insertion(
     customers: &[Customer],
     capacity: i32,
 ) -> Option<(usize, usize, f64)> {
-    let depot = 0;
-    let windowed = has_time_windows(customers);
-    let mut best: Option<(usize, usize, f64)> = None;
-
-    for (ri, route) in routes.iter().enumerate() {
-        // Check capacity
-        let load: i32 = route.iter().map(|&c| customers[c].demand()).sum();
-        if load + customers[customer_id].demand() > capacity {
-            continue;
-        }
-
-        for pos in 0..=route.len() {
-            let prev = if pos == 0 { depot } else { route[pos - 1] };
-            let next = if pos == route.len() {
-                depot
-            } else {
-                route[pos]
-            };
-
-            let cost = distances.get(prev, customer_id) + distances.get(customer_id, next)
-                - distances.get(prev, next);
-
-            if best.as_ref().is_none_or(|b| cost < b.2)
-                && insertion_on_time(route, pos, customer_id, distances, customers, windowed)
-            {
-                best = Some((ri, pos, cost));
-            }
-        }
-    }
-
-    best
+    crate::fleet::cheapest_insertion(routes, |_| capacity, customer_id, distances, customers)
 }
 
 /// Greedy insertion: inserts each unassigned customer at its cheapest position.

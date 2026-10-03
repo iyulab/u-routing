@@ -241,35 +241,23 @@ mod tests {
     }
 
     /// The C transport carries `max_vehicles` from the same shared wire type
-    /// the WebAssembly binding uses, and a plan over the limit has to arrive
-    /// as a *failure status* -- the C# client raises on the status alone, so
-    /// an error body under status 0 would reach it as a successful result.
+    /// the WebAssembly binding uses: the plan keeps to the fleet and names
+    /// the customers it leaves out.
     #[test]
-    fn a_plan_over_max_vehicles_reports_a_failure_status() {
+    fn a_fixed_fleet_is_kept_over_the_c_boundary() {
+        let (free_code, free) = solve(&problem("savings"));
+        assert_eq!(free_code, 0, "{free}");
+        assert!(free["num_vehicles"].as_u64().expect("count") > 1, "{free}");
+
         let mut request = problem("savings");
         request["config"] = serde_json::json!({ "max_vehicles": 1 });
         let (code, body) = solve(&request);
-        assert_ne!(code, 0, "{body}");
-        let message = body["error"].as_str().expect("an error string");
-        assert!(
-            message.contains("max_vehicles is 1") && message.contains("routes"),
-            "{message}"
-        );
-        assert_eq!(body["code"], "routes_exceed_max_vehicles", "{body}");
-        assert_eq!(body["max_vehicles"], 1, "{body}");
-        assert!(body["needed"].as_u64().expect("needed") > 1, "{body}");
-    }
-
-    /// The same request without the limit is planned, not refused -- so the
-    /// test above is measuring the limit rather than a broken problem.
-    #[test]
-    fn the_same_plan_without_a_limit_is_not_refused() {
-        let (code, body) = solve(&problem("savings"));
         assert_eq!(code, 0, "{body}");
-        assert!(
-            body["num_vehicles"].as_u64().expect("a route count") > 1,
-            "{body}"
-        );
+        assert_eq!(body["num_vehicles"], 1, "{body}");
+        let unassigned = body["unassigned"].as_array().expect("unassigned");
+        assert!(!unassigned.is_empty(), "{body}");
+        let served: usize = body["routes"][0].as_array().expect("route").len();
+        assert_eq!(served + unassigned.len(), 4, "{body}");
     }
 
     #[test]
