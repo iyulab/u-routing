@@ -23,7 +23,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteEvaluator;
+use crate::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRPTW solution using Solomon's I1 insertion heuristic.
@@ -71,6 +71,7 @@ pub fn solomon_i1(
 
     let depot = vehicle.depot_id();
     let evaluator = RouteEvaluator::new(customers, distances, vehicle);
+    let limits = RouteLimits::of(vehicle);
 
     let mut unrouted: Vec<usize> = (1..n).collect();
     let mut solution = Solution::new();
@@ -79,6 +80,15 @@ pub fn solomon_i1(
         // Start a new route: pick the farthest unrouted customer as seed
         let seed_idx = farthest_from_depot(&unrouted, depot, distances);
         let seed = unrouted.remove(seed_idx);
+        // A seed no route can take even alone -- over capacity, unreachable
+        // in its window, or beyond the vehicle's limits -- is unassigned
+        // rather than opened as a route that breaks them.
+        if customers[seed].demand() > vehicle.capacity()
+            || !route_feasible(&[seed], depot, distances, customers, &limits)
+        {
+            solution.add_unassigned(seed);
+            continue;
+        }
         let mut route_customers = vec![seed];
 
         // Iteratively insert customers into this route
@@ -113,7 +123,7 @@ pub fn solomon_i1(
                     // Check time window feasibility
                     let mut test_route = route_customers.clone();
                     test_route.insert(pos, cid);
-                    if !is_tw_feasible(&test_route, depot, customers, distances) {
+                    if !route_feasible(&test_route, depot, distances, customers, &limits) {
                         continue;
                     }
 
@@ -156,33 +166,6 @@ fn farthest_from_depot(unrouted: &[usize], depot: usize, distances: &DistanceMat
 }
 
 /// Checks whether a route is feasible with respect to time windows.
-fn is_tw_feasible(
-    route: &[usize],
-    depot: usize,
-    customers: &[Customer],
-    distances: &DistanceMatrix,
-) -> bool {
-    let mut time = 0.0;
-    let mut prev = depot;
-
-    for &cid in route {
-        let travel = distances.get(prev, cid);
-        let arrival = time + travel;
-
-        if let Some(tw) = customers[cid].time_window() {
-            if arrival > tw.due() {
-                return false;
-            }
-            time = arrival + tw.waiting_time(arrival) + customers[cid].service_duration();
-        } else {
-            time = arrival + customers[cid].service_duration();
-        }
-        prev = cid;
-    }
-
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

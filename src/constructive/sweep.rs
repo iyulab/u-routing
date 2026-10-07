@@ -17,7 +17,7 @@
 //! Vehicle-Dispatch Problem", *Operations Research* 22(2), 340-349.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteEvaluator;
+use crate::evaluation::{route_checks_needed, route_feasible, RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRP solution using the sweep heuristic.
@@ -81,10 +81,32 @@ pub fn sweep(customers: &[Customer], distances: &DistanceMatrix, vehicle: &Vehic
     let mut current_load: i32 = 0;
     let mut current_route: Vec<usize> = Vec::new();
 
+    // Time windows and the vehicle's limits close a route the way capacity
+    // does: the next customer starts a new route when appending it would make
+    // a customer late or the route too long.
+    let limits = RouteLimits::of(vehicle);
+    let constrained = route_checks_needed(customers, &limits);
+    let fits = |route: &[usize]| {
+        !constrained || route_feasible(route, vehicle.depot_id(), distances, customers, &limits)
+    };
+
     for &(cid, _) in &angle_order {
         let demand = customers[cid].demand();
+        if demand > vehicle.capacity() || !fits(&[cid]) {
+            // A customer no route can take, even alone -- unassigned.
+            solution.add_unassigned(cid);
+            continue;
+        }
 
-        if current_load + demand > vehicle.capacity() && !current_route.is_empty() {
+        let extended_fits = {
+            current_route.push(cid);
+            let ok = fits(&current_route);
+            current_route.pop();
+            ok
+        };
+        if !current_route.is_empty()
+            && (current_load + demand > vehicle.capacity() || !extended_fits)
+        {
             // Finalize current route
             let (route, _) = evaluator.build_route(&current_route);
             solution.add_route(route);
@@ -92,13 +114,8 @@ pub fn sweep(customers: &[Customer], distances: &DistanceMatrix, vehicle: &Vehic
             current_load = 0;
         }
 
-        if demand <= vehicle.capacity() {
-            current_route.push(cid);
-            current_load += demand;
-        } else {
-            // Single customer exceeds capacity — mark unassigned
-            solution.add_unassigned(cid);
-        }
+        current_route.push(cid);
+        current_load += demand;
     }
 
     // Add remaining route

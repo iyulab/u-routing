@@ -24,7 +24,7 @@
 //!   Letters* 37(5), 333-338.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{has_time_windows, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Whether inserting `customer_id` at `pos` of `route` keeps every customer
@@ -44,7 +44,7 @@ pub(crate) fn insertion_on_time(
     candidate.extend_from_slice(&route[..pos]);
     candidate.push(customer_id);
     candidate.extend_from_slice(&route[pos..]);
-    time_windows_respected(&candidate, 0, distances, customers)
+    route_feasible(&candidate, 0, distances, customers, &RouteLimits::NONE)
 }
 
 /// The cheapest position for `customer_id` across `routes`, as
@@ -280,7 +280,10 @@ mod tests {
             &customers,
         );
         for r in &plan.routes {
-            assert!(time_windows_respected(r, 0, &dm, &customers), "{r:?}");
+            assert!(
+                route_feasible(r, 0, &dm, &customers, &RouteLimits::NONE),
+                "{r:?}"
+            );
         }
         let served: usize = plan.routes.iter().map(Vec::len).sum();
         assert_eq!(served + plan.unserved.len(), 6);

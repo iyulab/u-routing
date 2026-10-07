@@ -19,7 +19,7 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies Or-opt improvement to a single route.
@@ -36,6 +36,7 @@ use crate::models::Customer;
 /// # Examples
 ///
 /// ```
+/// use u_routing::evaluation::RouteLimits;
 /// use u_routing::models::Customer;
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::local_search::{or_opt_improve, route_distance};
@@ -49,7 +50,7 @@ use crate::models::Customer;
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
 /// // Try a suboptimal order
-/// let (improved, dist) = or_opt_improve(&[1, 3, 2], 0, &dm, &customers);
+/// let (improved, dist) = or_opt_improve(&[1, 3, 2], 0, &dm, &customers, &RouteLimits::NONE);
 /// let orig_dist = route_distance(&[1, 3, 2], 0, &dm);
 /// assert!(dist <= orig_dist + 1e-10);
 /// ```
@@ -58,6 +59,7 @@ pub fn or_opt_improve(
     depot: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
+    limits: &RouteLimits,
 ) -> (Vec<usize>, f64) {
     if route.len() < 2 {
         let dist = if route.is_empty() {
@@ -68,7 +70,7 @@ pub fn or_opt_improve(
         return (route.to_vec(), dist);
     }
 
-    let windowed = has_time_windows(customers);
+    let constrained = route_checks_needed(customers, limits);
     let mut current = route.to_vec();
     let mut improved = true;
 
@@ -78,7 +80,7 @@ pub fn or_opt_improve(
         // Try segment sizes 1, 2, 3
         for seg_len in 1..=3.min(current.len()) {
             let gate = |candidate: &[usize]| {
-                !windowed || time_windows_respected(candidate, depot, distances, customers)
+                !constrained || route_feasible(candidate, depot, distances, customers, limits)
             };
             if try_or_opt_pass(&mut current, depot, distances, seg_len, &gate) {
                 improved = true;
@@ -215,7 +217,7 @@ mod tests {
     #[test]
     fn test_or_opt_already_optimal() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[1, 2, 3], 0, &dm, &customers);
+        let (improved, dist) = or_opt_improve(&[1, 2, 3], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(improved, vec![1, 2, 3]);
         assert!((dist - 6.0).abs() < 1e-10);
     }
@@ -223,7 +225,7 @@ mod tests {
     #[test]
     fn test_or_opt_empty() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[], 0, &dm, &customers);
+        let (improved, dist) = or_opt_improve(&[], 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved.is_empty());
         assert_eq!(dist, 0.0);
     }
@@ -231,7 +233,7 @@ mod tests {
     #[test]
     fn test_or_opt_single() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[2], 0, &dm, &customers);
+        let (improved, dist) = or_opt_improve(&[2], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(improved, vec![2]);
         assert!((dist - 4.0).abs() < 1e-10);
     }
@@ -248,14 +250,14 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 4, 2, 3]; // deliberately bad order
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
     #[test]
     fn test_or_opt_two_customers() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = or_opt_improve(&[2, 1], 0, &dm, &customers);
+        let (improved, dist) = or_opt_improve(&[2, 1], 0, &dm, &customers, &RouteLimits::NONE);
         // 0→2→1→0 = 2+1+1 = 4 vs 0→1→2→0 = 1+1+2 = 4 (same distance on line)
         assert_eq!(improved.len(), 2);
         assert!(dist <= 4.0 + 1e-10);
@@ -272,7 +274,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 2]; // crosses
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) = or_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 

@@ -13,7 +13,7 @@
 //! quality is typically 15-25% above optimal, it provides a fast baseline.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteEvaluator;
+use crate::evaluation::{RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRP solution using the nearest-neighbor heuristic.
@@ -78,12 +78,17 @@ pub fn nearest_neighbor(
         let vehicle = &vehicles[vehicle_idx];
         let evaluator = RouteEvaluator::new(customers, distances, vehicle);
         let depot = vehicle.depot_id();
+        let limits = RouteLimits::of(vehicle);
         let mut current = depot;
         let mut route_customers = Vec::new();
         let mut current_load: i32 = 0;
+        // Travelled so far, and the clock after serving `current`.
+        let mut travelled = 0.0;
+        let mut clock = 0.0;
 
         loop {
-            // Find nearest unvisited customer that fits capacity
+            // Find the nearest unvisited customer that fits capacity and still
+            // lets the route get back to the depot within the vehicle's limits.
             let mut best: Option<(usize, f64)> = None;
             for i in 1..n {
                 if visited[i] {
@@ -94,16 +99,25 @@ pub fn nearest_neighbor(
                     continue;
                 }
                 let d = distances.get(current, i);
+                let back = distances.get(i, depot);
+                if !limits.allow(
+                    travelled + d + back,
+                    clock + d + customers[i].service_duration() + back,
+                ) {
+                    continue;
+                }
                 if best.is_none_or(|(_, best_d)| d < best_d) {
                     best = Some((i, d));
                 }
             }
 
             match best {
-                Some((next, _)) => {
+                Some((next, d)) => {
                     visited[next] = true;
                     route_customers.push(next);
                     current_load += customers[next].demand();
+                    travelled += d;
+                    clock += d + customers[next].service_duration();
                     current = next;
                 }
                 None => break,

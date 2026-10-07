@@ -8,8 +8,25 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** a vehicle's `max_distance` and `max_duration` bound every route the
+  heuristics build and every move the searches take, the way time windows do --
+  they were only reported by `RouteEvaluator` after the fact. `evaluation::RouteLimits`
+  carries them and `evaluation::route_feasible(route, depot, distances, customers,
+  &limits)` replaces `time_windows_respected` (windows, distance and duration in one
+  pass). `two_opt_improve`, `or_opt_improve` and `three_opt_improve` take the limits
+  as a fifth argument (`&RouteLimits::NONE` for none); the heuristics and
+  inter-route searches that take a `Vehicle` read them from it. A customer no route
+  can reach within the limits is unassigned.
+
 ### Fixed
 
+- `sweep` ignored time windows: it now starts a new route when the next customer
+  would be late (or break the vehicle's limits), and leaves a customer no route can
+  reach on time unassigned.
+- `solomon_i1` opened a route with any seed, even one over capacity or unreachable
+  in its window on its own; such a seed is now unassigned.
 - WebAssembly: a value of the wrong type inside an argument -- a `null` or a
   string where a number belongs (`customers[1].x`), or a missing field -- is refused as
   `malformed_input` with `parameter` naming the field and `index` its position in

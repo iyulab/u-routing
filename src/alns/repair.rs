@@ -15,7 +15,7 @@ use rand::Rng;
 use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{has_time_windows, route_feasible, RouteLimits};
 use crate::fleet::insertion_on_time;
 use crate::models::Customer;
 
@@ -24,7 +24,8 @@ use super::solution_repr::RoutingSolution;
 /// Whether a route of this one customer reaches it on time. Always true
 /// when no customer carries a window.
 fn open_route(customer_id: usize, distances: &DistanceMatrix, customers: &[Customer]) -> bool {
-    !has_time_windows(customers) || time_windows_respected(&[customer_id], 0, distances, customers)
+    !has_time_windows(customers)
+        || route_feasible(&[customer_id], 0, distances, customers, &RouteLimits::NONE)
 }
 
 /// Finds the best insertion position for a customer across all routes of one

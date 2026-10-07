@@ -150,7 +150,13 @@ impl GaProblem for RoutingGaProblem {
         // reversals that keep every customer on time.
         let mut total = 0.0;
         for route in &result.routes {
-            let (_, dist) = two_opt_improve(route, 0, &self.distances, &self.customers);
+            let (_, dist) = two_opt_improve(
+                route,
+                0,
+                &self.distances,
+                &self.customers,
+                &crate::evaluation::RouteLimits::NONE,
+            );
             total += dist;
         }
         total

@@ -16,7 +16,7 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A relocate move: move customer from one route to another.
@@ -102,7 +102,8 @@ fn find_best_relocate(
     vehicle: &Vehicle,
 ) -> Option<RelocateMove> {
     let depot = vehicle.depot_id();
-    let windowed = has_time_windows(customers);
+    let limits = &RouteLimits::of(vehicle);
+    let constrained = route_checks_needed(customers, limits);
     let mut best: Option<RelocateMove> = None;
 
     for from_r in 0..routes.len() {
@@ -130,10 +131,10 @@ fn find_best_relocate(
                         let is_better = best.as_ref().is_none_or(|b| delta < b.delta);
                         // Only the receiving route's timing changes; the
                         // giving route only gets shorter.
-                        if is_better && windowed {
+                        if is_better && constrained {
                             let mut candidate = to_route.clone();
                             candidate.insert(to_pos, cid);
-                            if !time_windows_respected(&candidate, depot, distances, customers) {
+                            if !route_feasible(&candidate, depot, distances, customers, limits) {
                                 continue;
                             }
                         }

@@ -25,7 +25,7 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A savings value for merging two customers' routes.
@@ -104,13 +104,15 @@ pub fn clarke_wright_savings(
     let mut route_load = vec![0i32; n];
     let mut route_members: Vec<Vec<usize>> = vec![Vec::new(); n];
 
-    // A customer that cannot be reached on time even on its own route has
-    // no route at all: it is left unassigned rather than served late.
-    let windowed = has_time_windows(customers);
+    // A customer that cannot be reached on time, or within the vehicle's
+    // limits, even on its own route has no route at all: it is left
+    // unassigned rather than served late or over the limit.
+    let limits = &RouteLimits::of(vehicle);
+    let constrained = route_checks_needed(customers, limits);
     for i in 1..n {
         route_of[i] = i;
         route_load[i] = customers[i].demand();
-        if !windowed || time_windows_respected(&[i], depot, distances, customers) {
+        if !constrained || route_feasible(&[i], depot, distances, customers, limits) {
             route_members[i].push(i);
         }
     }
@@ -155,8 +157,9 @@ pub fn clarke_wright_savings(
         };
 
         // Merge: append members of merge_from into merge_into -- unless the
-        // merged route would reach a customer after its window closes.
-        if windowed {
+        // merged route would reach a customer after its window closes or break
+        // the vehicle's distance or duration limit.
+        if constrained {
             let mut candidate: Vec<usize> = route_members[merge_into].clone();
             if reverse_into {
                 candidate.reverse();
@@ -166,7 +169,7 @@ pub fn clarke_wright_savings(
             } else {
                 candidate.extend(route_members[merge_from].iter());
             }
-            if !time_windows_respected(&candidate, depot, distances, customers) {
+            if !route_feasible(&candidate, depot, distances, customers, limits) {
                 continue;
             }
         }

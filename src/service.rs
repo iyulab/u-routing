@@ -485,8 +485,15 @@ fn apply_local_search(
     let mut improved_routes = Vec::with_capacity(routes.len());
     let mut total = 0.0;
     for route in routes {
-        let (r1, _) = two_opt_improve(route, 0, dm, customers);
-        let (r2, dist) = or_opt_improve(&r1, 0, dm, customers);
+        let (r1, _) = two_opt_improve(
+            route,
+            0,
+            dm,
+            customers,
+            &crate::evaluation::RouteLimits::NONE,
+        );
+        let (r2, dist) =
+            or_opt_improve(&r1, 0, dm, customers, &crate::evaluation::RouteLimits::NONE);
         total += dist;
         improved_routes.push(r2);
     }
@@ -983,7 +990,13 @@ mod tests {
             for route in &out.routes {
                 // ids are 1..=6 and equal the internal indices here
                 assert!(
-                    crate::evaluation::time_windows_respected(route, 0, &dm, &internal),
+                    crate::evaluation::route_feasible(
+                        route,
+                        0,
+                        &dm,
+                        &internal,
+                        &crate::evaluation::RouteLimits::NONE
+                    ),
                     "{method}: late on {route:?}"
                 );
             }

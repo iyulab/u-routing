@@ -21,7 +21,7 @@
 
 use super::or_opt::route_distance;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies 3-opt improvement to a single route.
@@ -38,6 +38,7 @@ use crate::models::Customer;
 /// # Examples
 ///
 /// ```
+/// use u_routing::evaluation::RouteLimits;
 /// use u_routing::models::Customer;
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::local_search::{three_opt_improve, route_distance};
@@ -50,7 +51,7 @@ use crate::models::Customer;
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
-/// let (improved, dist) = three_opt_improve(&[1, 3, 2], 0, &dm, &customers);
+/// let (improved, dist) = three_opt_improve(&[1, 3, 2], 0, &dm, &customers, &RouteLimits::NONE);
 /// let orig_dist = route_distance(&[1, 3, 2], 0, &dm);
 /// assert!(dist <= orig_dist + 1e-10);
 /// ```
@@ -59,6 +60,7 @@ pub fn three_opt_improve(
     depot: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
+    limits: &RouteLimits,
 ) -> (Vec<usize>, f64) {
     if route.len() < 4 {
         // 3-opt needs at least 4 customers to have 3 non-adjacent edges
@@ -66,9 +68,9 @@ pub fn three_opt_improve(
         return (route.to_vec(), dist);
     }
 
-    let windowed = has_time_windows(customers);
+    let constrained = route_checks_needed(customers, limits);
     let accepts = |candidate: &[usize]| {
-        !windowed || time_windows_respected(candidate, depot, distances, customers)
+        !constrained || route_feasible(candidate, depot, distances, customers, limits)
     };
     let mut current = route.to_vec();
     let mut improved = true;
@@ -284,7 +286,8 @@ mod tests {
     fn test_3opt_already_optimal() {
         let (customers, dm) = square_customers();
         // Optimal tour around the square: 1→2→3→4
-        let (improved, dist) = three_opt_improve(&[1, 2, 3, 4], 0, &dm, &customers);
+        let (improved, dist) =
+            three_opt_improve(&[1, 2, 3, 4], 0, &dm, &customers, &RouteLimits::NONE);
         let orig_dist = route_distance(&[1, 2, 3, 4], 0, &dm);
         assert!((dist - orig_dist).abs() < 1e-10);
         assert_eq!(improved.len(), 4);
@@ -295,7 +298,8 @@ mod tests {
         let (customers, dm) = square_customers();
         let initial = vec![1, 3, 2, 4]; // deliberately bad
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) =
+            three_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
@@ -313,7 +317,8 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 5, 2, 6, 4]; // scrambled
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) =
+            three_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 
@@ -321,15 +326,15 @@ mod tests {
     fn test_3opt_small_routes_passthrough() {
         let (customers, dm) = square_customers();
         // Routes with < 4 customers should pass through unchanged
-        let (r1, d1) = three_opt_improve(&[1], 0, &dm, &customers);
+        let (r1, d1) = three_opt_improve(&[1], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(r1, vec![1]);
         assert!(d1 > 0.0);
 
-        let (r2, d2) = three_opt_improve(&[1, 2], 0, &dm, &customers);
+        let (r2, d2) = three_opt_improve(&[1, 2], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(r2.len(), 2);
         assert!(d2 > 0.0);
 
-        let (r3, d3) = three_opt_improve(&[1, 2, 3], 0, &dm, &customers);
+        let (r3, d3) = three_opt_improve(&[1, 2, 3], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(r3.len(), 3);
         assert!(d3 > 0.0);
     }
@@ -337,7 +342,7 @@ mod tests {
     #[test]
     fn test_3opt_empty() {
         let (customers, dm) = square_customers();
-        let (improved, dist) = three_opt_improve(&[], 0, &dm, &customers);
+        let (improved, dist) = three_opt_improve(&[], 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved.is_empty());
         assert_eq!(dist, 0.0);
     }
@@ -354,7 +359,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 4, 2, 5, 3];
-        let (improved, _) = three_opt_improve(&initial, 0, &dm, &customers);
+        let (improved, _) = three_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         let mut sorted = improved.clone();
         sorted.sort();
         assert_eq!(sorted, vec![1, 2, 3, 4, 5]);
@@ -373,7 +378,8 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 3, 2, 4]; // crosses edges
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = three_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) =
+            three_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 }

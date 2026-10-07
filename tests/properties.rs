@@ -15,10 +15,10 @@ use u_metaheur::alns::RepairOperator;
 use u_routing::alns::repair::{GreedyInsertion, RegretInsertion};
 use u_routing::alns::RoutingSolution;
 use u_routing::constructive::{
-    clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw, sweep,
+    clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw, solomon_i1, sweep,
 };
 use u_routing::distance::DistanceMatrix;
-use u_routing::evaluation::time_windows_respected;
+use u_routing::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
 use u_routing::ga::split;
 use u_routing::local_search::{
     exchange_improve, or_opt_improve, relocate_improve, route_distance, three_opt_improve,
@@ -78,7 +78,7 @@ fn routes_on_time(
 ) -> Result<(), TestCaseError> {
     for route in routes {
         prop_assert!(
-            time_windows_respected(route, 0, dm, customers),
+            route_feasible(route, 0, dm, customers, &RouteLimits::NONE),
             "route {route:?} reaches a customer after its window closes"
         );
     }
@@ -201,11 +201,11 @@ proptest! {
         let before = route_distance(&route, 0, &dm);
 
         for (name, improve) in [
-            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer]) -> (Vec<usize>, f64)),
+            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer], &RouteLimits) -> (Vec<usize>, f64)),
             ("or_opt", or_opt_improve),
             ("three_opt", three_opt_improve),
         ] {
-            let (after_route, after_dist) = improve(&route, 0, &dm, &customers);
+            let (after_route, after_dist) = improve(&route, 0, &dm, &customers, &RouteLimits::NONE);
             prop_assert_eq!(sorted(after_route.clone()), route.clone(), "{} lost or duplicated a customer", name);
             let priced = route_distance(&after_route, 0, &dm);
             prop_assert!(
@@ -289,16 +289,16 @@ proptest! {
         let dm = DistanceMatrix::from_customers(&customers);
         let capacity = capacity_for(&customers, 200);
         let route = all_customer_ids(&customers);
-        prop_assert!(time_windows_respected(&route, 0, &dm, &customers), "the seed tour is on time by construction");
+        prop_assert!(route_feasible(&route, 0, &dm, &customers, &RouteLimits::NONE), "the seed tour is on time by construction");
 
         for (name, improve) in [
-            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer]) -> (Vec<usize>, f64)),
+            ("two_opt", two_opt_improve as fn(&[usize], usize, &DistanceMatrix, &[Customer], &RouteLimits) -> (Vec<usize>, f64)),
             ("or_opt", or_opt_improve),
             ("three_opt", three_opt_improve),
         ] {
-            let (after, _) = improve(&route, 0, &dm, &customers);
+            let (after, _) = improve(&route, 0, &dm, &customers, &RouteLimits::NONE);
             prop_assert_eq!(sorted(after.clone()), route.clone(), "{} lost a customer", name);
-            prop_assert!(time_windows_respected(&after, 0, &dm, &customers), "{} made a customer late: {:?}", name, after);
+            prop_assert!(route_feasible(&after, 0, &dm, &customers, &RouteLimits::NONE), "{} made a customer late: {:?}", name, after);
         }
 
         let vehicle = Vehicle::new(0, capacity);
@@ -328,6 +328,87 @@ proptest! {
             prop_assert_eq!(served + repaired.unassigned().len(), customers.len() - 1, "{} lost a customer", name);
             // Every customer is reachable on its own, so nothing stays unassigned.
             prop_assert!(repaired.unassigned().is_empty(), "{} left {:?} unassigned", name, repaired.unassigned());
+        }
+    }
+
+    /// A vehicle's `max_distance` / `max_duration` bound every route the
+    /// constructive heuristics build and every move the searches take, the way
+    /// time windows do: no route breaks them, a customer no route can reach
+    /// within them is unassigned, and nobody is lost.
+    #[test]
+    fn vehicle_limits_hold_for_every_route(
+        customers in instance(2..=12usize, 10),
+        distance_share in 0.3f64..1.5,
+        duration_share in 0.3f64..1.5,
+        service in 0.0f64..5.0,
+    ) {
+        let customers: Vec<Customer> = customers
+            .iter()
+            .map(|c| if c.id() == 0 { c.clone() } else {
+                Customer::new(c.id(), c.x(), c.y(), c.demand(), service)
+            })
+            .collect();
+        let dm = DistanceMatrix::from_customers(&customers);
+        // Limits scaled to the farthest out-and-back, so some instances leave
+        // customers out and others fit several to a route.
+        let reach = (1..customers.len())
+            .map(|i| dm.get(0, i) + dm.get(i, 0))
+            .fold(0.0, f64::max);
+        let limits = RouteLimits {
+            max_distance: Some(reach * distance_share),
+            max_duration: Some((reach + service) * duration_share),
+        };
+        let capacity = capacity_for(&customers, 15);
+        let vehicle = Vehicle::new(0, capacity)
+            .with_max_distance(reach * distance_share)
+            .with_max_duration((reach + service) * duration_share);
+        let vehicles: Vec<Vehicle> = (0..customers.len())
+            .map(|i| Vehicle::new(i, capacity)
+                .with_max_distance(reach * distance_share)
+                .with_max_duration((reach + service) * duration_share))
+            .collect();
+        let alone = |i: usize| route_feasible(&[i], 0, &dm, &customers, &limits);
+        let evaluator = RouteEvaluator::new(&customers, &dm, &vehicle);
+
+        for (name, solution) in [
+            ("savings", clarke_wright_savings(&customers, &dm, &vehicle)),
+            ("solomon_i1", solomon_i1(&customers, &dm, &vehicle)),
+            ("sweep", sweep(&customers, &dm, &vehicle)),
+            ("nn", nearest_neighbor(&customers, &dm, &vehicles)),
+            ("nn_tw", nearest_neighbor_tw(&customers, &dm, &vehicles)),
+        ] {
+            let improved = relocate_improve(&solution, &customers, &dm, &vehicle);
+            let improved = exchange_improve(&improved, &customers, &dm, &vehicle);
+            for (stage, s) in [("built", &solution), ("improved", &improved)] {
+                let routes: Vec<Vec<usize>> = s.routes().iter().map(|r| r.customer_ids()).collect();
+                for route in &routes {
+                    // The evaluator is the oracle: it prices the route on its
+                    // own and reports every limit it breaks.
+                    let (_, violations) = evaluator.build_route(route);
+                    prop_assert!(
+                        violations.is_empty(),
+                        "{} ({}) broke {:?} on {:?}", name, stage, violations, route
+                    );
+                    let (r2, _) = two_opt_improve(route, 0, &dm, &customers, &limits);
+                    let (r3, _) = or_opt_improve(&r2, 0, &dm, &customers, &limits);
+                    let (r4, _) = three_opt_improve(&r3, 0, &dm, &customers, &limits);
+                    let (_, violations) = evaluator.build_route(&r4);
+                    prop_assert!(
+                        violations.is_empty(),
+                        "{} ({}): a route search broke {:?} on {:?}", name, stage, violations, r4
+                    );
+                }
+                let served: usize = routes.iter().map(Vec::len).sum();
+                prop_assert_eq!(served + s.num_unassigned(), customers.len() - 1, "{} ({}) lost a customer", name, stage);
+            }
+            // Whoever can be served alone within the limits is not left out
+            // by the heuristics that take every customer that fits.
+            if name != "sweep" {
+                for i in 1..customers.len() {
+                    let served = solution.routes().iter().any(|r| r.customer_ids().contains(&i));
+                    prop_assert!(served || !alone(i), "{} left {} out though it fits alone", name, i);
+                }
+            }
         }
     }
 }

@@ -22,7 +22,7 @@
 //! *Operations Research* 6(6), 791-812.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies 2-opt improvement to a single route (given as a sequence of customer IDs).
@@ -42,6 +42,7 @@ use crate::models::Customer;
 /// # Examples
 ///
 /// ```
+/// use u_routing::evaluation::RouteLimits;
 /// use u_routing::models::Customer;
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::local_search::two_opt_improve;
@@ -55,7 +56,7 @@ use crate::models::Customer;
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
 /// // Suboptimal order: 1, 3, 2
-/// let (improved, dist) = two_opt_improve(&[1, 3, 2], 0, &dm, &customers);
+/// let (improved, dist) = two_opt_improve(&[1, 3, 2], 0, &dm, &customers, &RouteLimits::NONE);
 /// // 2-opt should fix crossings
 /// assert!(dist <= 6.0 + 1e-10); // optimal: 0→1→2→3→0 = 6
 /// ```
@@ -64,6 +65,7 @@ pub fn two_opt_improve(
     depot: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
+    limits: &RouteLimits,
 ) -> (Vec<usize>, f64) {
     if route.len() < 2 {
         let dist = if route.is_empty() {
@@ -74,7 +76,7 @@ pub fn two_opt_improve(
         return (route.to_vec(), dist);
     }
 
-    let windowed = has_time_windows(customers);
+    let constrained = route_checks_needed(customers, limits);
     let mut current = route.to_vec();
     let mut improved = true;
 
@@ -89,7 +91,8 @@ pub fn two_opt_improve(
                     // Reverse segment [i+1..=j] — but in our 0-indexed route
                     // that means reverse [i..=j] since i and j are customer indices
                     current[i..=j].reverse();
-                    if windowed && !time_windows_respected(&current, depot, distances, customers) {
+                    if constrained && !route_feasible(&current, depot, distances, customers, limits)
+                    {
                         current[i..=j].reverse();
                         continue;
                     }
@@ -156,7 +159,7 @@ mod tests {
     #[test]
     fn test_2opt_already_optimal() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = two_opt_improve(&[1, 2, 3], 0, &dm, &customers);
+        let (improved, dist) = two_opt_improve(&[1, 2, 3], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(improved, vec![1, 2, 3]);
         assert!((dist - 6.0).abs() < 1e-10);
     }
@@ -174,7 +177,8 @@ mod tests {
         ];
         let dm2 = DistanceMatrix::from_customers(&customers);
         // Route [1, 3, 2]: depot(0,0)→(1,1)→(1,-1)→(2,0)→depot = crosses
-        let (_, improved_dist) = two_opt_improve(&[1, 3, 2], 0, &dm2, &customers);
+        let (_, improved_dist) =
+            two_opt_improve(&[1, 3, 2], 0, &dm2, &customers, &RouteLimits::NONE);
         let (_, original_dist) = (vec![1, 3, 2], route_distance(&[1, 3, 2], 0, &dm2));
         assert!(improved_dist <= original_dist + 1e-10);
     }
@@ -182,7 +186,7 @@ mod tests {
     #[test]
     fn test_2opt_empty_route() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = two_opt_improve(&[], 0, &dm, &customers);
+        let (improved, dist) = two_opt_improve(&[], 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved.is_empty());
         assert_eq!(dist, 0.0);
     }
@@ -190,7 +194,7 @@ mod tests {
     #[test]
     fn test_2opt_single_customer() {
         let (customers, dm) = line_customers();
-        let (improved, dist) = two_opt_improve(&[2], 0, &dm, &customers);
+        let (improved, dist) = two_opt_improve(&[2], 0, &dm, &customers, &RouteLimits::NONE);
         assert_eq!(improved, vec![2]);
         assert!((dist - 4.0).abs() < 1e-10); // 0→2→0 = 2+2
     }
@@ -214,7 +218,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let initial = vec![1, 4, 2, 3]; // deliberately bad order
         let initial_dist = route_distance(&initial, 0, &dm);
-        let (_, improved_dist) = two_opt_improve(&initial, 0, &dm, &customers);
+        let (_, improved_dist) = two_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
     }
 }

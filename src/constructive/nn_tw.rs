@@ -17,7 +17,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteEvaluator;
+use crate::evaluation::{RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRPTW solution using a time-window-aware nearest-neighbor.
@@ -83,8 +83,10 @@ pub fn nearest_neighbor_tw(
         let vehicle = &vehicles[vehicle_idx];
         let evaluator = RouteEvaluator::new(customers, distances, vehicle);
         let depot = vehicle.depot_id();
+        let limits = RouteLimits::of(vehicle);
         let mut current = depot;
         let mut current_time = 0.0;
+        let mut travelled = 0.0;
         let mut current_load: i32 = 0;
         let mut route_customers = Vec::new();
 
@@ -112,6 +114,19 @@ pub fn nearest_neighbor_tw(
                     }
                 }
 
+                // ...and still get back to the depot within the vehicle's limits.
+                let start = match customers[i].time_window() {
+                    Some(tw) => arrival + tw.waiting_time(arrival),
+                    None => arrival,
+                };
+                let back = distances.get(i, depot);
+                if !limits.allow(
+                    travelled + travel + back,
+                    start + customers[i].service_duration() + back,
+                ) {
+                    continue;
+                }
+
                 // Among feasible customers, pick nearest
                 let d = distances.get(current, i);
                 if best.is_none_or(|(_, best_d)| d < best_d) {
@@ -135,6 +150,7 @@ pub fn nearest_neighbor_tw(
                     };
 
                     current_time = service_start + customers[next].service_duration();
+                    travelled += travel;
                     current_load += customers[next].demand();
                     current = next;
                 }

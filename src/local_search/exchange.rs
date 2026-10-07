@@ -23,7 +23,7 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
-use crate::evaluation::{has_time_windows, time_windows_respected};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Applies inter-route cross-exchange (2-opt*) improvement.
@@ -118,7 +118,8 @@ fn find_best_exchange(
     let n1 = route1.len();
     let n2 = route2.len();
 
-    let windowed = has_time_windows(customers);
+    let limits = &RouteLimits::of(vehicle);
+    let constrained = route_checks_needed(customers, limits);
     let mut best: Option<(usize, usize, f64)> = None;
 
     // cut1 ranges from 1..n1 (split after position cut1-1)
@@ -174,7 +175,7 @@ fn find_best_exchange(
             let delta = (new_edge1 + new_edge2) - (old_edge1 + old_edge2);
 
             if delta < -1e-10 && best.as_ref().is_none_or(|b| delta < b.2) {
-                if windowed {
+                if constrained {
                     let new1: Vec<usize> = route1[..cut1]
                         .iter()
                         .chain(route2[cut2..].iter())
@@ -185,8 +186,8 @@ fn find_best_exchange(
                         .chain(route1[cut1..].iter())
                         .copied()
                         .collect();
-                    if !time_windows_respected(&new1, depot, distances, customers)
-                        || !time_windows_respected(&new2, depot, distances, customers)
+                    if !route_feasible(&new1, depot, distances, customers, limits)
+                        || !route_feasible(&new2, depot, distances, customers, limits)
                     {
                         continue;
                     }
