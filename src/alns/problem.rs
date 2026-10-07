@@ -8,7 +8,7 @@ use u_metaheur::alns::AlnsProblem;
 
 use crate::constructive::{nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::has_time_windows;
+use crate::evaluation::{route_checks_needed, RouteLimits};
 use crate::models::{Customer, Vehicle};
 
 use super::solution_repr::RoutingSolution;
@@ -48,6 +48,7 @@ pub struct RoutingAlnsProblem {
     customers: Vec<Customer>,
     distances: DistanceMatrix,
     capacity: i32,
+    limits: RouteLimits,
 }
 
 impl RoutingAlnsProblem {
@@ -57,7 +58,15 @@ impl RoutingAlnsProblem {
             customers,
             distances,
             capacity,
+            limits: RouteLimits::NONE,
         }
+    }
+
+    /// Plans every route within these distance and duration limits (none by
+    /// default). Give the repair operators the same limits.
+    pub fn with_limits(mut self, limits: RouteLimits) -> Self {
+        self.limits = limits;
+        self
     }
 }
 
@@ -67,12 +76,23 @@ impl AlnsProblem for RoutingAlnsProblem {
     fn initial_solution<R: Rng>(&self, _rng: &mut R) -> RoutingSolution {
         // Use nearest neighbor heuristic for initial solution
         let vehicles: Vec<Vehicle> = (0..self.customers.len())
-            .map(|i| Vehicle::new(i, self.capacity))
+            .map(|i| {
+                let v = Vehicle::new(i, self.capacity);
+                let v = match self.limits.max_distance {
+                    Some(d) => v.with_max_distance(d),
+                    None => v,
+                };
+                match self.limits.max_duration {
+                    Some(t) => v.with_max_duration(t),
+                    None => v,
+                }
+            })
             .collect();
 
-        // With time windows the seed must already respect them: the repair
-        // operators only ever insert on time, so a late seed would stay late.
-        let nn_sol = if has_time_windows(&self.customers) {
+        // With time windows or limits the seed must already respect them: the
+        // repair operators only ever insert feasibly, so a late or too-long
+        // seed would stay that way.
+        let nn_sol = if route_checks_needed(&self.customers, &self.limits) {
             nearest_neighbor_tw(&self.customers, &self.distances, &vehicles)
         } else {
             nearest_neighbor(&self.customers, &self.distances, &vehicles)

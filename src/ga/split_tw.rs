@@ -23,6 +23,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::RouteLimits;
 use crate::models::Customer;
 
 use super::split::SplitResult;
@@ -49,6 +50,7 @@ use super::split::SplitResult;
 /// use u_routing::models::{Customer, TimeWindow};
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::ga::split_tw;
+/// use u_routing::evaluation::RouteLimits;
 ///
 /// let customers = vec![
 ///     Customer::depot(0.0, 0.0),
@@ -59,7 +61,7 @@ use super::split::SplitResult;
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
-/// let result = split_tw(&[1, 2], &customers, &dm, 30);
+/// let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE);
 /// assert_eq!(result.routes.len(), 1);
 /// ```
 pub fn split_tw(
@@ -67,6 +69,7 @@ pub fn split_tw(
     customers: &[Customer],
     distances: &DistanceMatrix,
     capacity: i32,
+    limits: &RouteLimits,
 ) -> SplitResult {
     let n = tour.len();
 
@@ -123,7 +126,14 @@ pub fn split_tw(
             time += customers[cid].service_duration();
 
             // Complete route cost: ... → cid → depot
-            let total_route = route_dist + distances.get(cid, depot);
+            let back = distances.get(cid, depot);
+            let total_route = route_dist + back;
+            // A route over the vehicle's distance or duration limit is not an
+            // arc of the split graph. A longer one may still be (its return
+            // leg can be shorter), so the scan goes on.
+            if !limits.allow(total_route, time + back) {
+                continue;
+            }
             let new_cost = cost[i] + total_route;
 
             if new_cost < cost[j + 1] {
@@ -193,7 +203,7 @@ mod tests {
                 .with_time_window(TimeWindow::new(0.0, 100.0).expect("valid")),
         ];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 30);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE);
         assert_eq!(result.routes.len(), 1);
     }
 
@@ -209,7 +219,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         // Tour [1, 2]: after visiting 1 (arrive=5, service=5, depart=10), travel to 2 takes 10, arrive=20 > due=6
-        let result = split_tw(&[1, 2], &customers, &dm, 100);
+        let result = split_tw(&[1, 2], &customers, &dm, 100, &RouteLimits::NONE);
         assert_eq!(result.routes.len(), 2);
     }
 
@@ -223,7 +233,7 @@ mod tests {
             Customer::new(3, 3.0, 0.0, 10, 0.0),
         ];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 30);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE);
         assert_eq!(result.routes.len(), 1);
         assert!((result.total_distance - 6.0).abs() < 1e-10);
     }
@@ -241,7 +251,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         // Cust 1: arrive=1, wait to 10, service=2, depart=12
         // Cust 2: arrive=12+1=13, wait to 14, service=2, depart=16
-        let result = split_tw(&[1, 2], &customers, &dm, 30);
+        let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE);
         assert_eq!(result.routes.len(), 1);
     }
 
@@ -249,7 +259,7 @@ mod tests {
     fn test_split_tw_empty() {
         let customers = vec![Customer::depot(0.0, 0.0)];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[], &customers, &dm, 30);
+        let result = split_tw(&[], &customers, &dm, 30, &RouteLimits::NONE);
         assert!(result.routes.is_empty());
         assert_eq!(result.total_distance, 0.0);
     }
@@ -268,7 +278,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         // Capacity 25: can hold at most 1 customer each (15+15=30>25)
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 25);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 25, &RouteLimits::NONE);
         assert!(result.routes.len() >= 2);
     }
 }

@@ -196,8 +196,24 @@ in the list, so it uses at most that many vehicles, each with its own capacity;
 customers the fleet cannot carry come back in `unassigned`. `"savings"`, `"ga"`
 and `"alns"` plan every route with one capacity and open as many routes as the
 demand needs, so `num_vehicles` can exceed the length of `vehicles`; they
-reject a fleet whose vehicles differ in capacity. Without `vehicles`, there is
-one vehicle of unlimited capacity.
+reject a fleet whose vehicles differ in capacity or limits. Without `vehicles`,
+there is one vehicle of unlimited capacity.
+
+**Route limits: `max_distance` and `max_duration` on a vehicle.** A vehicle may
+also bound one route: `max_distance` is the longest distance it may travel, depot
+to depot, and `max_duration` the latest it may be back at the depot, on the
+clock time windows use (departure at 0, travel time equal to distance, waiting
+for a window to open, then service). Every method keeps them the way it keeps
+time windows -- in construction, in every search move, when a fixed fleet's
+routes are emptied and their customers moved -- and a customer no route can
+reach within them comes back in `unassigned`. Left out (or `null`), there is no
+limit.
+
+```js
+solve_vrp({ depot: { x: 0, y: 0 }, customers,
+            vehicles: [{ capacity: 100, max_distance: 120, max_duration: 480 }],
+            method: "savings" });
+```
 
 **How many routes a plan may use: `config.max_vehicles`.** The length of
 `vehicles` is not that number. For `"savings"`, `"ga"` and `"alns"` a
@@ -282,7 +298,8 @@ try {
 | `duplicate_id` | `id`, `first`, `second` | Two customers share an `id` (at positions `first` and `second`, from 0) — `routes` and `unassigned` name customers by id, so each needs its own |
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity that is not a whole number from 0 to 2147483647. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
-| `mixed_fleet` | `method`, `capacities`, `index` | Vehicles of different capacities with `"savings"`, `"ga"` or `"alns"`, which plan every route with one capacity |
+| `mixed_fleet` | `method`, `parameter` (`"capacity"`, `"max_distance"` or `"max_duration"`), `values`, `capacities`, `index` | Vehicles that differ in capacity or limits with `"savings"`, `"ga"` or `"alns"`, which plan every route with one vehicle; `index` is the first vehicle that differs from the first |
+| `parameter_out_of_range` | `parameter`, `index` (vehicles only), `min`, `max`, `got` | A vehicle's `max_distance` / `max_duration` of 0 or less (no route could keep it), or a GA `mutation_rate` / `elite_ratio` outside (0, 1] |
 | `invalid_option` | `parameter`, and `value` or `method` | A `max_vehicles` of 0, or solver settings the method rejects (`population_size: 1`, `max_iterations: 0`, ...) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |

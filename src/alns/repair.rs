@@ -15,17 +15,22 @@ use rand::Rng;
 use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, route_feasible, RouteLimits};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::fleet::insertion_on_time;
 use crate::models::Customer;
 
 use super::solution_repr::RoutingSolution;
 
-/// Whether a route of this one customer reaches it on time. Always true
-/// when no customer carries a window.
-fn open_route(customer_id: usize, distances: &DistanceMatrix, customers: &[Customer]) -> bool {
-    !has_time_windows(customers)
-        || route_feasible(&[customer_id], 0, distances, customers, &RouteLimits::NONE)
+/// Whether a route of this one customer reaches it on time and within the
+/// vehicle's limits. Always true with no window and no limit.
+fn open_route(
+    customer_id: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    limits: &RouteLimits,
+) -> bool {
+    !route_checks_needed(customers, limits)
+        || route_feasible(&[customer_id], 0, distances, customers, limits)
 }
 
 /// Finds the best insertion position for a customer across all routes of one
@@ -37,8 +42,16 @@ fn best_insertion(
     distances: &DistanceMatrix,
     customers: &[Customer],
     capacity: i32,
+    limits: &RouteLimits,
 ) -> Option<(usize, usize, f64)> {
-    crate::fleet::cheapest_insertion(routes, |_| capacity, customer_id, distances, customers)
+    crate::fleet::cheapest_insertion(
+        routes,
+        |_| capacity,
+        |_| *limits,
+        customer_id,
+        distances,
+        customers,
+    )
 }
 
 /// Greedy insertion: inserts each unassigned customer at its cheapest position.
@@ -68,6 +81,7 @@ fn best_insertion(
 /// assert!(repaired.unassigned().is_empty());
 /// ```
 pub struct GreedyInsertion {
+    limits: RouteLimits,
     distances: DistanceMatrix,
     customers: Vec<Customer>,
     capacity: i32,
@@ -80,7 +94,15 @@ impl GreedyInsertion {
             distances,
             customers,
             capacity,
+            limits: RouteLimits::NONE,
         }
+    }
+
+    /// Inserts only where the route keeps the vehicle's distance and duration
+    /// limits (none by default).
+    pub fn with_limits(mut self, limits: RouteLimits) -> Self {
+        self.limits = limits;
+        self
     }
 }
 
@@ -108,6 +130,7 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
                     &self.distances,
                     &self.customers,
                     self.capacity,
+                    &self.limits,
                 ) {
                     if cost < best_cost {
                         best_cost = cost;
@@ -123,7 +146,7 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
                 // No feasible insertion — open a route for the first unassigned
                 // customer, or leave it unassigned if even that arrives late.
                 let cid = unassigned.remove(0);
-                if open_route(cid, &self.distances, &self.customers) {
+                if open_route(cid, &self.distances, &self.customers, &self.limits) {
                     sol.routes_mut().push(vec![cid]);
                 } else {
                     sol.unassigned_mut().push(cid);
@@ -147,6 +170,7 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
 ///
 /// Uses k=2 (regret-2) by default.
 pub struct RegretInsertion {
+    limits: RouteLimits,
     distances: DistanceMatrix,
     customers: Vec<Customer>,
     capacity: i32,
@@ -161,7 +185,15 @@ impl RegretInsertion {
             customers,
             capacity,
             k: 2,
+            limits: RouteLimits::NONE,
         }
+    }
+
+    /// Inserts only where the route keeps the vehicle's distance and duration
+    /// limits (none by default).
+    pub fn with_limits(mut self, limits: RouteLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Creates a regret insertion operator with custom k.
@@ -177,7 +209,7 @@ impl RegretInsertion {
         customer_id: usize,
     ) -> Vec<(usize, usize, f64)> {
         let depot = 0;
-        let windowed = has_time_windows(&self.customers);
+        let constrained = route_checks_needed(&self.customers, &self.limits);
         let mut costs = Vec::new();
 
         for (ri, route) in routes.iter().enumerate() {
@@ -206,7 +238,8 @@ impl RegretInsertion {
                         customer_id,
                         &self.distances,
                         &self.customers,
-                        windowed,
+                        &self.limits,
+                        constrained,
                     )
                 {
                     best_cost = cost;
@@ -278,7 +311,7 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
                 // Open a route for the first unassigned customer, or leave it
                 // unassigned if even that arrives late.
                 let cid = unassigned.remove(0);
-                if open_route(cid, &self.distances, &self.customers) {
+                if open_route(cid, &self.distances, &self.customers, &self.limits) {
                     sol.routes_mut().push(vec![cid]);
                 } else {
                     sol.unassigned_mut().push(cid);
@@ -362,7 +395,7 @@ mod tests {
         let (cust, dm) = setup();
         // Route [1, 3], insert 2 — best position should be between 1 and 3
         let routes = vec![vec![1, 3]];
-        let result = best_insertion(&routes, 2, &dm, &cust, 100);
+        let result = best_insertion(&routes, 2, &dm, &cust, 100, &RouteLimits::NONE);
         assert!(result.is_some());
         let (ri, pos, _cost) = result.expect("should find insertion");
         assert_eq!(ri, 0);

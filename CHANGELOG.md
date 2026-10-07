@@ -8,6 +8,18 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- `vehicles[i].max_distance` and `vehicles[i].max_duration` in the request
+  (WebAssembly, C ABI, URouting): every method keeps them in construction, in
+  every search move and when a fixed fleet's routes are emptied, and lists a
+  customer no route can reach within them in `unassigned`. A limit of 0 or less is
+  `parameter_out_of_range` at the vehicle's `index`. `"savings"`, `"ga"` and
+  `"alns"` refuse a fleet that differs in its limits as `mixed_fleet`, which now
+  names the differing field as `parameter` with both `values`.
+- `RoutingGaProblem::with_limits`, `RoutingAlnsProblem::with_limits`,
+  `GreedyInsertion::with_limits`, `RegretInsertion::with_limits`.
+
 ### Changed
 
 - **Breaking:** a vehicle's `max_distance` and `max_duration` bound every route the
@@ -19,6 +31,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   as a fifth argument (`&RouteLimits::NONE` for none); the heuristics and
   inter-route searches that take a `Vehicle` read them from it. A customer no route
   can reach within the limits is unassigned.
+  `split_tw` takes the limits as a fifth argument; `fleet::cheapest_insertion`
+  takes a per-route `limits_of` beside `capacity_of`, and `fleet::limit_routes` a
+  `Vec<RouteLimits>` beside the capacities (returned in `LimitedPlan::limits`).
 
 ### Fixed
 

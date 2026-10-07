@@ -14,6 +14,8 @@
   refused rather than rounded
 - **Fleet size**: `max_vehicles` states how many routes a plan may use; every
   method keeps to it and lists the customers that do not fit in `Unassigned`
+- **Route limits**: a vehicle's `max_distance` and `max_duration` bound every
+  route, depot to depot; a customer no route can reach within them is unassigned
 
 ## Installation
 

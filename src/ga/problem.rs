@@ -19,6 +19,7 @@ use u_metaheur::ga::operators::{invert_mutation, order_crossover, swap_mutation}
 use u_metaheur::ga::GaProblem;
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::RouteLimits;
 use crate::local_search::two_opt_improve;
 use crate::models::Customer;
 
@@ -70,6 +71,8 @@ pub struct RoutingGaProblem {
     apply_local_search: bool,
     /// Whether any customer carries a time window.
     time_windows: bool,
+    /// The vehicle's distance and duration limits on each route.
+    limits: RouteLimits,
     /// Added per unserved customer: more than any complete solution costs,
     /// which is at most a separate round trip to the farthest pair per customer.
     unserved_penalty: f64,
@@ -96,8 +99,17 @@ impl RoutingGaProblem {
             capacity,
             apply_local_search: true,
             time_windows,
+            limits: RouteLimits::NONE,
             unserved_penalty: 2.0 * farthest * n as f64 + 1.0,
         }
+    }
+
+    /// Plans every route within these distance and duration limits (none by
+    /// default): the split only cuts routes that keep them, and 2-opt only
+    /// takes moves that keep them.
+    pub fn with_limits(mut self, limits: RouteLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Disables intra-route 2-opt local search during evaluation.
@@ -129,13 +141,24 @@ impl GaProblem for RoutingGaProblem {
     }
 
     fn evaluate(&self, individual: &GiantTour) -> f64 {
-        let split_fn = if self.time_windows { split_tw } else { split };
-        let result = split_fn(
-            individual.customers(),
-            &self.customers,
-            &self.distances,
-            self.capacity,
-        );
+        // The constrained split cuts only routes that keep the windows and
+        // limits; the plain one needs neither check.
+        let result = if self.time_windows || !self.limits.is_unlimited() {
+            split_tw(
+                individual.customers(),
+                &self.customers,
+                &self.distances,
+                self.capacity,
+                &self.limits,
+            )
+        } else {
+            split(
+                individual.customers(),
+                &self.customers,
+                &self.distances,
+                self.capacity,
+            )
+        };
 
         let served: usize = result.routes.iter().map(Vec::len).sum();
         let unserved = self.num_customers().saturating_sub(served);
@@ -150,13 +173,8 @@ impl GaProblem for RoutingGaProblem {
         // reversals that keep every customer on time.
         let mut total = 0.0;
         for route in &result.routes {
-            let (_, dist) = two_opt_improve(
-                route,
-                0,
-                &self.distances,
-                &self.customers,
-                &crate::evaluation::RouteLimits::NONE,
-            );
+            let (_, dist) =
+                two_opt_improve(route, 0, &self.distances, &self.customers, &self.limits);
             total += dist;
         }
         total

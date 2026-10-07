@@ -24,7 +24,7 @@
 //!   Letters* 37(5), 333-338.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, route_feasible, RouteLimits};
+use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Whether inserting `customer_id` at `pos` of `route` keeps every customer
@@ -35,16 +35,17 @@ pub(crate) fn insertion_on_time(
     customer_id: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
-    windowed: bool,
+    limits: &RouteLimits,
+    constrained: bool,
 ) -> bool {
-    if !windowed {
+    if !constrained {
         return true;
     }
     let mut candidate = Vec::with_capacity(route.len() + 1);
     candidate.extend_from_slice(&route[..pos]);
     candidate.push(customer_id);
     candidate.extend_from_slice(&route[pos..]);
-    route_feasible(&candidate, 0, distances, customers, &RouteLimits::NONE)
+    route_feasible(&candidate, 0, distances, customers, limits)
 }
 
 /// The cheapest position for `customer_id` across `routes`, as
@@ -57,12 +58,12 @@ pub(crate) fn insertion_on_time(
 pub fn cheapest_insertion(
     routes: &[Vec<usize>],
     capacity_of: impl Fn(usize) -> i32,
+    limits_of: impl Fn(usize) -> RouteLimits,
     customer_id: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
 ) -> Option<(usize, usize, f64)> {
     let depot = 0;
-    let windowed = has_time_windows(customers);
     let demand = customers[customer_id].demand();
     let mut best: Option<(usize, usize, f64)> = None;
 
@@ -71,6 +72,8 @@ pub fn cheapest_insertion(
         if load + demand > capacity_of(ri) {
             continue;
         }
+        let limits = limits_of(ri);
+        let constrained = route_checks_needed(customers, &limits);
         for pos in 0..=route.len() {
             let prev = if pos == 0 { depot } else { route[pos - 1] };
             let next = if pos == route.len() {
@@ -81,7 +84,15 @@ pub fn cheapest_insertion(
             let cost = distances.get(prev, customer_id) + distances.get(customer_id, next)
                 - distances.get(prev, next);
             if best.as_ref().is_none_or(|b| cost < b.2)
-                && insertion_on_time(route, pos, customer_id, distances, customers, windowed)
+                && insertion_on_time(
+                    route,
+                    pos,
+                    customer_id,
+                    distances,
+                    customers,
+                    &limits,
+                    constrained,
+                )
             {
                 best = Some((ri, pos, cost));
             }
@@ -97,6 +108,8 @@ pub struct LimitedPlan {
     pub routes: Vec<Vec<usize>>,
     /// The capacity of each route in `routes`, in the same order.
     pub capacities: Vec<i32>,
+    /// The distance and duration limits of each route, in the same order.
+    pub limits: Vec<RouteLimits>,
     /// Customers of eliminated routes that no remaining route could take,
     /// in ascending index order.
     pub unserved: Vec<usize>,
@@ -119,6 +132,7 @@ pub struct LimitedPlan {
 /// # Examples
 ///
 /// ```
+/// use u_routing::evaluation::RouteLimits;
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::fleet::limit_routes;
 /// use u_routing::models::Customer;
@@ -131,13 +145,14 @@ pub struct LimitedPlan {
 ///     Customer::new(3, 0.0, 5.0, 10, 0.0),
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
-/// let plan = limit_routes(vec![vec![1], vec![2], vec![3]], vec![20, 20, 20], 2, &dm, &customers);
+/// let plan = limit_routes(vec![vec![1], vec![2], vec![3]], vec![20, 20, 20], vec![RouteLimits::NONE; 3], 2, &dm, &customers);
 /// assert_eq!(plan.routes.len(), 2);
 /// assert!(plan.unserved.is_empty()); // one route took a second customer
 /// ```
 pub fn limit_routes(
     routes: Vec<Vec<usize>>,
     capacities: Vec<i32>,
+    limits: Vec<RouteLimits>,
     max_routes: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
@@ -147,8 +162,14 @@ pub fn limit_routes(
         capacities.len(),
         "one capacity per route is required"
     );
+    assert_eq!(
+        routes.len(),
+        limits.len(),
+        "one set of limits per route is required"
+    );
     let mut routes = routes;
     let mut capacities = capacities;
+    let mut limits = limits;
     let mut unserved = Vec::new();
 
     while routes.len() > max_routes {
@@ -158,6 +179,7 @@ pub fn limit_routes(
             .expect("more routes than the limit, so at least one");
         let mut pending = routes.remove(victim);
         capacities.remove(victim);
+        limits.remove(victim);
 
         // Cheapest insertion first, until nothing pending fits anywhere.
         loop {
@@ -165,8 +187,15 @@ pub fn limit_routes(
                 .iter()
                 .enumerate()
                 .filter_map(|(pi, &cid)| {
-                    cheapest_insertion(&routes, |ri| capacities[ri], cid, distances, customers)
-                        .map(|(ri, pos, cost)| (pi, ri, pos, cost))
+                    cheapest_insertion(
+                        &routes,
+                        |ri| capacities[ri],
+                        |ri| limits[ri],
+                        cid,
+                        distances,
+                        customers,
+                    )
+                    .map(|(ri, pos, cost)| (pi, ri, pos, cost))
                 })
                 .min_by(|a, b| a.3.total_cmp(&b.3));
             match best {
@@ -184,6 +213,7 @@ pub fn limit_routes(
     LimitedPlan {
         routes,
         capacities,
+        limits,
         unserved,
     }
 }
@@ -208,7 +238,14 @@ mod tests {
     fn a_plan_within_the_limit_is_unchanged() {
         let (customers, dm) = six_on_a_ring();
         let routes = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
-        let plan = limit_routes(routes.clone(), vec![20; 3], 3, &dm, &customers);
+        let plan = limit_routes(
+            routes.clone(),
+            vec![20; 3],
+            vec![RouteLimits::NONE; 3],
+            3,
+            &dm,
+            &customers,
+        );
         assert_eq!(plan.routes, routes);
         assert!(plan.unserved.is_empty());
     }
@@ -219,6 +256,7 @@ mod tests {
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5, 6]],
             vec![20; 3],
+            vec![RouteLimits::NONE; 3],
             2,
             &dm,
             &customers,
@@ -235,6 +273,7 @@ mod tests {
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5, 6]],
             vec![30; 3],
+            vec![RouteLimits::NONE; 3],
             2,
             &dm,
             &customers,
@@ -256,6 +295,7 @@ mod tests {
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5], vec![6]],
             vec![21, 21, 21, 21],
+            vec![RouteLimits::NONE; 4],
             3,
             &dm,
             &customers,
@@ -275,6 +315,7 @@ mod tests {
         let plan = limit_routes(
             vec![vec![1], vec![2, 3], vec![4, 5, 6]],
             vec![40; 3],
+            vec![RouteLimits::NONE; 3],
             2,
             &dm,
             &customers,
