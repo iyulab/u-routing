@@ -30,26 +30,28 @@ using URouting;
 
 using var routing = new RoutingClient();
 
-var solution = routing.SolveVrp(new
+VrpSolution solution = routing.SolveVrp(new VrpRequest(DepotX: 0, DepotY: 0,
+[
+    new Customer(1, 10, 5, Demand: 10),
+    new Customer(2, -4, 8, Demand: 15),
+    new Customer(3, 6, -9, Demand: 20, TimeWindow: new TimeWindow(0, 40)),
+])
 {
-    depot_x = 0.0,
-    depot_y = 0.0,
-    customers = new[]
-    {
-        new { id = 1, x = 10.0, y = 5.0, demand = 10.0 },
-        new { id = 2, x = -4.0, y = 8.0, demand = 15.0 },
-        new { id = 3, x = 6.0,  y = -9.0, demand = 20.0 },
-    },
-    vehicles = new[] { new { capacity = 30.0 } },
-    method = "savings",
+    Vehicles = [new Vehicle(Capacity: 30)],
+    Method = RoutingMethod.Savings,
 });
 
-Console.WriteLine(solution.GetProperty("total_distance").GetDouble());
+Console.WriteLine($"{solution.NumVehicles} routes, {solution.TotalDistance:F1} long");
+foreach (var route in solution.Routes)
+    Console.WriteLine(string.Join(" → ", route));
+if (solution.Unassigned.Count > 0)
+    Console.WriteLine($"not served: {string.Join(", ", solution.Unassigned)}");
 ```
 
-The request is serialized with snake_case names, so anonymous objects can be
-written as above. The result is a `System.Text.Json.JsonElement` carrying
-`routes`, `total_distance`, `num_vehicles`, `method_used` and `unassigned`.
+`VrpSolution` carries `Routes` (customer ids per route, the depot implied at both ends),
+`TotalDistance`, `NumVehicles`, `MethodUsed`, `ComputationTimeMs` and `Unassigned` — the
+customers no route serves within capacities, time windows, each vehicle's `MaxDistance` /
+`MaxDuration` and `VrpConfig.MaxVehicles`.
 
 A request the solver cannot honour raises `RoutingException`. `Message` is
 readable text; `Reason` is a stable code to branch on and `Details` is the
@@ -58,7 +60,7 @@ error body with the values behind it:
 ```csharp
 try
 {
-    client.SolveVrp(request);
+    routing.SolveVrp(request);
 }
 catch (RoutingException ex) when (ex.Reason == "duplicate_id")
 {
@@ -67,12 +69,20 @@ catch (RoutingException ex) when (ex.Reason == "duplicate_id")
 }
 ```
 
-The codes and their fields are listed in the crate README's *Errors* section.
+The codes and their fields are listed in the crate README's *Errors* section. A NaN or
+infinity in the request is refused before it reaches the engine, as `value_not_finite`
+with the path to it (`customers[1].x`).
+
+## Trimming and NativeAOT
+
+The client uses no reflection: the request is built as JSON nodes and the solution is read
+through source-generated serialization, and the package is marked `IsAotCompatible`. It
+runs unchanged in trimmed and NativeAOT applications.
 
 ## Platforms
 
-Windows, Linux and macOS (x64 and arm64). The native library ships inside the
-package; no separate install is needed.
+The package carries the native library for `win-x64`, `linux-x64` (glibc 2.39 or
+later), `osx-x64` and `osx-arm64`.
 
 ## License
 

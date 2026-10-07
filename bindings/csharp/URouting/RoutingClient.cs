@@ -1,19 +1,17 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 using URouting.Interop;
 
 namespace URouting;
 
 public sealed class RoutingClient : IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private bool _disposed;
+
+    /// <summary>Sees each raw response body before it is read — the contract tests compare the two.</summary>
+    internal Action<string>? ResponseObserver { get; set; }
 
     public string GetVersion()
     {
@@ -23,9 +21,110 @@ public sealed class RoutingClient : IDisposable
         return version;
     }
 
-    public JsonElement SolveVrp(object request)
+    /// <summary>
+    /// Solves a vehicle routing problem. Every method keeps to capacities, time windows, each
+    /// vehicle's distance and duration limits and the fixed fleet; customers it cannot serve
+    /// within them are in <see cref="VrpSolution.Unassigned"/>.
+    /// </summary>
+    /// <exception cref="RoutingException">The engine refused the request.</exception>
+    public VrpSolution SolveVrp(VrpRequest request)
     {
-        var requestJson = JsonSerializer.Serialize(request, JsonOptions);
+        var body = Invoke(Body(request).ToJsonString());
+        ResponseObserver?.Invoke(body);
+        return JsonSerializer.Deserialize(body, RoutingJson.Default.VrpSolution)
+               ?? throw new RoutingException(-4, "The engine returned null.");
+    }
+
+    private static JsonObject Body(VrpRequest request)
+    {
+        var customers = new JsonArray();
+        for (var i = 0; i < request.Customers.Count; i++)
+        {
+            var c = request.Customers[i];
+            var at = $"customers[{i}]";
+            var customer = new JsonObject
+            {
+                ["id"] = c.Id,
+                ["x"] = Num($"{at}.x", c.X),
+                ["y"] = Num($"{at}.y", c.Y),
+                ["demand"] = Num($"{at}.demand", c.Demand),
+                ["service_time"] = Num($"{at}.service_time", c.ServiceTime),
+            };
+            if (c.TimeWindow is { } w)
+                customer["time_window"] = new JsonArray(Num($"{at}.time_window", w.Ready, 0), Num($"{at}.time_window", w.Due, 1));
+            customers.Add((JsonNode)customer);
+        }
+
+        var vehicles = new JsonArray();
+        for (var i = 0; i < request.Vehicles.Count; i++)
+        {
+            var v = request.Vehicles[i];
+            var at = $"vehicles[{i}]";
+            var vehicle = new JsonObject();
+            Put(vehicle, "capacity", v.Capacity, $"{at}.capacity");
+            Put(vehicle, "max_distance", v.MaxDistance, $"{at}.max_distance");
+            Put(vehicle, "max_duration", v.MaxDuration, $"{at}.max_duration");
+            vehicles.Add((JsonNode)vehicle);
+        }
+
+        var body = new JsonObject
+        {
+            ["depot_x"] = Num("depot_x", request.DepotX),
+            ["depot_y"] = Num("depot_y", request.DepotY),
+            ["customers"] = customers,
+            ["vehicles"] = vehicles,
+            ["method"] = JsonSerializer.SerializeToNode(request.Method, RoutingJson.Default.RoutingMethod),
+        };
+        if (request.Config is { } c2)
+        {
+            var config = new JsonObject();
+            Put(config, "population_size", c2.PopulationSize);
+            Put(config, "max_generations", c2.MaxGenerations);
+            Put(config, "mutation_rate", c2.MutationRate, "config.mutation_rate");
+            Put(config, "elite_ratio", c2.EliteRatio, "config.elite_ratio");
+            Put(config, "max_iterations", c2.MaxIterations);
+            if (c2.Seed is { } seed)
+                config["seed"] = seed;
+            Put(config, "max_vehicles", c2.MaxVehicles);
+            body["config"] = config;
+        }
+        return body;
+    }
+
+    private static void Put(JsonObject o, string key, double? value, string parameter)
+    {
+        if (value is { } v)
+            o[key] = Num(parameter, v);
+    }
+
+    private static void Put(JsonObject o, string key, int? value)
+    {
+        if (value is { } v)
+            o[key] = v;
+    }
+
+    /// <summary>
+    /// <paramref name="value"/> if it is finite. JSON has no NaN or infinity, so such a value
+    /// cannot reach the engine; it is refused here with the engine's own reason and fields —
+    /// <c>parameter</c> the path to it, <c>index</c> its position when it sits in an array.
+    /// </summary>
+    private static JsonNode Num(string parameter, double value, int? index = null)
+    {
+        if (double.IsFinite(value))
+            return JsonValue.Create(value);
+        var where = index is { } i ? $"{parameter}[{i}]" : parameter;
+        var error = new JsonObject
+        {
+            ["error"] = $"{where}: expected a finite number, got {value.ToString(CultureInfo.InvariantCulture)}",
+            ["code"] = "value_not_finite",
+            ["parameter"] = parameter,
+            ["index"] = index,
+        };
+        throw RoutingException.FromErrorBody(-3, error.ToJsonString());
+    }
+
+    private static string Invoke(string requestJson)
+    {
         var code = NativeInterop.urouting_solve_vrp(requestJson, out var resultPtr);
 
         try
@@ -40,7 +139,7 @@ public sealed class RoutingClient : IDisposable
             if (code != 0)
                 throw RoutingException.FromErrorBody(code, resultJson);
 
-            return JsonDocument.Parse(resultJson).RootElement.Clone();
+            return resultJson;
         }
         finally
         {

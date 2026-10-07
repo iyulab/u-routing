@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking (`URouting`):** `RoutingClient.SolveVrp` takes a `VrpRequest` (depot,
+  `Customer`s with an optional `TimeWindow`, `Vehicle`s with `MaxDistance` /
+  `MaxDuration`, a `RoutingMethod` and a `VrpConfig`) and returns a `VrpSolution`,
+  instead of an `object` serialized by reflection and a `JsonElement`.
+- `URouting` no longer uses reflection, so it works in trimmed and NativeAOT
+  applications (it threw `InvalidOperationException` there); the package is marked
+  `IsAotCompatible`. A NaN or infinity in the request is refused as
+  `value_not_finite` with the path to it, as the WebAssembly binding does.
+
+### Fixed
+
+- The `URouting` README listed arm64 Linux, which the package does not carry; it now
+  lists the runtimes it ships and the glibc floor.
+
 ## [0.12.0] - 2026-10-07
 
 The .NET client is `URouting` 0.9.0.
