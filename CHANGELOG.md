@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- `URouting` carries the native library for `linux-arm64` (glibc 2.39 or later).
+
 ### Changed
 
 - **Breaking (`URouting`):** `RoutingClient.SolveVrp` takes a `VrpRequest` (depot,

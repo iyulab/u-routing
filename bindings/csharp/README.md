@@ -81,8 +81,8 @@ runs unchanged in trimmed and NativeAOT applications.
 
 ## Platforms
 
-The package carries the native library for `win-x64`, `linux-x64` (glibc 2.39 or
-later), `osx-x64` and `osx-arm64`.
+The package carries the native library for `win-x64`, `linux-x64` and `linux-arm64`
+(glibc 2.39 or later), `osx-x64` and `osx-arm64`; no separate install is needed.
 
 ## License
 
