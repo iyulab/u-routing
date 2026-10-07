@@ -299,8 +299,8 @@ try {
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity that is not a whole number from 0 to 2147483647. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
 | `mixed_fleet` | `method`, `parameter` (`"capacity"`, `"max_distance"` or `"max_duration"`), `values`, `capacities`, `index` | Vehicles that differ in capacity or limits with `"savings"`, `"ga"` or `"alns"`, which plan every route with one vehicle; `index` is the first vehicle that differs from the first |
-| `parameter_out_of_range` | `parameter`, `index` (vehicles only), `min`, `max`, `got` | A vehicle's `max_distance` / `max_duration` of 0 or less (no route could keep it), or a GA `mutation_rate` / `elite_ratio` outside (0, 1] |
-| `invalid_option` | `parameter`, and `value` or `method` | A `max_vehicles` of 0, or solver settings the method rejects (`population_size: 1`, `max_iterations: 0`, ...) |
+| `parameter_out_of_range` | `parameter`, `index` (vehicles only), `min`, `max`, `got` | A vehicle's `max_distance` / `max_duration` of 0 or less (no route could keep it), a GA `mutation_rate` / `elite_ratio` outside (0, 1], or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` of 0, … — with `method`) |
+| `invalid_option` | `parameter`, and `value` or `method` | A `config.max_vehicles` of 0, or solver settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |
 

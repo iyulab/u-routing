@@ -14,6 +14,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- Solver settings a method's runner refuses name their field: a value outside its
+  range is `parameter_out_of_range` with `parameter` (`config.population_size`,
+  `config.max_iterations`), `method`, `min`, `max` and `got`; a setting wrong only
+  beside the others is `invalid_option` on that field. Both were `invalid_option` on
+  `config` with the runner's text. A `max_vehicles` of 0 is reported on
+  `config.max_vehicles`, like every other setting (it was `max_vehicles`).
 - **Breaking (`URouting`):** `RoutingClient.SolveVrp` takes a `VrpRequest` (depot,
   `Customer`s with an optional `TimeWindow`, `Vehicle`s with `MaxDistance` /
   `MaxDuration`, a `RoutingMethod` and a `VrpConfig`) and returns a `VrpSolution`,

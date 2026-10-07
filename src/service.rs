@@ -24,6 +24,7 @@ use crate::local_search::{or_opt_improve, two_opt_improve};
 use crate::models::{Customer, TimeWindow, Vehicle};
 use u_metaheur::alns::{AlnsConfig, AlnsRunner};
 use u_metaheur::ga::{GaConfig, GaRunner};
+use u_metaheur::ConfigError;
 
 // ============================================================================
 // Refusals
@@ -294,7 +295,7 @@ pub(crate) fn solve(
             "config.max_vehicles is 0, so no route may exist; give at least 1, \
              or leave it out to accept as many routes as the plan needs"
                 .to_string(),
-            json!({ "parameter": "max_vehicles", "value": 0 }),
+            json!({ "parameter": "config.max_vehicles", "value": 0 }),
         ));
     }
     let (customers, id_map) = build_customers(depot, input_customers)?;
@@ -453,14 +454,25 @@ fn build_customers(
 }
 
 /// Solver settings the method's runner refused (a population of 1, zero
-/// generations or iterations). The runner reports these in its own words, so
-/// the refusal carries its text and names the method and the `config` it read.
-fn settings_refused(method: Method, e: impl std::fmt::Display) -> ServiceError {
-    ServiceError::new(
-        "invalid_option",
-        format!("method \"{}\": config refused: {e}", method.name()),
-        json!({ "parameter": "config", "method": method.name() }),
-    )
+/// generations or iterations), named by the `config` field the runner checked:
+/// a number outside its range is `parameter_out_of_range` with the bounds, a
+/// setting wrong only beside the others is `invalid_option`.
+fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
+    let parameter = format!("config.{}", e.parameter());
+    let message = format!("method \"{}\": config.{e}", method.name());
+    match e {
+        ConfigError::OutOfRange { min, max, got, .. } => ServiceError::new(
+            "parameter_out_of_range",
+            message,
+            json!({ "parameter": parameter, "method": method.name(),
+                    "min": min, "max": max, "got": got }),
+        ),
+        _ => ServiceError::new(
+            "invalid_option",
+            message,
+            json!({ "parameter": parameter, "method": method.name() }),
+        ),
+    }
 }
 
 /// Converts internal route indices back to original customer IDs.
@@ -1409,7 +1421,7 @@ mod tests {
                 )
                 .expect_err("zero"),
                 "invalid_option",
-                serde_json::json!({ "parameter": "max_vehicles", "value": 0 }),
+                serde_json::json!({ "parameter": "config.max_vehicles", "value": 0 }),
             ),
             (
                 solve(
@@ -1423,8 +1435,25 @@ mod tests {
                     },
                 )
                 .expect_err("settings"),
-                "invalid_option",
-                serde_json::json!({ "parameter": "config", "method": "ga" }),
+                "parameter_out_of_range",
+                serde_json::json!({ "parameter": "config.population_size", "method": "ga",
+                                    "min": 2.0, "max": null, "got": 1.0 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
+                    &ring(4),
+                    &fleet(&[10.0]),
+                    "alns",
+                    &InputConfig {
+                        max_iterations: Some(0),
+                        ..quick()
+                    },
+                )
+                .expect_err("no iterations"),
+                "parameter_out_of_range",
+                serde_json::json!({ "parameter": "config.max_iterations", "method": "alns",
+                                    "min": 1.0, "got": 0.0 }),
             ),
         ];
         for (err, code, expected) in cases {
