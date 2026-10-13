@@ -54,15 +54,16 @@ customers no route serves within capacities, time windows, each vehicle's `MaxDi
 `MaxDuration` and `VrpConfig.MaxVehicles`.
 
 A request the solver cannot honour raises `RoutingException`. `Message` is
-readable text; `Reason` is a stable code to branch on and `Details` is the
-error body with the values behind it:
+readable text; `ErrorCode` is a stable code to branch on (the error body's `code`),
+`Parameter` and `Index` say which value it is about, `Details` is the error body
+with the values behind it, and `Status` is the native status:
 
 ```csharp
 try
 {
     routing.SolveVrp(request);
 }
-catch (RoutingException ex) when (ex.Reason == "duplicate_id")
+catch (RoutingException ex) when (ex.ErrorCode == "duplicate_id")
 {
     var id = ex.Details!.Value.GetProperty("id").GetInt64();
     Console.WriteLine($"customer {id} appears twice");
@@ -71,7 +72,8 @@ catch (RoutingException ex) when (ex.Reason == "duplicate_id")
 
 The codes and their fields are listed in the crate README's *Errors* section. A NaN or
 infinity in the request is refused before it reaches the engine, as `value_not_finite`
-with the path to it (`customers[1].x`).
+with the path to it as `Parameter` (`customers[1].x`) — `Index` is set only when
+the value itself is an array element.
 
 ## Trimming and NativeAOT
 

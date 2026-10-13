@@ -312,7 +312,7 @@ try {
 
 The C library and the .NET package report the same `code` and fields: the C
 error body is `{"error": "<message>", "code": ..., ...}`, and `RoutingException`
-exposes them as `Reason` and `Details`.
+exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
 
 **Output:**
 ```json

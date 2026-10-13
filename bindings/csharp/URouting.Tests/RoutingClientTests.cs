@@ -86,7 +86,7 @@ public class RoutingClientTests
             Method = RoutingMethod.NearestNeighbor,
             Config = new VrpConfig { PopulationSize = 10 },
         }));
-        Assert.Equal("invalid_option", x.Reason);
+        Assert.Equal("invalid_option", x.ErrorCode);
         Assert.Equal("config.population_size", x.Details!.Value.GetProperty("parameter").GetString());
         Assert.Equal("nn", x.Details!.Value.GetProperty("method").GetString());
     }
@@ -96,13 +96,16 @@ public class RoutingClientTests
     {
         var x = Assert.Throws<RoutingException>(() =>
             _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1), new(2, double.NaN, 1)])));
-        Assert.Equal("value_not_finite", x.Reason);
+        Assert.Equal("value_not_finite", x.ErrorCode);
         Assert.Equal("customers[1].x", x.Details!.Value.GetProperty("parameter").GetString());
+        Assert.Equal("customers[1].x", x.Parameter);
+        Assert.Null(x.Index);
 
         var window = Assert.Throws<RoutingException>(() =>
             _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1, TimeWindow: new(0, double.PositiveInfinity))])));
         Assert.Equal("customers[0].time_window", window.Details!.Value.GetProperty("parameter").GetString());
         Assert.Equal(1, window.Details!.Value.GetProperty("index").GetInt32());
+        Assert.Equal(1, window.Index);
     }
 
     [Fact]
@@ -110,7 +113,7 @@ public class RoutingClientTests
     {
         var e = Assert.Throws<RoutingException>(() =>
             _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1), new(1, 2, 2)])));
-        Assert.Equal("duplicate_id", e.Reason);
+        Assert.Equal("duplicate_id", e.ErrorCode);
         Assert.Equal(1, e.Details!.Value.GetProperty("id").GetInt64());
     }
 

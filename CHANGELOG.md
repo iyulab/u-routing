@@ -8,6 +8,13 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (.NET `URouting`):** `RoutingException` names its members the way the other
+  .NET bindings' exceptions do — `Status` is the native status (was `Code`),
+  `ErrorCode` the error body's `code` (was `Reason`), and `Parameter` / `Index`
+  now say which value the refusal is about without reading `Details`. Migrate: `ex.Code` → `ex.Status`, `ex.Reason` → `ex.ErrorCode`.
+
 ## [0.15.0] - 2026-10-13
 
 ### Changed
