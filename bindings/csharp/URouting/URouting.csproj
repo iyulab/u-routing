@@ -11,9 +11,17 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Version>0.11.0</Version>
     <Authors>iyulab</Authors>
+    <Company>iyulab</Company>
+    <Product>URouting</Product>
     <Description>Vehicle routing optimization (TSP, CVRP, VRPTW) — Rust engine with C# bindings.</Description>
+    <PackageTags>routing;vrp;vrptw;tsp;optimization;logistics;ffi</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/iyulab/u-routing</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/iyulab/u-routing</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
     <!-- Trimmed and NativeAOT hosts: the analyzers fail the build on anything that
          would need reflection at run time. -->

@@ -6,6 +6,12 @@ using URouting.Interop;
 
 namespace URouting;
 
+/// <summary>
+/// Calls into the u-routing native engine. Each call is one request in and one
+/// result or <see cref="RoutingException"/> out; the instance holds no
+/// state between calls and no native resources, so disposing it releases nothing;
+/// it is <see cref="IDisposable"/> so it can sit in a <c>using</c> block.
+/// </summary>
 public sealed class RoutingClient : IDisposable
 {
     private bool _disposed;
@@ -19,6 +25,10 @@ public sealed class RoutingClient : IDisposable
     /// </summary>
     internal Action<string, string>? RequestObserver { get; set; }
 
+    /// <summary>
+    /// The version of the native engine — the u-routing Rust crate the package
+    /// carries — not the URouting package version.
+    /// </summary>
     public string GetVersion()
     {
         var ptr = NativeInterop.urouting_version();
@@ -156,6 +166,7 @@ public sealed class RoutingClient : IDisposable
         }
     }
 
+    /// <summary>Marks the client disposed; it holds no native resources to release.</summary>
     public void Dispose()
     {
         if (!_disposed)
@@ -194,11 +205,15 @@ public class RoutingException : Exception
     /// </summary>
     public JsonElement? Details { get; }
 
+    /// <summary>A refusal with no readable body.</summary>
+    /// <param name="code">Native status, see <see cref="Code"/>.</param>
+    /// <param name="message">What went wrong, in words.</param>
     public RoutingException(int code, string message) : base(message)
     {
         Code = code;
     }
 
+    /// <summary>A refusal with the engine's reason and the values behind it.</summary>
     public RoutingException(int code, string message, string? reason, JsonElement? details) : base(message)
     {
         Code = code;
