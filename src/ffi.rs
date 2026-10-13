@@ -347,6 +347,31 @@ mod tests {
         );
     }
 
+    /// An open bound reaches the C error body as `exclusive_min`, beside the
+    /// closed `max` of a (0, 1] rate and with `min` null.
+    #[test]
+    fn open_bounds_reach_the_c_error_body_as_exclusive() {
+        let mut request = problem("ga");
+        request["config"] = serde_json::json!({ "mutation_rate": 0.0 });
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["code"], "parameter_out_of_range", "{body}");
+        assert_eq!(body["parameter"], "config.mutation_rate", "{body}");
+        assert_eq!(body["min"], serde_json::Value::Null, "{body}");
+        assert_eq!(body["exclusive_min"], 0.0, "{body}");
+        assert_eq!(body["max"], 1.0, "{body}");
+        assert!(body.get("exclusive_max").is_none(), "{body}");
+
+        let mut request = problem("nn");
+        request["vehicles"][0]["max_duration"] = serde_json::json!(-1.0);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["parameter"], "max_duration", "{body}");
+        assert_eq!(body["min"], serde_json::Value::Null, "{body}");
+        assert_eq!(body["exclusive_min"], 0.0, "{body}");
+        assert_eq!(body["max"], serde_json::Value::Null, "{body}");
+    }
+
     #[test]
     fn an_inverted_time_window_is_rejected_not_dropped() {
         // Dropping it would solve the problem without the constraint the

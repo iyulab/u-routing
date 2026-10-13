@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** a `parameter_out_of_range` refusal — WebAssembly `Error` fields and
+  the C error body alike — carries an open (excluded) bound as `exclusive_min` /
+  `exclusive_max` instead of `min` / `max`. A vehicle's `max_distance` or
+  `max_duration` of 0 or less is refused with `{ min: null, max: null,
+  exclusive_min: 0 }`, a GA `mutation_rate` or `elite_ratio` outside (0, 1] with
+  `{ min: null, max: 1, exclusive_min: 0 }`; both used to say `min: 0`, as if 0
+  were accepted. `min` and `max` are still always present and now hold closed
+  bounds only; the `exclusive_*` fields appear only on an open end, so refusals
+  with closed bounds (`config.population_size` below 2) keep their shape.
+- A setting the method's runner refuses forwards the runner's `exclusive_min` /
+  `exclusive_max` beside `min` / `max`.
+- .NET: `RoutingException.Details` documents the four bound fields.
+
 ## [0.13.0] - 2026-10-07
 
 Depends on u-numflow 0.10 and u-metaheur 0.7. The .NET client is `URouting` 0.10.0.

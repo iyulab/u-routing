@@ -8,6 +8,8 @@
 //! ignored solver settings, and reported whatever method name it was sent as
 //! the one it had used.
 
+use std::ops::{Bound, RangeBounds};
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -87,6 +89,53 @@ impl ServiceError {
         self.fields["code"]
             .as_str()
             .expect("every refusal carries a code")
+    }
+}
+
+/// The bounds a `parameter_out_of_range` refusal reports. A closed (included)
+/// end is `min` / `max`, an open (excluded) end `exclusive_min` /
+/// `exclusive_max`; a side holds at most one of its two.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Bounds {
+    min: Option<f64>,
+    max: Option<f64>,
+    exclusive_min: Option<f64>,
+    exclusive_max: Option<f64>,
+}
+
+impl Bounds {
+    /// Reads a range's ends: `2.0..` is "at least 2",
+    /// `(Excluded(0.0), Included(1.0))` is `(0, 1]`.
+    fn of(range: impl RangeBounds<f64>) -> Self {
+        let split = |bound: Bound<&f64>| match bound {
+            Bound::Included(&v) => (Some(v), None),
+            Bound::Excluded(&v) => (None, Some(v)),
+            Bound::Unbounded => (None, None),
+        };
+        let (min, exclusive_min) = split(range.start_bound());
+        let (max, exclusive_max) = split(range.end_bound());
+        Self {
+            min,
+            max,
+            exclusive_min,
+            exclusive_max,
+        }
+    }
+
+    /// Writes the bounds into a refusal's fields: `min` and `max` always
+    /// (`null` on a side that is open or unbounded), `exclusive_min` and
+    /// `exclusive_max` only when that end is open.
+    fn insert_into(self, fields: &mut serde_json::Value) {
+        fields["min"] = json!(self.min);
+        fields["max"] = json!(self.max);
+        for (key, open) in [
+            ("exclusive_min", self.exclusive_min),
+            ("exclusive_max", self.exclusive_max),
+        ] {
+            if let Some(value) = open {
+                fields[key] = json!(value);
+            }
+        }
     }
 }
 
@@ -455,18 +504,31 @@ fn build_customers(
 
 /// Solver settings the method's runner refused (a population of 1, zero
 /// generations or iterations), named by the `config` field the runner checked:
-/// a number outside its range is `parameter_out_of_range` with the bounds, a
-/// setting wrong only beside the others is `invalid_option`.
+/// a number outside its range is `parameter_out_of_range` with the bounds as
+/// the runner reported them (open ends as `exclusive_min` / `exclusive_max`),
+/// a setting wrong only beside the others is `invalid_option`.
 fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
     let parameter = format!("config.{}", e.parameter());
     let message = format!("method \"{}\": config.{e}", method.name());
     match e {
-        ConfigError::OutOfRange { min, max, got, .. } => ServiceError::new(
-            "parameter_out_of_range",
-            message,
-            json!({ "parameter": parameter, "method": method.name(),
-                    "min": min, "max": max, "got": got }),
-        ),
+        ConfigError::OutOfRange {
+            min,
+            max,
+            exclusive_min,
+            exclusive_max,
+            got,
+            ..
+        } => {
+            let mut fields = json!({ "parameter": parameter, "method": method.name(), "got": got });
+            Bounds {
+                min,
+                max,
+                exclusive_min,
+                exclusive_max,
+            }
+            .insert_into(&mut fields);
+            ServiceError::new("parameter_out_of_range", message, fields)
+        }
         _ => ServiceError::new(
             "invalid_option",
             message,
@@ -601,15 +663,20 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, Servi
                 format!("vehicle {i}: capacity")
             })?;
             let mut vehicle = Vehicle::new(i, capacity);
-            for (parameter, value) in [("max_distance", v.max_distance), ("max_duration", v.max_duration)] {
+            for (parameter, value) in [
+                ("max_distance", v.max_distance),
+                ("max_duration", v.max_duration),
+            ] {
                 let Some(limit) = value else { continue };
                 // JSON has no infinity, so only a non-positive limit reaches here:
                 // no route could keep it, and "no limit" is said by leaving it out.
                 if limit.is_nan() || limit <= 0.0 {
+                    let mut fields = json!({ "parameter": parameter, "index": i, "got": limit });
+                    Bounds::of((Bound::Excluded(0.0), Bound::Unbounded)).insert_into(&mut fields);
                     return Err(ServiceError::new(
                         "parameter_out_of_range",
                         format!("vehicle {i}: {parameter} must be > 0, got {limit}"),
-                        json!({ "parameter": parameter, "index": i, "min": 0.0, "max": null, "got": limit }),
+                        fields,
                     ));
                 }
                 vehicle = if parameter == "max_distance" {
@@ -687,10 +754,12 @@ fn solve_ga(
         ("config.elite_ratio", cfg.elite_ratio),
     ] {
         if let Some(v) = value.filter(|v| !(*v > 0.0 && *v <= 1.0)) {
+            let mut fields = json!({ "parameter": parameter, "got": v });
+            Bounds::of((Bound::Excluded(0.0), Bound::Included(1.0))).insert_into(&mut fields);
             return Err(ServiceError::new(
                 "parameter_out_of_range",
                 format!("{parameter} must be in (0, 1], got {v}"),
-                json!({ "parameter": parameter, "min": 0.0, "max": 1.0, "got": v }),
+                fields,
             ));
         }
     }
@@ -1004,9 +1073,12 @@ mod tests {
             serde_json::json!({ "capacity": 10.0, "max_distance": 0.0 }),
         )];
         let e = solve((0.0, 0.0), &customers, &fleet, "nn", &quick()).expect_err("0 distance");
-        assert_eq!(e.fields["code"], "parameter_out_of_range");
-        assert_eq!(e.fields["parameter"], "max_distance");
-        assert_eq!(e.fields["index"], 0);
+        // A limit must be > 0: zero itself is refused, so the bound is open.
+        assert_eq!(
+            e.fields,
+            json!({ "code": "parameter_out_of_range", "parameter": "max_distance", "index": 0,
+                    "min": null, "max": null, "exclusive_min": 0.0, "got": 0.0 })
+        );
     }
 
     /// The methods that plan every route alike need one vehicle type; nearest
@@ -1595,12 +1667,30 @@ mod tests {
             };
             let err =
                 solve_ga(&customers, &dm, 100, RouteLimits::NONE, &cfg).expect_err("out of (0, 1]");
+            // (0, 1]: the lower end is open, the upper closed.
             assert_eq!(
                 err.fields,
                 json!({ "code": "parameter_out_of_range", "parameter": parameter,
-                        "min": 0.0, "max": 1.0, "got": got })
+                        "min": null, "max": 1.0, "exclusive_min": 0.0, "got": got })
             );
         }
+    }
+
+    /// An open end the runner reports stays open on the wire: (0, 1] is
+    /// `exclusive_min` beside `max`, never `min: 0`.
+    #[test]
+    fn runner_bounds_are_forwarded_with_their_open_ends() {
+        let open = AlnsConfig::default()
+            .with_reaction_factor(0.0)
+            .validate()
+            .expect_err("a reaction factor of zero");
+        let err = settings_refused(Method::Alns, open);
+        assert_eq!(
+            err.fields,
+            json!({ "code": "parameter_out_of_range", "parameter": "config.reaction_factor",
+                    "method": "alns", "min": null, "max": 1.0, "exclusive_min": 0.0,
+                    "got": 0.0 })
+        );
     }
 
     // ---- ALNS: valid minimal input ----

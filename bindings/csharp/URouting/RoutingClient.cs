@@ -178,6 +178,11 @@ public class RoutingException : Exception
     /// <summary>
     /// The whole error body: <c>error</c>, <c>code</c> and the values behind the reason
     /// (<c>id</c>, <c>index</c>, <c>parameter</c>, ...). <c>null</c> when there is no body.
+    /// For <c>parameter_out_of_range</c> the bounds are <c>min</c> / <c>max</c> for a
+    /// closed (included) end — always present, <c>null</c> on a side that is open or
+    /// unbounded — and <c>exclusive_min</c> / <c>exclusive_max</c> for an open (excluded)
+    /// end, present only when that end is open: a <c>mutation_rate</c> in (0, 1] is
+    /// refused with <c>exclusive_min</c> 0 and <c>max</c> 1.
     /// </summary>
     public JsonElement? Details { get; }
 
