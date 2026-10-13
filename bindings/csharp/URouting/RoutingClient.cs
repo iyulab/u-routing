@@ -170,7 +170,7 @@ public class RoutingException : Exception
     /// <summary>
     /// Stable, machine-readable reason, e.g. <c>unknown_option</c>, <c>duplicate_id</c>,
     /// <c>invalid_time_window</c>, <c>not_whole_units</c>, <c>mixed_fleet</c>,
-    /// <c>invalid_option</c>, <c>malformed_input</c>,
+    /// <c>parameter_out_of_range</c>, <c>invalid_option</c>, <c>malformed_input</c>,
     /// <c>internal</c>. <c>null</c> when the engine returned no readable body.
     /// </summary>
     public string? Reason { get; }

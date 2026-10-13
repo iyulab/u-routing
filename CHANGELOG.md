@@ -22,6 +22,24 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 - A setting the method's runner refuses forwards the runner's `exclusive_min` /
   `exclusive_max` beside `min` / `max`.
 - .NET: `RoutingException.Details` documents the four bound fields.
+- **Breaking:** `config.population_size`, `max_generations`, `max_iterations`,
+  `max_vehicles`, `seed` and a customer's `id` are read as whole numbers rather
+  than unsigned integers — WebAssembly and the C ABI alike — so a negative value
+  is refused by the range check like a too-small one instead of as
+  `malformed_input` ("invalid value: integer `-1`, expected usize"). A count the
+  method's runner checks carries the runner's bounds: `population_size: -1` is
+  `parameter_out_of_range` `{ parameter: "config.population_size", method: "ga",
+  min: 2, max: null, got: -1 }`, as `1` is. A negative `seed` is `{ min: 0 }`, a
+  negative `id` `{ parameter: "id", index, min: 0 }`. A value with a fractional
+  part (`2.5`) stays `malformed_input`, naming the field and saying it must be a
+  whole number.
+- **Breaking:** a `config.max_vehicles` below 1 is `parameter_out_of_range`
+  `{ parameter: "config.max_vehicles", min: 1, max: null, got }` — 0 used to be
+  `invalid_option` with `value: 0`, and a negative value `malformed_input`.
+- C ABI: a request that does not deserialize names the field it stopped at —
+  `parameter` (`customers[1].id`, `config.population_size`) and, inside an array,
+  `index` — as the WebAssembly binding does, instead of `request` for every
+  shape error. Text that is not JSON at all is still `request`.
 
 ## [0.13.0] - 2026-10-07
 

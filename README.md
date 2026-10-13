@@ -265,8 +265,13 @@ than being served late.
 | `mutation_rate` | GA | (0, 1] — outside is refused (`parameter_out_of_range`, `exclusive_min: 0`, `max: 1`) | 0.1 |
 | `elite_ratio` | GA | (0, 1] — outside is refused; must not fill entire population | 0.1 |
 | `max_iterations` | ALNS | >= 1 | 500 |
-| `seed` | Both | any u64 (optional) | random |
+| `seed` | Both | a whole number from 0 to 2^64 − 1 (optional) | random |
 | `max_vehicles` | All | >= 1 (optional) | no limit |
+
+Counts, the seed and a customer's `id` are whole numbers. A negative one is
+refused by the same range check as a too-small one — `population_size: -1` is
+`parameter_out_of_range` with `min: 2`, as `1` is — and one with a fractional
+part (`2.5`) is `malformed_input` at its field.
 
 **Errors:**
 
@@ -299,10 +304,10 @@ try {
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity that is not a whole number from 0 to 2147483647. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
 | `mixed_fleet` | `method`, `parameter` (`"capacity"`, `"max_distance"` or `"max_duration"`), `values`, `capacities`, `index` | Vehicles that differ in capacity or limits with `"savings"`, `"ga"` or `"alns"`, which plan every route with one vehicle; `index` is the first vehicle that differs from the first |
-| `parameter_out_of_range` | `parameter`, `index` (vehicles only), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` of 0 or less (no route could keep it), a GA `mutation_rate` / `elite_ratio` outside (0, 1], or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` of 0, … — with `method`). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
-| `invalid_option` | `parameter`, and `value` or `method` | A `config.max_vehicles` of 0, or solver settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
+| `parameter_out_of_range` | `parameter`, `index` (vehicles and customers), `method` (method settings), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` of 0 or less (no route could keep it), a GA `mutation_rate` / `elite_ratio` outside (0, 1], a `config.max_vehicles` below 1, a negative `config.seed`, a customer `id` below 0 (with `index`), or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` below 1, … — with `method`; a negative count is refused here like a too-small one). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
+| `invalid_option` | `parameter`, `method` | Solver settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
-| `malformed_input` | `parameter` | An argument of the wrong shape or type (a missing or unknown key), or a JSON string |
+| `malformed_input` | `parameter`, `index` (inside an array) | An argument of the wrong shape or type (a missing or unknown key), a count, seed or `id` that is not a whole number (`config.population_size: 2.5` — `parameter` is the field), or a JSON string. The C ABI names the field the same way (`customers[1].id`); text that is not JSON at all is `request` |
 
 The C library and the .NET package report the same `code` and fields: the C
 error body is `{"error": "<message>", "code": ..., ...}`, and `RoutingException`

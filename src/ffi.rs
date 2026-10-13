@@ -134,15 +134,9 @@ pub unsafe extern "C" fn urouting_solve_vrp(
             Ok(j) => j,
             Err(e) => return e,
         };
-        let input: VrpInput = match serde_json::from_str(&json) {
+        let input: VrpInput = match parse_request(&json) {
             Ok(r) => r,
-            Err(e) => {
-                return write_error(
-                    result_ptr,
-                    ERR_PARSE,
-                    ServiceError::malformed_input("request", format!("Invalid JSON: {e}")),
-                )
-            }
+            Err(e) => return write_error(result_ptr, ERR_PARSE, e),
         };
         let config = input.config.unwrap_or_default();
 
@@ -161,6 +155,27 @@ pub unsafe extern "C" fn urouting_solve_vrp(
             Err(e) => write_error(result_ptr, ERR_COMPUTE, e),
         }
     })
+}
+
+/// Reads the request, or refuses it where it stopped: `parameter` names the
+/// field (`customers[1].id`, `config.seed`) and `index` its array position,
+/// as the WebAssembly binding reports them; text that is not JSON at all is
+/// refused as `request`.
+fn parse_request(json: &str) -> Result<VrpInput, ServiceError> {
+    let mut deserializer = serde_json::Deserializer::from_str(json);
+    let input: VrpInput = serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
+        if e.inner().is_data() {
+            service::malformed_at("request", &e)
+        } else {
+            // Not JSON: there is no field to name.
+            ServiceError::malformed_input("request", format!("Invalid JSON: {}", e.inner()))
+        }
+    })?;
+    // Trailing characters after the value, as `serde_json::from_str` refuses.
+    deserializer
+        .end()
+        .map_err(|e| ServiceError::malformed_input("request", format!("request: {e}")))?;
+    Ok(input)
 }
 
 /// Free a string allocated by u-routing FFI.
@@ -398,6 +413,67 @@ mod tests {
             let d = body["total_distance"].as_f64().expect("total_distance");
             assert!(d > 0.0, "{method}: total_distance {d}");
         }
+    }
+
+    /// The C body carries a negative count as the range refusal it is, and a
+    /// fractional one as malformed at the field it sits in.
+    #[test]
+    fn whole_number_refusals_reach_the_c_body() {
+        let mut request = problem("ga");
+        request["config"] = serde_json::json!({ "population_size": -1, "max_generations": 2 });
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["code"], "parameter_out_of_range", "{body}");
+        assert_eq!(body["parameter"], "config.population_size", "{body}");
+        assert_eq!(body["method"], "ga", "{body}");
+        assert_eq!(body["min"], 2.0, "{body}");
+        assert_eq!(body["max"], serde_json::Value::Null, "{body}");
+        assert_eq!(body["got"], -1.0, "{body}");
+
+        let mut request = problem("nn");
+        request["config"] = serde_json::json!({ "max_vehicles": -1 });
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["parameter"], "config.max_vehicles", "{body}");
+        assert_eq!(body["min"], 1.0, "{body}");
+        assert_eq!(body["got"], -1.0, "{body}");
+
+        let mut request = problem("nn");
+        request["customers"][2]["id"] = serde_json::json!(-5);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["code"], "parameter_out_of_range", "{body}");
+        assert_eq!(body["parameter"], "id", "{body}");
+        assert_eq!(body["index"], 2, "{body}");
+        assert_eq!(body["got"], -5.0, "{body}");
+
+        let mut request = problem("ga");
+        request["config"] = serde_json::json!({ "population_size": 2.5 });
+        let (code, body) = solve(&request);
+        assert_eq!(code, -2, "{body}");
+        assert_eq!(body["code"], "malformed_input", "{body}");
+        assert_eq!(body["parameter"], "config.population_size", "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .expect("text")
+                .contains("must be a whole number, got 2.5"),
+            "{body}"
+        );
+
+        let mut request = problem("nn");
+        request["customers"][1]["id"] = serde_json::json!(1.5);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -2, "{body}");
+        assert_eq!(body["parameter"], "customers[1].id", "{body}");
+        assert_eq!(body["index"], 1, "{body}");
+
+        // A whole number reads as itself, up to the largest 64-bit seed.
+        let mut request = problem("ga");
+        request["config"] =
+            serde_json::json!({ "population_size": 10, "max_generations": 2.0, "seed": u64::MAX });
+        let (code, body) = solve(&request);
+        assert_eq!(code, 0, "{body}");
     }
 
     #[test]

@@ -176,61 +176,13 @@ fn from_js<T: serde::de::DeserializeOwned>(value: JsValue, param: &str) -> Resul
 
 /// The half of [`from_js`] that enforces the wire schema, apart from the
 /// `JsValue` (which cannot be built off `wasm32`) so tests walk the same path a
-/// JS caller does. A refusal names where it stopped: see [`failure_site`].
+/// JS caller does. A refusal names where it stopped: see
+/// [`service::failure_site`].
 fn from_json<T: serde::de::DeserializeOwned>(
     json: serde_json::Value,
     param: &str,
 ) -> Result<T, ServiceError> {
-    serde_path_to_error::deserialize(json).map_err(|e| {
-        let (parameter, index) = failure_site(param, e.path());
-        let mut err = ServiceError::malformed_input(
-            &parameter,
-            format!("{param}: {}: {}", e.path(), e.inner()),
-        );
-        if let Some(i) = index {
-            err.fields["index"] = serde_json::json!(i);
-        }
-        err
-    })
-}
-
-/// Where in the argument `param` a request stopped deserializing, as the
-/// refusal reports it: the field (`design[1]`, `points[0].y`) and, when the
-/// failure sits in an array, its position there -- the same `parameter` /
-/// `index` a number array read element by element reports. Without it a
-/// `null` three levels down was "invalid type: null, expected f64" with no
-/// way to say which row (the gap `read_numbers` closed for bare arrays).
-fn failure_site(param: &str, path: &serde_path_to_error::Path) -> (String, Option<usize>) {
-    use serde_path_to_error::Segment;
-    let segments: Vec<&Segment> = path.iter().collect();
-    let index = segments.iter().rev().find_map(|s| match s {
-        Segment::Seq { index } => Some(*index),
-        _ => None,
-    });
-    // A trailing `[i]` is the index, not part of the name.
-    let named = match segments.last() {
-        Some(Segment::Seq { .. }) => &segments[..segments.len() - 1],
-        _ => &segments[..],
-    };
-    let mut name = String::new();
-    for segment in named {
-        match segment {
-            Segment::Seq { index } => name.push_str(&format!("[{index}]")),
-            Segment::Map { key } | Segment::Enum { variant: key } => {
-                if !name.is_empty() {
-                    name.push('.');
-                }
-                name.push_str(key);
-            }
-            Segment::Unknown => name.push_str(".?"),
-        }
-    }
-    // A top-level array argument (`data[1][2]`) or a failure at the root
-    // (a missing field) is named by the argument itself.
-    if name.is_empty() || name.starts_with('[') {
-        name.insert_str(0, param);
-    }
-    (name, index)
+    serde_path_to_error::deserialize(json).map_err(|e| service::malformed_at(param, &e))
 }
 
 // ============================================================================
@@ -400,5 +352,73 @@ mod path_tests {
         assert_eq!(err.fields["code"], "malformed_input");
         assert_eq!(err.fields["parameter"], "customers[1].x");
         assert_eq!(err.fields["index"], 1);
+    }
+
+    /// `from_json` is the half of `from_js` after serde-wasm-bindgen has read
+    /// the JS value into JSON. That reader turns a JS number that is a safe
+    /// integer (`3`, `-1`, `3.0` -- the same number in JS) into a JSON integer
+    /// and any other number (`2.5`) into a JSON float, so these JSON values
+    /// are what a JS caller's arguments arrive as.
+    fn problem(config: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "customers": [
+                { "id": 1, "x": 1.0, "y": 2.0, "demand": 1.0 },
+                { "id": 2, "x": 3.0, "y": 1.0, "demand": 1.0 },
+                { "id": 3, "x": -2.0, "y": 4.0, "demand": 1.0 }
+            ],
+            "depot": { "x": 0.0, "y": 0.0 },
+            "method": "ga",
+            "config": config,
+        })
+    }
+
+    fn solve(
+        problem: serde_json::Value,
+    ) -> Result<crate::service::VrpOutput, crate::service::ServiceError> {
+        let input: super::VrpInput = super::from_json(problem, "problem")?;
+        crate::service::solve(
+            (input.depot.x, input.depot.y),
+            &input.customers,
+            &input.vehicles,
+            &input.method,
+            &input.config.unwrap_or_default(),
+        )
+    }
+
+    #[test]
+    fn a_negative_count_is_a_range_refusal() {
+        let err =
+            solve(problem(serde_json::json!({ "population_size": -1 }))).expect_err("negative");
+        assert_eq!(
+            err.fields,
+            serde_json::json!({ "code": "parameter_out_of_range",
+                "parameter": "config.population_size", "method": "ga",
+                "min": 2.0, "max": null, "got": -1.0 })
+        );
+    }
+
+    #[test]
+    fn a_fractional_count_is_malformed_at_its_field() {
+        let err =
+            solve(problem(serde_json::json!({ "max_generations": 2.5 }))).expect_err("not whole");
+        assert_eq!(
+            err.fields,
+            serde_json::json!({ "code": "malformed_input",
+                "parameter": "config.max_generations" })
+        );
+        assert!(
+            err.message.contains("must be a whole number, got 2.5"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn a_whole_count_reads_as_itself() {
+        let out = solve(problem(serde_json::json!({
+            "population_size": 10, "max_generations": 2.0, "seed": 7, "max_vehicles": 3
+        })))
+        .expect("whole numbers");
+        assert_eq!(out.method_used, "ga");
     }
 }

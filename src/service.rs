@@ -145,6 +145,210 @@ impl std::fmt::Display for ServiceError {
     }
 }
 
+/// Where in the argument `param` a request stopped deserializing, as the
+/// refusal reports it: the field (`customers[1].x`, `config.seed`) and, when
+/// the failure sits in an array, its position there. Both bindings name a
+/// malformed value this way.
+pub(crate) fn failure_site(
+    param: &str,
+    path: &serde_path_to_error::Path,
+) -> (String, Option<usize>) {
+    use serde_path_to_error::Segment;
+    let segments: Vec<&Segment> = path.iter().collect();
+    let index = segments.iter().rev().find_map(|s| match s {
+        Segment::Seq { index } => Some(*index),
+        _ => None,
+    });
+    // A trailing `[i]` is the index, not part of the name.
+    let named = match segments.last() {
+        Some(Segment::Seq { .. }) => &segments[..segments.len() - 1],
+        _ => &segments[..],
+    };
+    let mut name = String::new();
+    for segment in named {
+        match segment {
+            Segment::Seq { index } => name.push_str(&format!("[{index}]")),
+            Segment::Map { key } | Segment::Enum { variant: key } => {
+                if !name.is_empty() {
+                    name.push('.');
+                }
+                name.push_str(key);
+            }
+            Segment::Unknown => name.push_str(".?"),
+        }
+    }
+    // A top-level array argument (`data[1][2]`) or a failure at the root
+    // (a missing field, a syntax error) is named by the argument itself.
+    if name.is_empty() || name.starts_with('[') {
+        name.insert_str(0, param);
+    }
+    (name, index)
+}
+
+/// A refusal of a value that does not deserialize, at the place it stopped:
+/// `parameter` and, inside an array, `index` (see [`failure_site`]).
+pub(crate) fn malformed_at<E: std::fmt::Display>(
+    param: &str,
+    error: &serde_path_to_error::Error<E>,
+) -> ServiceError {
+    let (parameter, index) = failure_site(param, error.path());
+    let mut err = ServiceError::malformed_input(
+        &parameter,
+        format!("{param}: {}: {}", error.path(), error.inner()),
+    );
+    if let Some(i) = index {
+        err.fields["index"] = json!(i);
+    }
+    err
+}
+
+// ============================================================================
+// Whole numbers
+// ============================================================================
+
+/// A whole number exactly as the caller wrote it: any integer, or a number
+/// with no fractional part.
+///
+/// Counts, ids and the seed are read through this rather than straight into
+/// an unsigned type. As a `usize`, `population_size: -1` failed as a type
+/// mismatch ("invalid value: integer `-1`, expected usize",
+/// `malformed_input`) while `1` was refused by the range check -- two answers
+/// to one mistake. Read signed and wide, every whole number reaches a range
+/// check, which names the accepted range ([`whole_in`], [`runner_count`]). A
+/// fractional part is refused here: whether a count is whole is a matter of
+/// its type, so `2.5` is `malformed_input`.
+struct Whole(i128);
+
+impl<'de> Deserialize<'de> for Whole {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct WholeVisitor;
+
+        impl serde::de::Visitor<'_> for WholeVisitor {
+            type Value = Whole;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a whole number")
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Whole, E> {
+                Ok(Whole(v.into()))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Whole, E> {
+                Ok(Whole(v.into()))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Whole, E> {
+                if v.fract() == 0.0 {
+                    // `as` saturates only past ±1.7e38, far outside every
+                    // range a setting accepts.
+                    Ok(Whole(v as i128))
+                } else {
+                    Err(E::custom(format_args!("must be a whole number, got {v}")))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(WholeVisitor)
+    }
+}
+
+/// Reads a whole-number field (`#[serde(deserialize_with = "whole")]`); see
+/// [`Whole`].
+fn whole<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i128, D::Error> {
+    Whole::deserialize(deserializer).map(|w| w.0)
+}
+
+/// Reads an optional whole-number field: `null` is no value.
+fn optional_whole<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i128>, D::Error> {
+    Option::<Whole>::deserialize(deserializer).map(|w| w.map(|w| w.0))
+}
+
+/// A whole number from the request as the `T` the solver takes.
+///
+/// Below `min` -- a negative value as much as a too-small one -- it is
+/// refused as `parameter_out_of_range` with `min` and no upper bound; above
+/// the largest `T` (`max`, the type's own limit) with both bounds.
+fn whole_in<T: TryFrom<i128>>(
+    parameter: &str,
+    value: i128,
+    min: i128,
+    max: i128,
+) -> Result<T, ServiceError> {
+    let (bounds, rule) = if value < min {
+        (Bounds::of(min as f64..), format!("at least {min}"))
+    } else {
+        match T::try_from(value) {
+            Ok(v) => return Ok(v),
+            Err(_) => (
+                Bounds::of(min as f64..=max as f64),
+                format!("from {min} to {max}"),
+            ),
+        }
+    };
+    let mut fields = json!({ "parameter": parameter, "got": value as f64 });
+    bounds.insert_into(&mut fields);
+    Err(ServiceError::new(
+        "parameter_out_of_range",
+        format!("{parameter} must be {rule}, got {value}"),
+        fields,
+    ))
+}
+
+/// A count from `config` as the `usize` the method's runner takes.
+///
+/// The runner checks its own counts (a population of at least 2, at least one
+/// generation or iteration), and its refusal is the one reported
+/// ([`settings_refused`]). A negative count cannot reach that check as a
+/// `usize`, so it is put to it as 0 -- below every count a runner accepts --
+/// and refused with the caller's number as `got`: `-1` and `1` are refused
+/// alike, with the runner's bounds. `check` validates a runner config that
+/// differs from the default only in this count.
+fn runner_count(
+    method: Method,
+    parameter: &str,
+    value: i128,
+    check: impl Fn(usize) -> Result<(), ConfigError>,
+) -> Result<usize, ServiceError> {
+    if let Ok(count) = usize::try_from(value) {
+        return Ok(count);
+    }
+    let name = parameter.trim_start_matches("config.");
+    if value < 0 {
+        if let Err(mut e) = check(0) {
+            if let ConfigError::OutOfRange { parameter, got, .. } = &mut e {
+                if *parameter == name {
+                    *got = value as f64;
+                    return Err(settings_refused(method, e));
+                }
+            }
+        }
+    }
+    // A count past what the target holds, or one the runner sets no minimum
+    // for: the type is the limit.
+    let mut e = whole_in::<usize>(parameter, value, 0, usize::MAX as i128)
+        .expect_err("a value no usize holds is outside 0..=usize::MAX");
+    e.fields["method"] = json!(method.name());
+    e.message = format!("method \"{}\": {}", method.name(), e.message);
+    Err(e)
+}
+
+/// The seed from `config`, for the methods that read one: a whole number from
+/// 0 to 2^64 - 1.
+fn seed(method: Method, cfg: &InputConfig) -> Result<Option<u64>, ServiceError> {
+    cfg.seed
+        .map(|seed| {
+            whole_in("config.seed", seed, 0, u64::MAX.into()).map_err(|mut e| {
+                e.fields["method"] = json!(method.name());
+                e.message = format!("method \"{}\": {}", method.name(), e.message);
+                e
+            })
+        })
+        .transpose()
+}
+
 // ============================================================================
 // Wire types shared by both bindings
 // ============================================================================
@@ -153,7 +357,12 @@ impl std::fmt::Display for ServiceError {
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputCustomer {
-    id: usize,
+    /// A whole number from 0, the caller's own label; routes and
+    /// `unassigned` name the customer by it. Read signed so a negative id is
+    /// a range refusal: [`Whole`].
+    #[serde(deserialize_with = "whole")]
+    #[cfg_attr(feature = "wasm", tsify(type = "number"))]
+    id: i128,
     x: f64,
     y: f64,
     #[serde(default)]
@@ -195,6 +404,8 @@ fn default_capacity() -> f64 {
 /// Optional solver configuration.
 ///
 /// Fields are shared across methods; each method uses only the relevant ones.
+/// Counts and the seed are whole numbers read signed, so a negative one is
+/// refused by the range check like a too-small one ([`Whole`]).
 /// Besides the per-method parameters, it carries limits the solver has to
 /// respect whichever method runs -- `max_vehicles` is one.
 #[derive(Deserialize, Default)]
@@ -203,15 +414,15 @@ fn default_capacity() -> f64 {
 pub(crate) struct InputConfig {
     // --- GA parameters ---
     /// Population size for GA (default: 50).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
-    population_size: Option<usize>,
+    population_size: Option<i128>,
     /// Maximum generations for GA (default: 200).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
-    max_generations: Option<usize>,
+    max_generations: Option<i128>,
     /// Mutation rate for GA in (0, 1] (default: 0.1).
     #[serde(default)]
     #[cfg_attr(feature = "wasm", tsify(optional))]
@@ -225,17 +436,17 @@ pub(crate) struct InputConfig {
 
     // --- ALNS parameters ---
     /// Maximum iterations for ALNS (default: 500).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
-    max_iterations: Option<usize>,
+    max_iterations: Option<i128>,
 
     // --- Shared ---
-    /// Random seed for reproducibility.
-    #[serde(default)]
+    /// Random seed for reproducibility: a whole number from 0 to 2^64 - 1.
+    #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
-    seed: Option<u64>,
+    seed: Option<i128>,
     /// The number of routes the plan may use at most -- the fixed fleet.
     ///
     /// The length of `vehicles` is not this number: it says which capacities
@@ -245,10 +456,10 @@ pub(crate) struct InputConfig {
     /// would need more routes has its lightest routes emptied into the others
     /// where capacity and time windows allow, and the customers that fit
     /// nowhere are reported in `unassigned`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
-    max_vehicles: Option<usize>,
+    max_vehicles: Option<i128>,
 }
 
 /// The method a request names when it names none.
@@ -338,15 +549,17 @@ pub(crate) fn solve(
     config: &InputConfig,
 ) -> Result<VrpOutput, ServiceError> {
     let method = Method::parse(method)?;
-    if config.max_vehicles == Some(0) {
-        return Err(ServiceError::new(
-            "invalid_option",
-            "config.max_vehicles is 0, so no route may exist; give at least 1, \
-             or leave it out to accept as many routes as the plan needs"
-                .to_string(),
-            json!({ "parameter": "config.max_vehicles", "value": 0 }),
-        ));
-    }
+    // At least one route, or no limit at all: 0 is a range refusal like -1.
+    let max_vehicles = config
+        .max_vehicles
+        .map(|n| {
+            whole_in::<usize>("config.max_vehicles", n, 1, usize::MAX as i128).map_err(|mut e| {
+                e.message
+                    .push_str(" -- leave it out to accept as many routes as the plan needs");
+                e
+            })
+        })
+        .transpose()?;
     let (customers, id_map) = build_customers(depot, input_customers)?;
     let vehicles = build_vehicles(input_vehicles)?;
     // Only nearest neighbour assigns routes to particular vehicles. The other
@@ -382,7 +595,7 @@ pub(crate) fn solve(
     };
     // A fixed fleet is kept by every method alike: `"nn"` cannot exceed its
     // vehicle list, but it can exceed a smaller `max_vehicles`.
-    let plan = match config.max_vehicles {
+    let plan = match max_vehicles {
         Some(max) if plan.routes.len() > max => {
             let limited = limit_routes(
                 plan.routes,
@@ -464,34 +677,40 @@ fn build_customers(
         std::collections::HashMap::with_capacity(input_customers.len());
 
     for (position, ic) in input_customers.iter().enumerate() {
-        if let Some(first) = first_at.insert(ic.id, position) {
+        let id: usize = whole_in("id", ic.id, 0, usize::MAX as i128).map_err(|mut e| {
+            e.fields["index"] = json!(position);
+            e.message = format!(
+                "customer at position {position} of customers: {}",
+                e.message
+            );
+            e
+        })?;
+        if let Some(first) = first_at.insert(id, position) {
             return Err(ServiceError::new(
                 "duplicate_id",
                 format!(
-                    "customer {}: the id is given twice, at positions {first} and \
+                    "customer {id}: the id is given twice, at positions {first} and \
                      {position} of customers (counting from 0); routes and unassigned \
-                     name customers by id, so every customer needs its own",
-                    ic.id
+                     name customers by id, so every customer needs its own"
                 ),
-                json!({ "id": ic.id, "first": first, "second": position }),
+                json!({ "id": id, "first": first, "second": position }),
             ));
         }
-        let demand = whole_units(ic.demand, "demand", position, Some(ic.id), || {
-            format!("customer {}: demand", ic.id)
+        let demand = whole_units(ic.demand, "demand", position, Some(id), || {
+            format!("customer {id}: demand")
         })?;
         let idx = customers.len();
-        id_map.push(ic.id);
+        id_map.push(id);
         let mut c = Customer::new(idx, ic.x, ic.y, demand, ic.service_time);
         if let Some([ready, due]) = ic.time_window {
             let tw = TimeWindow::new(ready, due).ok_or_else(|| {
                 ServiceError::new(
                     "invalid_time_window",
                     format!(
-                        "customer {}: time_window [{ready}, {due}] is not a window \
-                         (it needs ready <= due)",
-                        ic.id
+                        "customer {id}: time_window [{ready}, {due}] is not a window \
+                         (it needs ready <= due)"
                     ),
-                    json!({ "id": ic.id, "index": position, "ready": ready, "due": due }),
+                    json!({ "id": id, "index": position, "ready": ready, "due": due }),
                 )
             })?;
             c = c.with_time_window(tw);
@@ -743,9 +962,22 @@ fn solve_ga(
 
     // Sequential on every target: rayon is unavailable in WebAssembly, and a
     // seed should reproduce the same routes whichever binding runs it.
+    let method = Method::Genetic;
+    let population_size = match cfg.population_size {
+        Some(n) => runner_count(method, "config.population_size", n, |n| {
+            GaConfig::default().with_population_size(n).validate()
+        })?,
+        None => 50,
+    };
+    let max_generations = match cfg.max_generations {
+        Some(n) => runner_count(method, "config.max_generations", n, |n| {
+            GaConfig::default().with_max_generations(n).validate()
+        })?,
+        None => 200,
+    };
     let mut ga_config = GaConfig::default()
-        .with_population_size(cfg.population_size.unwrap_or(50))
-        .with_max_generations(cfg.max_generations.unwrap_or(200))
+        .with_population_size(population_size)
+        .with_max_generations(max_generations)
         .with_parallel(false);
 
     // Both are rates in (0, 1]: a value outside is refused, not clamped.
@@ -769,7 +1001,7 @@ fn solve_ga(
     if let Some(er) = cfg.elite_ratio {
         ga_config = ga_config.with_elite_ratio(er);
     }
-    if let Some(seed) = cfg.seed {
+    if let Some(seed) = seed(method, cfg)? {
         ga_config = ga_config.with_seed(seed);
     }
 
@@ -814,10 +1046,16 @@ fn solve_alns(
     let repair_ops =
         vec![GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity).with_limits(limits)];
 
-    let mut alns_config =
-        AlnsConfig::default().with_max_iterations(cfg.max_iterations.unwrap_or(500));
+    let method = Method::Alns;
+    let max_iterations = match cfg.max_iterations {
+        Some(n) => runner_count(method, "config.max_iterations", n, |n| {
+            AlnsConfig::default().with_max_iterations(n).validate()
+        })?,
+        None => 500,
+    };
+    let mut alns_config = AlnsConfig::default().with_max_iterations(max_iterations);
 
-    if let Some(seed) = cfg.seed {
+    if let Some(seed) = seed(method, cfg)? {
         alns_config = alns_config.with_seed(seed);
     }
 
@@ -1057,7 +1295,7 @@ mod tests {
                         );
                     }
                     if let Some(max) = max_vehicles {
-                        assert!(out.routes.len() <= max, "{method}: {out:?}");
+                        assert!(out.routes.len() as i128 <= max, "{method}: {out:?}");
                     }
                     let served: usize = out.routes.iter().map(Vec::len).sum();
                     assert_eq!(served + out.unassigned.len(), 9, "{method} lost a customer");
@@ -1253,15 +1491,30 @@ mod tests {
     }
 
     /// Zero routes cannot serve a customer, so it is refused where it is
-    /// stated rather than turning every solve into a route-count failure.
+    /// stated rather than turning every solve into a route-count failure --
+    /// by the same range check as a negative count, whatever the method.
     #[test]
-    fn a_max_vehicles_of_zero_is_refused_as_stated() {
-        let zero = InputConfig {
-            max_vehicles: Some(0),
-            ..quick()
-        };
-        let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), "ga", &zero).expect_err("zero");
-        assert!(err.message.contains("max_vehicles is 0"), "{err}");
+    fn a_max_vehicles_below_one_is_refused_as_stated() {
+        for (got, method) in [(0, "ga"), (-1, "nn")] {
+            let config = InputConfig {
+                max_vehicles: Some(got),
+                ..quick()
+            };
+            let err =
+                solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config).expect_err("below 1");
+            assert_eq!(
+                err.fields,
+                serde_json::json!({ "code": "parameter_out_of_range",
+                    "parameter": "config.max_vehicles", "min": 1.0, "max": null,
+                    "got": got as f64 })
+            );
+            assert!(
+                err.message.starts_with(&format!(
+                    "config.max_vehicles must be at least 1, got {got}"
+                )),
+                "{err}"
+            );
+        }
     }
 
     /// Only nearest neighbour reads each vehicle. The other methods plan with
@@ -1305,7 +1558,12 @@ mod tests {
     /// Customers reached after their window closed, driving each route from
     /// the depot at time 0 with travel time equal to distance.
     fn late_arrivals(out: &VrpOutput, customers: &[InputCustomer]) -> Vec<usize> {
-        let by_id = |id: usize| customers.iter().find(|c| c.id == id).expect("known id");
+        let by_id = |id: usize| {
+            customers
+                .iter()
+                .find(|c| c.id == id as i128)
+                .expect("known id")
+        };
         let mut late = Vec::new();
         for route in &out.routes {
             let (mut x, mut y, mut t) = (0.0_f64, 0.0_f64, 0.0_f64);
@@ -1492,8 +1750,9 @@ mod tests {
                     },
                 )
                 .expect_err("zero"),
-                "invalid_option",
-                serde_json::json!({ "parameter": "config.max_vehicles", "value": 0 }),
+                "parameter_out_of_range",
+                serde_json::json!({ "parameter": "config.max_vehicles", "min": 1.0,
+                                    "max": null, "got": 0.0 }),
             ),
             (
                 solve(
@@ -1533,6 +1792,159 @@ mod tests {
             for (key, value) in expected.as_object().expect("fields") {
                 assert_eq!(&err.fields[key], value, "{code}.{key}: {}", err.fields);
             }
+        }
+    }
+
+    // ---- whole numbers ----
+
+    /// A count is a whole number read signed: a negative one reaches the
+    /// runner's own check and is refused with the runner's bounds, the same
+    /// refusal a too-small positive one gets.
+    #[test]
+    fn a_negative_count_is_refused_like_a_too_small_one() {
+        let refused = |method: &str, config: InputConfig| {
+            solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config)
+                .expect_err("out of range")
+                .fields
+        };
+        let expected = |parameter: &str, method: &str, min: f64, got: f64| {
+            serde_json::json!({ "code": "parameter_out_of_range", "parameter": parameter,
+                "method": method, "min": min, "max": null, "got": got })
+        };
+        for got in [-1, 1] {
+            let config = InputConfig {
+                population_size: Some(got),
+                ..quick()
+            };
+            assert_eq!(
+                refused("ga", config),
+                expected("config.population_size", "ga", 2.0, got as f64)
+            );
+        }
+        for got in [-1, 0] {
+            let config = InputConfig {
+                max_generations: Some(got),
+                ..quick()
+            };
+            assert_eq!(
+                refused("ga", config),
+                expected("config.max_generations", "ga", 1.0, got as f64)
+            );
+            let config = InputConfig {
+                max_iterations: Some(got),
+                ..quick()
+            };
+            assert_eq!(
+                refused("alns", config),
+                expected("config.max_iterations", "alns", 1.0, got as f64)
+            );
+        }
+        let err = solve(
+            (0.0, 0.0),
+            &ring(4),
+            &fleet(&[10.0]),
+            "ga",
+            &InputConfig {
+                population_size: Some(-1),
+                ..quick()
+            },
+        )
+        .expect_err("negative");
+        assert_eq!(
+            err.message,
+            "method \"ga\": config.population_size must be at least 2, got -1"
+        );
+    }
+
+    /// A seed has no range of its own beyond its type: 0 to 2^64 - 1.
+    #[test]
+    fn a_negative_seed_is_out_of_range() {
+        for method in ["ga", "alns"] {
+            let config = InputConfig {
+                seed: Some(-1),
+                ..quick()
+            };
+            let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config)
+                .expect_err("negative seed");
+            assert_eq!(
+                err.fields,
+                serde_json::json!({ "code": "parameter_out_of_range", "parameter": "config.seed",
+                    "method": method, "min": 0.0, "max": null, "got": -1.0 })
+            );
+            let config = InputConfig {
+                seed: Some(u64::MAX.into()),
+                ..quick()
+            };
+            assert!(
+                solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config).is_ok(),
+                "{method}: the largest seed"
+            );
+        }
+        let err = whole_in::<u64>("config.seed", i128::from(u64::MAX) + 1, 0, u64::MAX.into())
+            .expect_err("past u64");
+        assert_eq!(err.fields["max"], serde_json::json!(u64::MAX as f64));
+        assert_eq!(err.fields["min"], serde_json::json!(0.0));
+    }
+
+    /// An id is a label from 0 up; a negative one is out of that range, at
+    /// the customer's position.
+    #[test]
+    fn a_negative_id_is_out_of_range_at_its_customer() {
+        let customers = [
+            customer(serde_json::json!({ "id": 1, "x": 1.0, "y": 0.0 })),
+            customer(serde_json::json!({ "id": -1, "x": 0.0, "y": 1.0 })),
+        ];
+        let err = solve((0.0, 0.0), &customers, &[], "nn", &quick()).expect_err("negative id");
+        assert_eq!(
+            err.fields,
+            serde_json::json!({ "code": "parameter_out_of_range", "parameter": "id",
+                "index": 1, "min": 0.0, "max": null, "got": -1.0 })
+        );
+    }
+
+    /// Whole numbers read as themselves, a fractional one does not read at
+    /// all: whether a count is whole is a matter of its type.
+    #[test]
+    fn whole_numbers_read_as_themselves_and_fractions_do_not() {
+        let config: InputConfig = serde_json::from_value(serde_json::json!({
+            "population_size": 12, "max_generations": 3.0, "max_iterations": 7,
+            "seed": u64::MAX, "max_vehicles": null,
+        }))
+        .expect("whole numbers");
+        assert_eq!(config.population_size, Some(12));
+        assert_eq!(config.max_generations, Some(3));
+        assert_eq!(config.max_iterations, Some(7));
+        assert_eq!(config.seed, Some(u64::MAX.into()));
+        assert_eq!(config.max_vehicles, None);
+        for field in [
+            "population_size",
+            "max_generations",
+            "max_iterations",
+            "seed",
+            "max_vehicles",
+        ] {
+            let err = serde_json::from_value::<InputConfig>(serde_json::Value::Object(
+                [(field.to_string(), serde_json::json!(2.5))]
+                    .into_iter()
+                    .collect(),
+            ))
+            .err()
+            .expect("a fraction");
+            assert!(
+                err.to_string().contains("must be a whole number, got 2.5"),
+                "{field}: {err}"
+            );
+            let err = serde_json::from_value::<InputConfig>(serde_json::Value::Object(
+                [(field.to_string(), serde_json::json!("2"))]
+                    .into_iter()
+                    .collect(),
+            ))
+            .err()
+            .expect("a string");
+            assert!(
+                err.to_string().contains("expected a whole number"),
+                "{field}: {err}"
+            );
         }
     }
 
