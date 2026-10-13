@@ -296,8 +296,13 @@ mod tests {
     fn every_documented_method_is_the_one_that_runs() {
         for method in ["nn", "savings", "ga", "alns"] {
             let mut request = problem(method);
-            request["config"] =
-                serde_json::json!({ "seed": 7, "max_generations": 20, "max_iterations": 50 });
+            // Each method with the settings it reads; a setting it does not read
+            // is refused.
+            request["config"] = match method {
+                "ga" => serde_json::json!({ "seed": 7, "max_generations": 20 }),
+                "alns" => serde_json::json!({ "seed": 7, "max_iterations": 50 }),
+                _ => serde_json::json!({}),
+            };
             let (code, body) = solve(&request);
             assert_eq!(code, 0, "{method}: {body}");
             assert_eq!(body["method_used"], method);

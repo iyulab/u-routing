@@ -549,6 +549,7 @@ pub(crate) fn solve(
     config: &InputConfig,
 ) -> Result<VrpOutput, ServiceError> {
     let method = Method::parse(method)?;
+    refuse_unread_settings(method, config)?;
     // At least one route, or no limit at all: 0 is a range refusal like -1.
     let max_vehicles = config
         .max_vehicles
@@ -754,6 +755,44 @@ fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
             json!({ "parameter": parameter, "method": method.name() }),
         ),
     }
+}
+
+/// Refuses a setting the method does not read, naming the methods that do.
+/// Run without it, the request would claim a setting that changed nothing; it
+/// used to be accepted and ignored.
+fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), ServiceError> {
+    use Method::*;
+    let given = [
+        (
+            "population_size",
+            cfg.population_size.is_some(),
+            &[Genetic][..],
+        ),
+        (
+            "max_generations",
+            cfg.max_generations.is_some(),
+            &[Genetic][..],
+        ),
+        ("mutation_rate", cfg.mutation_rate.is_some(), &[Genetic][..]),
+        ("elite_ratio", cfg.elite_ratio.is_some(), &[Genetic][..]),
+        ("max_iterations", cfg.max_iterations.is_some(), &[Alns][..]),
+        ("seed", cfg.seed.is_some(), &[Genetic, Alns][..]),
+    ];
+    for (setting, present, readers) in given {
+        if present && !readers.contains(&method) {
+            let names: Vec<&str> = readers.iter().map(|m| m.name()).collect();
+            return Err(ServiceError::new(
+                "invalid_option",
+                format!(
+                    "config.{setting} is read by {} -- method \"{}\" does not read it; leave it out",
+                    names.join(", "),
+                    method.name()
+                ),
+                json!({ "parameter": format!("config.{setting}"), "method": method.name() }),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Converts internal route indices back to original customer IDs.
@@ -1253,13 +1292,22 @@ mod tests {
             .collect()
     }
 
-    fn quick() -> InputConfig {
-        InputConfig {
-            population_size: Some(10),
-            max_generations: Some(5),
-            max_iterations: Some(20),
-            seed: Some(1),
-            ..InputConfig::default()
+    /// A short run of `method`: the settings it reads, at small values -- a
+    /// setting a method does not read is refused.
+    fn quick(method: &str) -> InputConfig {
+        match method {
+            "ga" => InputConfig {
+                population_size: Some(10),
+                max_generations: Some(5),
+                seed: Some(1),
+                ..InputConfig::default()
+            },
+            "alns" => InputConfig {
+                max_iterations: Some(20),
+                seed: Some(1),
+                ..InputConfig::default()
+            },
+            _ => InputConfig::default(),
         }
     }
 
@@ -1301,12 +1349,12 @@ mod tests {
                 _ => Vehicle::new(0, 1000).with_max_duration(47.0),
             };
             for max_vehicles in [None, Some(3)] {
-                let config = InputConfig {
+                let config = |method: &str| InputConfig {
                     max_vehicles,
-                    ..quick()
+                    ..quick(method)
                 };
                 for method in ["nn", "savings", "ga", "alns"] {
-                    let out = solve((0.0, 0.0), &customers, &fleet, method, &config)
+                    let out = solve((0.0, 0.0), &customers, &fleet, method, &config(method))
                         .unwrap_or_else(|e| panic!("{method}: {e:?}"));
                     assert!(out.unassigned.contains(&9), "{method} {limit}: {out:?}");
                     let evaluator = crate::evaluation::RouteEvaluator::new(&internal, &dm, &oracle);
@@ -1334,7 +1382,7 @@ mod tests {
         let fleet = vec![vehicle(
             serde_json::json!({ "capacity": 10.0, "max_distance": 0.0 }),
         )];
-        let e = solve((0.0, 0.0), &customers, &fleet, "nn", &quick()).expect_err("0 distance");
+        let e = solve((0.0, 0.0), &customers, &fleet, "nn", &quick("nn")).expect_err("0 distance");
         // A limit must be > 0: zero itself is refused, so the bound is open.
         assert_eq!(
             e.fields,
@@ -1353,12 +1401,13 @@ mod tests {
             vehicle(serde_json::json!({ "capacity": 100.0 })),
         ];
         for method in ["savings", "ga", "alns"] {
-            let e = solve((0.0, 0.0), &customers, &fleet, method, &quick()).expect_err(method);
+            let e =
+                solve((0.0, 0.0), &customers, &fleet, method, &quick(method)).expect_err(method);
             assert_eq!(e.fields["code"], "mixed_fleet", "{method}");
             assert_eq!(e.fields["parameter"], "max_duration", "{method}");
             assert_eq!(e.fields["index"], 1, "{method}");
         }
-        assert!(solve((0.0, 0.0), &customers, &fleet, "nn", &quick()).is_ok());
+        assert!(solve((0.0, 0.0), &customers, &fleet, "nn", &quick("nn")).is_ok());
     }
 
     // ---- max_vehicles ----
@@ -1372,7 +1421,14 @@ mod tests {
         let customers = ring(8);
         let one_capacity = fleet(&[10.0]);
         for method in ["savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &customers, &one_capacity, method, &quick()).expect(method);
+            let out = solve(
+                (0.0, 0.0),
+                &customers,
+                &one_capacity,
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert!(
                 out.num_vehicles > one_capacity.len(),
                 "{method}: expected more routes than the list length, got {}",
@@ -1401,12 +1457,12 @@ mod tests {
     #[test]
     fn every_method_keeps_to_a_fixed_fleet_and_reports_what_does_not_fit() {
         let two = fleet(&[20.0, 20.0]);
-        let fixed = InputConfig {
+        let fixed = |method: &str| InputConfig {
             max_vehicles: Some(2),
-            ..quick()
+            ..quick(method)
         };
         for method in ["nn", "savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &six_of_ten(), &two, method, &fixed).expect(method);
+            let out = solve((0.0, 0.0), &six_of_ten(), &two, method, &fixed(method)).expect(method);
             assert!(
                 out.num_vehicles <= 2,
                 "{method}: {} routes",
@@ -1428,7 +1484,7 @@ mod tests {
     fn without_the_limit_the_same_request_opens_more_routes() {
         let two = fleet(&[20.0, 20.0]);
         for method in ["savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &six_of_ten(), &two, method, &quick()).expect(method);
+            let out = solve((0.0, 0.0), &six_of_ten(), &two, method, &quick(method)).expect(method);
             assert_eq!(out.num_vehicles, 3, "{method}");
             assert!(out.unassigned.is_empty(), "{method}");
         }
@@ -1439,12 +1495,13 @@ mod tests {
     #[test]
     fn spare_capacity_is_used_before_a_customer_is_left_out() {
         let roomy = fleet(&[30.0]);
-        let fixed = InputConfig {
+        let fixed = |method: &str| InputConfig {
             max_vehicles: Some(2),
-            ..quick()
+            ..quick(method)
         };
         for method in ["savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &six_of_ten(), &roomy, method, &fixed).expect(method);
+            let out =
+                solve((0.0, 0.0), &six_of_ten(), &roomy, method, &fixed(method)).expect(method);
             assert!(out.num_vehicles <= 2, "{method}: {}", out.num_vehicles);
             assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
         }
@@ -1456,14 +1513,27 @@ mod tests {
     fn a_max_vehicles_the_plan_fits_is_accepted() {
         let customers = ring(8);
         let one_capacity = fleet(&[10.0]);
-        let roomy = InputConfig {
+        let roomy = |method: &str| InputConfig {
             max_vehicles: Some(8),
-            ..quick()
+            ..quick(method)
         };
         for method in ["savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &customers, &one_capacity, method, &roomy).expect(method);
-            let free =
-                solve((0.0, 0.0), &customers, &one_capacity, method, &quick()).expect(method);
+            let out = solve(
+                (0.0, 0.0),
+                &customers,
+                &one_capacity,
+                method,
+                &roomy(method),
+            )
+            .expect(method);
+            let free = solve(
+                (0.0, 0.0),
+                &customers,
+                &one_capacity,
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert_eq!(out.routes, free.routes, "{method}");
             assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
         }
@@ -1482,9 +1552,9 @@ mod tests {
                 }))
             })
             .collect();
-        let fixed = InputConfig {
+        let fixed = |method: &str| InputConfig {
             max_vehicles: Some(2),
-            ..quick()
+            ..quick(method)
         };
         for method in ["nn", "savings", "ga", "alns"] {
             let out = solve(
@@ -1492,7 +1562,7 @@ mod tests {
                 &customers,
                 &fleet(&[100.0, 100.0]),
                 method,
-                &fixed,
+                &fixed(method),
             )
             .expect(method);
             assert!(out.num_vehicles <= 2, "{method}");
@@ -1520,12 +1590,18 @@ mod tests {
     #[test]
     fn a_max_vehicles_below_one_is_refused_as_stated() {
         for (got, method) in [(0, "ga"), (-1, "nn")] {
-            let config = InputConfig {
+            let config = |method: &str| InputConfig {
                 max_vehicles: Some(got),
-                ..quick()
+                ..quick(method)
             };
-            let err =
-                solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config).expect_err("below 1");
+            let err = solve(
+                (0.0, 0.0),
+                &ring(4),
+                &fleet(&[10.0]),
+                method,
+                &config(method),
+            )
+            .expect_err("below 1");
             assert_eq!(
                 err.fields,
                 serde_json::json!({ "code": "parameter_out_of_range",
@@ -1549,18 +1625,19 @@ mod tests {
         let customers = ring(4);
         let mixed = fleet(&[10.0, 100.0]);
         for method in ["savings", "ga", "alns"] {
-            let err = solve((0.0, 0.0), &customers, &mixed, method, &quick()).expect_err(method);
+            let err =
+                solve((0.0, 0.0), &customers, &mixed, method, &quick(method)).expect_err(method);
             assert!(
                 err.message.contains(&format!("\"{method}\"")) && err.message.contains("capacit"),
                 "{method}: {err}"
             );
         }
-        assert!(solve((0.0, 0.0), &customers, &mixed, "nn", &quick()).is_ok());
+        assert!(solve((0.0, 0.0), &customers, &mixed, "nn", &quick("nn")).is_ok());
 
         let uniform = fleet(&[20.0, 20.0]);
         for method in ["nn", "savings", "ga", "alns"] {
             assert!(
-                solve((0.0, 0.0), &customers, &uniform, method, &quick()).is_ok(),
+                solve((0.0, 0.0), &customers, &uniform, method, &quick(method)).is_ok(),
                 "{method}"
             );
         }
@@ -1612,7 +1689,7 @@ mod tests {
         let customers = clashing_windows();
         let two = fleet(&[100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &customers, &two, method, &quick()).expect(method);
+            let out = solve((0.0, 0.0), &customers, &two, method, &quick(method)).expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -1647,7 +1724,7 @@ mod tests {
         let customers = ordered_ring();
         let fleet = fleet(&[100.0, 100.0, 100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick()).expect(method);
+            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick(method)).expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -1667,7 +1744,7 @@ mod tests {
         })));
         let fleet = fleet(&[100.0, 100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick()).expect(method);
+            let out = solve((0.0, 0.0), &customers, &fleet, method, &quick(method)).expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -1686,12 +1763,18 @@ mod tests {
         }))];
         let no_fleet = InputConfig {
             max_vehicles: Some(0),
-            ..quick()
+            ..quick("nn")
         };
         let errors = [
-            solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
-                .expect_err("mixed fleet"),
-            solve((0.0, 0.0), &fraction, &[], "nn", &quick()).expect_err("fractional demand"),
+            solve(
+                (0.0, 0.0),
+                &ring(2),
+                &fleet(&[10.0, 100.0]),
+                "ga",
+                &quick("ga"),
+            )
+            .expect_err("mixed fleet"),
+            solve((0.0, 0.0), &fraction, &[], "nn", &quick("nn")).expect_err("fractional demand"),
             solve((0.0, 0.0), &ring(8), &fleet(&[10.0]), "ga", &no_fleet)
                 .expect_err("zero max_vehicles"),
         ];
@@ -1707,7 +1790,7 @@ mod tests {
         let one = |json: serde_json::Value| [customer(json)];
         let cases: Vec<(ServiceError, &str, serde_json::Value)> = vec![
             (
-                solve((0.0, 0.0), &[], &[], "tabu", &quick()).expect_err("method"),
+                solve((0.0, 0.0), &[], &[], "tabu", &quick("tabu")).expect_err("method"),
                 "unknown_option",
                 serde_json::json!({ "parameter": "method", "got": "tabu" }),
             ),
@@ -1720,7 +1803,7 @@ mod tests {
                     ],
                     &[],
                     "nn",
-                    &quick(),
+                    &quick("nn"),
                 )
                 .expect_err("duplicate"),
                 "duplicate_id",
@@ -1732,14 +1815,14 @@ mod tests {
                     &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": 0.5 })),
                     &[],
                     "nn",
-                    &quick(),
+                    &quick("nn"),
                 )
                 .expect_err("fraction"),
                 "not_whole_units",
                 serde_json::json!({ "parameter": "demand", "index": 0, "id": 9, "value": 0.5 }),
             ),
             (
-                solve((0.0, 0.0), &[], &fleet(&[10.0, 2.5]), "nn", &quick())
+                solve((0.0, 0.0), &[], &fleet(&[10.0, 2.5]), "nn", &quick("nn"))
                     .expect_err("capacity"),
                 "not_whole_units",
                 serde_json::json!({ "parameter": "capacity", "index": 1, "id": null }),
@@ -1750,7 +1833,7 @@ mod tests {
                     &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": -3.0 })),
                     &[],
                     "nn",
-                    &quick(),
+                    &quick("nn"),
                 )
                 .expect_err("negative"),
                 "parameter_out_of_range",
@@ -1758,7 +1841,7 @@ mod tests {
                                     "min": 0.0, "max": f64::from(i32::MAX), "got": -3.0 }),
             ),
             (
-                solve((0.0, 0.0), &[], &fleet(&[10.0, 3e9]), "nn", &quick())
+                solve((0.0, 0.0), &[], &fleet(&[10.0, 3e9]), "nn", &quick("nn"))
                     .expect_err("too large"),
                 "parameter_out_of_range",
                 serde_json::json!({ "parameter": "capacity", "index": 1, "id": null,
@@ -1770,14 +1853,14 @@ mod tests {
                     &one(serde_json::json!({ "id": 3, "x": 1.0, "y": 0.0, "time_window": [4.0, 1.0] })),
                     &[],
                     "nn",
-                    &quick(),
+                    &quick("nn"),
                 )
                 .expect_err("window"),
                 "invalid_time_window",
                 serde_json::json!({ "id": 3, "index": 0, "ready": 4.0, "due": 1.0 }),
             ),
             (
-                solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick())
+                solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), "ga", &quick("ga"))
                     .expect_err("mixed"),
                 "mixed_fleet",
                 serde_json::json!({ "method": "ga", "capacities": [10, 100], "index": 1 }),
@@ -1790,7 +1873,7 @@ mod tests {
                     "ga",
                     &InputConfig {
                         max_vehicles: Some(0),
-                        ..quick()
+                        ..quick("ga")
                     },
                 )
                 .expect_err("zero"),
@@ -1806,7 +1889,7 @@ mod tests {
                     "ga",
                     &InputConfig {
                         population_size: Some(1),
-                        ..quick()
+                        ..quick("ga")
                     },
                 )
                 .expect_err("settings"),
@@ -1822,7 +1905,7 @@ mod tests {
                     "alns",
                     &InputConfig {
                         max_iterations: Some(0),
-                        ..quick()
+                        ..quick("alns")
                     },
                 )
                 .expect_err("no iterations"),
@@ -1841,6 +1924,75 @@ mod tests {
 
     // ---- whole numbers ----
 
+    /// A setting the method does not read is refused -- named, with the
+    /// methods that do -- rather than accepted and ignored.
+    #[test]
+    fn a_setting_the_method_does_not_read_is_refused() {
+        let cases = [
+            (
+                "nn",
+                InputConfig {
+                    population_size: Some(10),
+                    ..InputConfig::default()
+                },
+                "population_size",
+                "ga",
+            ),
+            (
+                "savings",
+                InputConfig {
+                    seed: Some(1),
+                    ..InputConfig::default()
+                },
+                "seed",
+                "ga, alns",
+            ),
+            (
+                "ga",
+                InputConfig {
+                    max_iterations: Some(20),
+                    ..InputConfig::default()
+                },
+                "max_iterations",
+                "alns",
+            ),
+            (
+                "alns",
+                InputConfig {
+                    elite_ratio: Some(0.2),
+                    ..InputConfig::default()
+                },
+                "elite_ratio",
+                "ga",
+            ),
+        ];
+        for (method, config, setting, readers) in cases {
+            let err =
+                solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config).expect_err(method);
+            assert_eq!(
+                err.fields,
+                serde_json::json!({ "code": "invalid_option",
+                    "parameter": format!("config.{setting}"), "method": method }),
+                "{method}"
+            );
+            assert!(
+                err.message.contains(&format!("read by {readers}")),
+                "{}",
+                err.message
+            );
+        }
+        for method in ["nn", "savings", "ga", "alns"] {
+            assert!(solve(
+                (0.0, 0.0),
+                &ring(4),
+                &fleet(&[10.0]),
+                method,
+                &quick(method)
+            )
+            .is_ok());
+        }
+    }
+
     /// A count is a whole number read signed: a negative one reaches the
     /// runner's own check and is refused with the runner's bounds, the same
     /// refusal a too-small positive one gets.
@@ -1858,7 +2010,7 @@ mod tests {
         for got in [-1, 1] {
             let config = InputConfig {
                 population_size: Some(got),
-                ..quick()
+                ..quick("ga")
             };
             assert_eq!(
                 refused("ga", config),
@@ -1868,7 +2020,7 @@ mod tests {
         for got in [-1, 0] {
             let config = InputConfig {
                 max_generations: Some(got),
-                ..quick()
+                ..quick("ga")
             };
             assert_eq!(
                 refused("ga", config),
@@ -1876,7 +2028,7 @@ mod tests {
             );
             let config = InputConfig {
                 max_iterations: Some(got),
-                ..quick()
+                ..quick("alns")
             };
             assert_eq!(
                 refused("alns", config),
@@ -1890,7 +2042,7 @@ mod tests {
             "ga",
             &InputConfig {
                 population_size: Some(-1),
-                ..quick()
+                ..quick("ga")
             },
         )
         .expect_err("negative");
@@ -1904,23 +2056,36 @@ mod tests {
     #[test]
     fn a_negative_seed_is_out_of_range() {
         for method in ["ga", "alns"] {
-            let config = InputConfig {
+            let config = |method: &str| InputConfig {
                 seed: Some(-1),
-                ..quick()
+                ..quick(method)
             };
-            let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config)
-                .expect_err("negative seed");
+            let err = solve(
+                (0.0, 0.0),
+                &ring(4),
+                &fleet(&[10.0]),
+                method,
+                &config(method),
+            )
+            .expect_err("negative seed");
             assert_eq!(
                 err.fields,
                 serde_json::json!({ "code": "parameter_out_of_range", "parameter": "config.seed",
                     "method": method, "min": 0.0, "max": null, "got": -1.0 })
             );
-            let config = InputConfig {
+            let config = |method: &str| InputConfig {
                 seed: Some(u64::MAX.into()),
-                ..quick()
+                ..quick(method)
             };
             assert!(
-                solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), method, &config).is_ok(),
+                solve(
+                    (0.0, 0.0),
+                    &ring(4),
+                    &fleet(&[10.0]),
+                    method,
+                    &config(method)
+                )
+                .is_ok(),
                 "{method}: the largest seed"
             );
         }
@@ -1938,7 +2103,7 @@ mod tests {
             customer(serde_json::json!({ "id": 1, "x": 1.0, "y": 0.0 })),
             customer(serde_json::json!({ "id": -1, "x": 0.0, "y": 1.0 })),
         ];
-        let err = solve((0.0, 0.0), &customers, &[], "nn", &quick()).expect_err("negative id");
+        let err = solve((0.0, 0.0), &customers, &[], "nn", &quick("nn")).expect_err("negative id");
         assert_eq!(
             err.fields,
             serde_json::json!({ "code": "parameter_out_of_range", "parameter": "id",

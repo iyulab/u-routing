@@ -30,15 +30,21 @@ public class RequestContractTests
             ? [new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000), new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000)]
             : [new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000)],
         Method = method,
-        Config = new VrpConfig
+        // Every setting the method reads -- one it does not read is refused, so the
+        // settings are spread over the methods and every one is written by some run.
+        Config = method switch
         {
-            PopulationSize = 10,
-            MaxGenerations = 5,
-            MutationRate = 0.1,
-            EliteRatio = 0.2,
-            MaxIterations = 20,
-            Seed = 7,
-            MaxVehicles = 3,
+            RoutingMethod.Genetic => new VrpConfig
+            {
+                PopulationSize = 10,
+                MaxGenerations = 5,
+                MutationRate = 0.1,
+                EliteRatio = 0.2,
+                Seed = 7,
+                MaxVehicles = 3,
+            },
+            RoutingMethod.Alns => new VrpConfig { MaxIterations = 20, Seed = 7, MaxVehicles = 3 },
+            _ => new VrpConfig { MaxVehicles = 3 },
         },
     };
 

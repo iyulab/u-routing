@@ -292,10 +292,13 @@ fn solve_vrp() -> Value {
         "vehicles": [{ "capacity": 10.0, "max_distance": 1000.0, "max_duration": 1000.0 }],
         "depot_x": 0.0,
         "depot_y": 0.0,
-        "method": "nn",
+        // `ga`, with the settings it reads: a setting the method does not read
+        // is refused, and the keys of `config` are measured from the refusal of
+        // an unknown one, which lists them all.
+        "method": "ga",
         "config": {
             "population_size": 4, "max_generations": 2, "mutation_rate": 0.1, "elite_ratio": 0.25,
-            "max_iterations": 5, "seed": 1, "max_vehicles": 2
+            "seed": 1, "max_vehicles": 2
         }
     })
 }

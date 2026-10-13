@@ -8,6 +8,15 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** a `config` setting the request's `method` does not read is
+  refused as `invalid_option` (`parameter` = the setting, `method`), with the
+  methods that read it in the message: `population_size`, `max_generations`,
+  `mutation_rate` and `elite_ratio` are read by `ga`, `max_iterations` by
+  `alns`, `seed` by both. They used to be accepted and ignored -- a `"nn"`
+  request with a population size ran exactly as one without.
+
 ### Added
 
 - `src/ffi/request_keys.json` lists the keys and option names `urouting_solve_vrp`

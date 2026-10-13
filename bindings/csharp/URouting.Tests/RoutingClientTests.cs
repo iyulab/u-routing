@@ -31,7 +31,12 @@ public class RoutingClientTests
         {
             Vehicles = method == RoutingMethod.NearestNeighbor ? [new(30), new(30)] : [new(30)],
             Method = method,
-            Config = new VrpConfig { Seed = 7, MaxGenerations = 20, MaxIterations = 50 },
+            Config = method switch
+            {
+                RoutingMethod.Genetic => new VrpConfig { Seed = 7, MaxGenerations = 20 },
+                RoutingMethod.Alns => new VrpConfig { Seed = 7, MaxIterations = 50 },
+                _ => null,
+            },
         };
 
         var solution = _client.SolveVrp(request);
@@ -71,6 +76,19 @@ public class RoutingClientTests
         });
         Assert.True(solution.NumVehicles <= 2);
         Assert.NotEmpty(solution.Unassigned);
+    }
+
+    [Fact]
+    public void A_setting_the_method_does_not_read_is_refused()
+    {
+        var x = Assert.Throws<RoutingException>(() => _client.SolveVrp(new VrpRequest(0, 0, Customers)
+        {
+            Method = RoutingMethod.NearestNeighbor,
+            Config = new VrpConfig { PopulationSize = 10 },
+        }));
+        Assert.Equal("invalid_option", x.Reason);
+        Assert.Equal("config.population_size", x.Details!.Value.GetProperty("parameter").GetString());
+        Assert.Equal("nn", x.Details!.Value.GetProperty("method").GetString());
     }
 
     [Fact]

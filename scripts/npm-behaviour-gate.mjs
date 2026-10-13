@@ -24,7 +24,12 @@ let checks = 0
 const ok = (c, msg) => { checks++; if (!c) throw new Error(msg) }
 
 const depot = { x: 0, y: 0 }
-const base = { population_size: 10, max_generations: 5, max_iterations: 20, seed: 1 }
+// The settings each method reads -- one it does not read is refused.
+const settings = {
+  ga: { population_size: 10, max_generations: 5, seed: 1 },
+  alns: { max_iterations: 20, seed: 1 },
+}
+const base = (method) => settings[method] || {}
 // Six customers of demand 10, two vehicles of 20: one route's worth
 // cannot be carried.
 const customers = []
@@ -35,7 +40,7 @@ for (let i = 1; i <= 6; i++) {
 const two = [{ capacity: 20 }, { capacity: 20 }]
 for (const method of ['nn', 'savings', 'ga', 'alns']) {
   const out = m.solve_vrp({ depot, customers, vehicles: two, method,
-                            config: Object.assign({}, base, { max_vehicles: 2 }) })
+                            config: Object.assign({}, base(method), { max_vehicles: 2 }) })
   ok(out.num_vehicles <= 2, method + ': ' + out.num_vehicles + ' routes')
   const served = out.routes.reduce((n, r) => n + r.length, 0)
   ok(out.unassigned.length !== 0 && served + out.unassigned.length === 6,
@@ -44,7 +49,7 @@ for (const method of ['nn', 'savings', 'ga', 'alns']) {
 // Without the limit the same request needs a third route, so the
 // check above measures the limit.
 for (const method of ['savings', 'ga', 'alns']) {
-  const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base })
+  const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base(method) })
   ok(out.num_vehicles === 3, method + ': unlimited gave ' + out.num_vehicles)
 }
 
@@ -52,8 +57,15 @@ for (const method of ['savings', 'ga', 'alns']) {
 // capacity, and savings/ga/alns still open as many routes as needed.
 for (const method of ['savings', 'ga', 'alns']) {
   const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20 }],
-                            method, config: base })
+                            method, config: base(method) })
   ok(out.num_vehicles > 1, method + ': a single capacity entry became a fleet cap')
   ok(out.unassigned.length === 0, method + ': unexpected unassigned ' + JSON.stringify(out.unassigned))
 }
-console.log(`max_vehicles behaviour gate: ok (${checks} checks)`)
+// A setting the method does not read is refused, not ignored.
+let refused = null
+try {
+  m.solve_vrp({ depot, customers, vehicles: two, method: 'nn', config: { population_size: 10 } })
+} catch (e) { refused = e }
+ok(refused && refused.code === 'invalid_option' && refused.parameter === 'config.population_size',
+   'nn with population_size: ' + (refused ? refused.code + ' ' + refused.parameter : 'accepted'))
+console.log(`behaviour gate: ok (${checks} checks)`)

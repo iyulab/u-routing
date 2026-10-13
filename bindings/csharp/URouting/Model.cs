@@ -36,8 +36,11 @@ public sealed record Customer(
 public sealed record Vehicle(double? Capacity = null, double? MaxDistance = null, double? MaxDuration = null);
 
 /// <summary>
-/// Solver settings; each method reads the ones that apply to it, and a <c>null</c> takes the
-/// engine's default. <see cref="MaxVehicles"/> is the fixed fleet every method keeps to.
+/// Solver settings; a <c>null</c> takes the engine's default. Each method reads the ones that
+/// apply to it -- the GA ones by <see cref="RoutingMethod.Genetic"/>, <see cref="MaxIterations"/>
+/// by <see cref="RoutingMethod.Alns"/>, <see cref="Seed"/> by both -- and a setting the request's
+/// method does not read is refused (<c>invalid_option</c>), not ignored.
+/// <see cref="MaxVehicles"/> is the fixed fleet every method keeps to.
 /// </summary>
 public sealed record VrpConfig
 {
