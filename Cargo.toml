@@ -1,6 +1,6 @@
 [package]
 name = "u-routing"
-version = "0.14.0"
+version = "0.15.0"
 rust-version = "1.87"
 edition = "2021"
 authors = ["iyulab"]
@@ -30,7 +30,7 @@ ffi = ["dep:serde_json", "dep:libc", "dep:serde_path_to_error"]
 
 [dependencies]
 u-metaheur = "0.8"
-u-numflow = "0.11"
+u-numflow = "0.12"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 # Derives the TypeScript declaration from the same struct serde reads, so the

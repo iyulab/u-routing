@@ -8,6 +8,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-13
+
 ### Changed
 
 - **Breaking:** a `config` setting the request's `method` does not read is
