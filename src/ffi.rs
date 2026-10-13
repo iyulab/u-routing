@@ -415,6 +415,33 @@ mod tests {
         }
     }
 
+    /// A negative demand is outside the range a load takes, with its bounds;
+    /// a fractional one is a matter of the unit.
+    #[test]
+    fn demand_refusals_reach_the_c_body() {
+        let mut request = problem("nn");
+        request["customers"][1]["demand"] = serde_json::json!(-4);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        let mut expected = serde_json::json!({
+            "code": "parameter_out_of_range",
+            "parameter": "demand",
+            "index": 1,
+            "id": request["customers"][1]["id"],
+            "min": 0.0,
+            "max": f64::from(i32::MAX),
+            "got": -4.0,
+        });
+        expected["error"] = body["error"].clone();
+        assert_eq!(body, expected);
+
+        request["customers"][1]["demand"] = serde_json::json!(1.5);
+        let (code, body) = solve(&request);
+        assert_eq!(code, -3, "{body}");
+        assert_eq!(body["code"], "not_whole_units", "{body}");
+        assert_eq!(body["value"], 1.5, "{body}");
+    }
+
     /// The C body carries a negative count as the range refusal it is, and a
     /// fractional one as malformed at the field it sits in.
     #[test]

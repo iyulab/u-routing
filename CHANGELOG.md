@@ -36,6 +36,14 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 - **Breaking:** a `config.max_vehicles` below 1 is `parameter_out_of_range`
   `{ parameter: "config.max_vehicles", min: 1, max: null, got }` — 0 used to be
   `invalid_option` with `value: 0`, and a negative value `malformed_input`.
+- **Breaking:** a whole demand or capacity outside 0 to 2147483647 is
+  `parameter_out_of_range` `{ parameter: "demand" | "capacity", index, id, min: 0,
+  max: 2147483647, got }` — WebAssembly and the C ABI alike. It was
+  `not_whole_units`, which now means only a fractional amount.
+- **Breaking:** a GA `config.elite_ratio` of 1 — every individual an elite — is
+  refused as `parameter_out_of_range` with `exclusive_min: 0` and
+  `exclusive_max: 1`; the accepted range is (0, 1), previously stated as (0, 1]
+  with 1 refused as `invalid_option`.
 - C ABI: a request that does not deserialize names the field it stopped at —
   `parameter` (`customers[1].id`, `config.population_size`) and, inside an array,
   `index` — as the WebAssembly binding does, instead of `request` for every

@@ -47,7 +47,7 @@ public sealed record VrpConfig
     public int? MaxGenerations { get; init; }
     /// <summary>GA mutation rate in (0, 1] (default 0.1).</summary>
     public double? MutationRate { get; init; }
-    /// <summary>GA elite ratio in (0, 1] (default 0.1).</summary>
+    /// <summary>GA elite ratio in (0, 1) (default 0.1).</summary>
     public double? EliteRatio { get; init; }
     /// <summary>ALNS iterations (default 500).</summary>
     public int? MaxIterations { get; init; }

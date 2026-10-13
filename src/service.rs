@@ -794,7 +794,9 @@ fn apply_local_search(
 /// The model counts in `i32` and the wire carries JSON numbers. A value the
 /// model would have to round, or clamp into range, is refused: solving a
 /// demand of `2.4` as `2` answers a different problem from the one asked, and
-/// reports it as solved.
+/// reports it as solved. A fraction is `not_whole_units` -- the unit is the
+/// thing to change -- and a whole number outside `[0, i32::MAX]` is
+/// `parameter_out_of_range` with those bounds.
 ///
 /// The refusal names the field (`"demand"` or `"capacity"`), the position of
 /// the entry in its list, and the customer's `id` when there is one.
@@ -805,21 +807,32 @@ fn whole_units(
     id: Option<usize>,
     what: impl FnOnce() -> String,
 ) -> Result<i32, ServiceError> {
-    if value.fract() == 0.0 && (0.0..=f64::from(i32::MAX)).contains(&value) {
-        Ok(value as i32)
-    } else {
-        Err(ServiceError::new(
+    let accepted = 0.0..=f64::from(i32::MAX);
+    if value.fract() != 0.0 {
+        return Err(ServiceError::new(
             "not_whole_units",
             format!(
-                "{} is {value}; it must be a whole number of units from 0 to {} -- \
-                 scale the unit (kilograms to grams, say) to keep a fractional amount",
+                "{} is {value}; it must be a whole number of units -- scale the unit \
+                 (kilograms to grams, say) to keep a fractional amount",
+                what(),
+            ),
+            json!({ "parameter": parameter, "index": index, "id": id, "value": value }),
+        ));
+    }
+    if !accepted.contains(&value) {
+        let mut fields = json!({ "parameter": parameter, "index": index, "id": id, "got": value });
+        Bounds::of(accepted).insert_into(&mut fields);
+        return Err(ServiceError::new(
+            "parameter_out_of_range",
+            format!(
+                "{} is {value}; it must be from 0 to {} units",
                 what(),
                 i32::MAX
             ),
-            // A NaN or an infinity is not a JSON number; it crosses as `null`.
-            json!({ "parameter": parameter, "index": index, "id": id, "value": value }),
-        ))
+            fields,
+        ));
     }
+    Ok(value as i32)
 }
 
 /// Builds the vehicle list from input, falling back to a single unlimited vehicle.
@@ -980,17 +993,28 @@ fn solve_ga(
         .with_max_generations(max_generations)
         .with_parallel(false);
 
-    // Both are rates in (0, 1]: a value outside is refused, not clamped.
-    for (parameter, value) in [
-        ("config.mutation_rate", cfg.mutation_rate),
-        ("config.elite_ratio", cfg.elite_ratio),
+    // Rates, refused rather than clamped: a mutation rate in (0, 1]; an elite
+    // ratio in (0, 1), since a ratio of 1 makes every individual an elite.
+    for (parameter, value, accepted, text) in [
+        (
+            "config.mutation_rate",
+            cfg.mutation_rate,
+            (Bound::Excluded(0.0), Bound::Included(1.0)),
+            "(0, 1]",
+        ),
+        (
+            "config.elite_ratio",
+            cfg.elite_ratio,
+            (Bound::Excluded(0.0), Bound::Excluded(1.0)),
+            "(0, 1)",
+        ),
     ] {
-        if let Some(v) = value.filter(|v| !(*v > 0.0 && *v <= 1.0)) {
+        if let Some(v) = value.filter(|v| !accepted.contains(v)) {
             let mut fields = json!({ "parameter": parameter, "got": v });
-            Bounds::of((Bound::Excluded(0.0), Bound::Included(1.0))).insert_into(&mut fields);
+            Bounds::of(accepted).insert_into(&mut fields);
             return Err(ServiceError::new(
                 "parameter_out_of_range",
-                format!("{parameter} must be in (0, 1], got {v}"),
+                format!("{parameter} must be in {text}, got {v}"),
                 fields,
             ));
         }
@@ -1723,6 +1747,26 @@ mod tests {
             (
                 solve(
                     (0.0, 0.0),
+                    &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": -3.0 })),
+                    &[],
+                    "nn",
+                    &quick(),
+                )
+                .expect_err("negative"),
+                "parameter_out_of_range",
+                serde_json::json!({ "parameter": "demand", "index": 0, "id": 9,
+                                    "min": 0.0, "max": f64::from(i32::MAX), "got": -3.0 }),
+            ),
+            (
+                solve((0.0, 0.0), &[], &fleet(&[10.0, 3e9]), "nn", &quick())
+                    .expect_err("too large"),
+                "parameter_out_of_range",
+                serde_json::json!({ "parameter": "capacity", "index": 1, "id": null,
+                                    "min": 0.0, "max": f64::from(i32::MAX), "got": 3e9 }),
+            ),
+            (
+                solve(
+                    (0.0, 0.0),
                     &one(serde_json::json!({ "id": 3, "x": 1.0, "y": 0.0, "time_window": [4.0, 1.0] })),
                     &[],
                     "nn",
@@ -2024,10 +2068,11 @@ mod tests {
 
     // ---- GA: elite_ratio too high ----
 
+    /// A ratio of 1 makes every individual an elite in any population: a
+    /// range refusal whose upper end is open, not a combination.
     #[test]
     fn ga_elite_ratio_fills_population() {
         let (customers, dm) = test_customers(3);
-        // elite_ratio 1.0 with pop=2 makes every individual elite → validation error
         let cfg = InputConfig {
             population_size: Some(2),
             max_generations: Some(5),
@@ -2035,10 +2080,13 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, 100, RouteLimits::NONE, &cfg);
-        assert!(
-            result.is_err(),
-            "elite_ratio filling entire population should fail"
+        let err = solve_ga(&customers, &dm, 100, RouteLimits::NONE, &cfg)
+            .expect_err("elite_ratio filling entire population");
+        assert_eq!(
+            err.fields,
+            json!({ "code": "parameter_out_of_range", "parameter": "config.elite_ratio",
+                    "min": null, "max": null, "exclusive_min": 0.0, "exclusive_max": 1.0,
+                    "got": 1.0 })
         );
     }
 
@@ -2067,7 +2115,6 @@ mod tests {
         for (mutation_rate, elite_ratio, parameter, got) in [
             (Some(5.0), None, "config.mutation_rate", 5.0),
             (Some(0.0), None, "config.mutation_rate", 0.0),
-            (None, Some(1.5), "config.elite_ratio", 1.5),
         ] {
             let cfg = InputConfig {
                 population_size: Some(10),

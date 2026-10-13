@@ -244,10 +244,12 @@ struct VrpInput {
 /// Throws an `Error` carrying `code` and the values behind it: an unknown
 /// method (`unknown_option`), a repeated customer id (`duplicate_id`), a time
 /// window with `ready > due` (`invalid_time_window`), a demand or capacity
-/// that is not a whole number of units (`not_whole_units`), a mixed fleet the
-/// method cannot model (`mixed_fleet`), a plan over `max_vehicles`
-/// (`routes_exceed_max_vehicles`), solver settings the method rejects
-/// (`invalid_option`), or an input of the wrong shape (`malformed_input`).
+/// that is not a whole number of units (`not_whole_units`), a number outside
+/// the range it takes -- a negative demand, a `max_vehicles` of 0, a solver
+/// setting the method's runner bounds (`parameter_out_of_range`), a mixed
+/// fleet the method cannot model (`mixed_fleet`), solver settings wrong only
+/// beside the others (`invalid_option`), or an input of the wrong shape
+/// (`malformed_input`).
 #[wasm_bindgen(unchecked_return_type = "VrpOutput")]
 pub fn solve_vrp(
     #[wasm_bindgen(unchecked_param_type = "VrpInput")] problem: JsValue,
