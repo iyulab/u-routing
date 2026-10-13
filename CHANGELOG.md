@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Maintained from 0.2.4 onward; earlier entries list release dates only (see git history).
 
+## [Unreleased]
+
+### Added
+
+- `src/ffi/request_keys.json` lists the keys and option names `urouting_solve_vrp`
+  reads, the keys of each customer, vehicle and `config` included. The crate's tests
+  measure it from the entry point itself -- a request with a key no request has, and a
+  value with a name no option has, at every level -- and fail when the file and the
+  entry point differ.
+- .NET: every request the client writes is tested against that list in both
+  directions -- each key and name it writes is one the engine reads, and each one the
+  engine reads can be written -- and a request with every setting given is solved under
+  each method against the native library.
+
 ## [0.14.0] - 2026-10-13
 
 Depends on u-numflow 0.11 and u-metaheur 0.8. The .NET client is `URouting` 0.11.0.

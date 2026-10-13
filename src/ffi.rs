@@ -511,3 +511,6 @@ mod tests {
         assert_eq!(code, -2);
     }
 }
+
+#[cfg(test)]
+mod request_keys;

@@ -1,0 +1,51 @@
+{
+  "$comment": "The keys and names each C entry point reads, measured from the entry points (src/ffi/request_keys.rs). Regenerate: UPDATE_REQUEST_KEYS=1 cargo test --features ffi --lib request_keys",
+  "entry_points": {
+    "urouting_solve_vrp": {
+      "properties": {
+        "config": {
+          "properties": {
+            "elite_ratio": {},
+            "max_generations": {},
+            "max_iterations": {},
+            "max_vehicles": {},
+            "mutation_rate": {},
+            "population_size": {},
+            "seed": {}
+          }
+        },
+        "customers": {
+          "items": {
+            "properties": {
+              "demand": {},
+              "id": {},
+              "service_time": {},
+              "time_window": {},
+              "x": {},
+              "y": {}
+            }
+          }
+        },
+        "depot_x": {},
+        "depot_y": {},
+        "method": {
+          "enum": [
+            "nn",
+            "savings",
+            "ga",
+            "alns"
+          ]
+        },
+        "vehicles": {
+          "items": {
+            "properties": {
+              "capacity": {},
+              "max_distance": {},
+              "max_duration": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}

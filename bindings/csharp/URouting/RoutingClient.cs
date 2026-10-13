@@ -13,6 +13,12 @@ public sealed class RoutingClient : IDisposable
     /// <summary>Sees each raw response body before it is read — the contract tests compare the two.</summary>
     internal Action<string>? ResponseObserver { get; set; }
 
+    /// <summary>
+    /// Sees each request body as it is sent, with the entry point it goes to — the contract
+    /// tests check every key and name in it against the ones the engine reads.
+    /// </summary>
+    internal Action<string, string>? RequestObserver { get; set; }
+
     public string GetVersion()
     {
         var ptr = NativeInterop.urouting_version();
@@ -29,7 +35,9 @@ public sealed class RoutingClient : IDisposable
     /// <exception cref="RoutingException">The engine refused the request.</exception>
     public VrpSolution SolveVrp(VrpRequest request)
     {
-        var body = Invoke(Body(request).ToJsonString());
+        var json = Body(request).ToJsonString();
+        RequestObserver?.Invoke(nameof(NativeInterop.urouting_solve_vrp), json);
+        var body = Invoke(json);
         ResponseObserver?.Invoke(body);
         return JsonSerializer.Deserialize(body, RoutingJson.Default.VrpSolution)
                ?? throw new RoutingException(-4, "The engine returned null.");
