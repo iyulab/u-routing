@@ -96,52 +96,14 @@ jobs:
           cd "$RUNNER_TEMP/smoke"
           node "$GITHUB_WORKSPACE/scripts/check-readme-snippets.mjs" "$PKG_NAME"
 
+      # The assertions live in scripts/npm-behaviour-gate.mjs rather than here,
+      # so the same file runs against a local build before the push that
+      # publishes (see its header). This is the last gate before `npm publish`.
       - name: Node behaviour gate (max_vehicles is kept, never ignored)
         run: |
           PKG_NAME=$(node -p "require('./pkg/package.json').name")
           cd "$RUNNER_TEMP/smoke"
-          node -e "
-          const m = require('$PKG_NAME');
-          const depot = { x: 0, y: 0 };
-          const base = { population_size: 10, max_generations: 5, max_iterations: 20, seed: 1 };
-          // Six customers of demand 10, two vehicles of 20: one route's worth
-          // cannot be carried.
-          const customers = [];
-          for (let i = 1; i <= 6; i++) {
-            const a = 2 * Math.PI * i / 6;
-            customers.push({ id: i, x: Math.cos(a) * 10, y: Math.sin(a) * 10, demand: 10 });
-          }
-          const two = [{ capacity: 20 }, { capacity: 20 }];
-          for (const method of ['nn', 'savings', 'ga', 'alns']) {
-            const out = m.solve_vrp({ depot, customers, vehicles: two, method,
-                                      config: Object.assign({}, base, { max_vehicles: 2 }) });
-            if (out.num_vehicles > 2) throw new Error(method + ': ' + out.num_vehicles + ' routes');
-            const served = out.routes.reduce((n, r) => n + r.length, 0);
-            if (out.unassigned.length === 0 || served + out.unassigned.length !== 6) {
-              throw new Error(method + ': unassigned ' + JSON.stringify(out.unassigned));
-            }
-          }
-          // Without the limit the same request needs a third route, so the
-          // check above measures the limit.
-          for (const method of ['savings', 'ga', 'alns']) {
-            const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base });
-            if (out.num_vehicles !== 3) throw new Error(method + ': unlimited gave ' + out.num_vehicles);
-          }
-
-          // The length of vehicles is not a limit: a single entry states one
-          // capacity, and savings/ga/alns still open as many routes as needed.
-          for (const method of ['savings', 'ga', 'alns']) {
-            const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20 }],
-                                      method, config: base });
-            if (!(out.num_vehicles > 1)) {
-              throw new Error(method + ': a single capacity entry became a fleet cap');
-            }
-            if (out.unassigned.length !== 0) {
-              throw new Error(method + ': unexpected unassigned ' + JSON.stringify(out.unassigned));
-            }
-          }
-          console.log('max_vehicles behaviour gate: ok');
-          "
+          PKG_NAME="$PKG_NAME" node "$GITHUB_WORKSPACE/scripts/npm-behaviour-gate.mjs"
 
       - name: Publish to npm
         run: |

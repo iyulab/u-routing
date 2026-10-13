@@ -1,0 +1,59 @@
+// Binding behaviour gate: `config.max_vehicles` is kept, never ignored.
+//
+//   PKG_NAME=<package-name> node scripts/npm-behaviour-gate.mjs
+//
+// Run it from a directory where the package is installed -- the publish
+// workflow's smoke directory, or any directory with a local build under
+// node_modules. The package is resolved from the working directory, not from
+// this file. The publish workflow runs it after the README examples and before
+// `npm publish`; keeping the assertions in a file rather than in the workflow
+// means the same checks can run against a local build before the push that
+// publishes, so an assertion the engine no longer satisfies is found there.
+
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+
+const pkg = process.env.PKG_NAME
+if (!pkg) {
+  console.error('usage: PKG_NAME=<package-name> node npm-behaviour-gate.mjs')
+  process.exit(2)
+}
+const requireFromCwd = createRequire(join(process.cwd(), 'noop.js'))
+const m = requireFromCwd(pkg)
+let checks = 0
+const ok = (c, msg) => { checks++; if (!c) throw new Error(msg) }
+
+const depot = { x: 0, y: 0 }
+const base = { population_size: 10, max_generations: 5, max_iterations: 20, seed: 1 }
+// Six customers of demand 10, two vehicles of 20: one route's worth
+// cannot be carried.
+const customers = []
+for (let i = 1; i <= 6; i++) {
+  const a = 2 * Math.PI * i / 6
+  customers.push({ id: i, x: Math.cos(a) * 10, y: Math.sin(a) * 10, demand: 10 })
+}
+const two = [{ capacity: 20 }, { capacity: 20 }]
+for (const method of ['nn', 'savings', 'ga', 'alns']) {
+  const out = m.solve_vrp({ depot, customers, vehicles: two, method,
+                            config: Object.assign({}, base, { max_vehicles: 2 }) })
+  ok(out.num_vehicles <= 2, method + ': ' + out.num_vehicles + ' routes')
+  const served = out.routes.reduce((n, r) => n + r.length, 0)
+  ok(out.unassigned.length !== 0 && served + out.unassigned.length === 6,
+    method + ': unassigned ' + JSON.stringify(out.unassigned))
+}
+// Without the limit the same request needs a third route, so the
+// check above measures the limit.
+for (const method of ['savings', 'ga', 'alns']) {
+  const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base })
+  ok(out.num_vehicles === 3, method + ': unlimited gave ' + out.num_vehicles)
+}
+
+// The length of vehicles is not a limit: a single entry states one
+// capacity, and savings/ga/alns still open as many routes as needed.
+for (const method of ['savings', 'ga', 'alns']) {
+  const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20 }],
+                            method, config: base })
+  ok(out.num_vehicles > 1, method + ': a single capacity entry became a fleet cap')
+  ok(out.unassigned.length === 0, method + ': unexpected unassigned ' + JSON.stringify(out.unassigned))
+}
+console.log(`max_vehicles behaviour gate: ok (${checks} checks)`)
