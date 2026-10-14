@@ -221,6 +221,18 @@ struct VrpInput {
 // Public WASM entry point
 // ============================================================================
 
+/// Every method `solve_vrp` takes, with the `config` settings each reads:
+/// `[{ name: "nn", reads: ["max_vehicles"] }, { name: "ga", reads: [...] }, ...]`.
+///
+/// It is the table `solve_vrp`'s refusal of a setting the method does not read
+/// (`invalid_option`) comes from, so a form can show only the settings that
+/// change the chosen method's run.
+#[wasm_bindgen(unchecked_return_type = "MethodInfo[]")]
+pub fn available_methods() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&service::methods())
+        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+}
+
 /// Solve a capacitated VRP problem.
 ///
 /// # Arguments

@@ -8,6 +8,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- **Which settings each method reads, as data**: `available_methods()` (WASM,
+  typed `MethodInfo[]`), `urouting_methods()` (C ABI, JSON — free with
+  `urouting_free_string`) and `RoutingClient.GetMethods()` (.NET, `MethodInfo`
+  records with a `RoutingSetting` enum): `[{"name": "nn", "reads":
+  ["max_vehicles"]}, ...]`. It is made from the same table as the refusal of a
+  setting the method does not read, so a form can show only the fields that change
+  the run without restating it.
+
 ### Changed
 
 - **Breaking (.NET `URouting`):** `RoutingException` names its members the way the other

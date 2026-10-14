@@ -21,6 +21,21 @@ public class RoutingClientTests
     public static TheoryData<RoutingMethod> AllMethods() =>
         [RoutingMethod.NearestNeighbor, RoutingMethod.Savings, RoutingMethod.Genetic, RoutingMethod.Alns];
 
+    [Fact]
+    public void The_method_list_carries_exactly_what_the_engine_sent()
+    {
+        var raw = RoutingClient.MethodsJson();
+        var methods = _client.GetMethods();
+        var written = JsonSerializer.SerializeToNode(methods, RoutingJson.Default.IReadOnlyListMethodInfo);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(raw), written), $"engine: {raw}\nrecord: {written}");
+
+        Assert.Equal(Enum.GetValues<RoutingMethod>(), methods.Select(m => m.Name));
+        var ga = methods.Single(m => m.Name == RoutingMethod.Genetic);
+        Assert.Contains(RoutingSetting.EliteRatio, ga.Reads);
+        Assert.DoesNotContain(RoutingSetting.MaxIterations, ga.Reads);
+        Assert.All(methods, m => Assert.Contains(RoutingSetting.MaxVehicles, m.Reads));
+    }
+
     [Theory]
     [MemberData(nameof(AllMethods))]
     public void The_solution_carries_exactly_what_the_engine_sent(RoutingMethod method)

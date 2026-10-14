@@ -39,6 +39,30 @@ public sealed class RoutingClient : IDisposable
     }
 
     /// <summary>
+    /// Every method and the <see cref="VrpConfig"/> settings each reads — the table the
+    /// engine's refusal of a setting the method does not read comes from, so a form can show
+    /// only the settings that change the chosen method's run.
+    /// </summary>
+    public IReadOnlyList<MethodInfo> GetMethods() =>
+        JsonSerializer.Deserialize(MethodsJson(), RoutingJson.Default.IReadOnlyListMethodInfo)
+        ?? throw new InvalidOperationException("The native engine returned no method list.");
+
+    /// <summary>The method list as the native engine returns it.</summary>
+    internal static string MethodsJson()
+    {
+        var ptr = NativeInterop.urouting_methods();
+        try
+        {
+            return Marshal.PtrToStringUTF8(ptr)
+                ?? throw new InvalidOperationException("The native engine returned no method list.");
+        }
+        finally
+        {
+            NativeInterop.urouting_free_string(ptr);
+        }
+    }
+
+    /// <summary>
     /// Solves a vehicle routing problem. Every method keeps to capacities, time windows, each
     /// vehicle's distance and duration limits and the fixed fleet; customers it cannot serve
     /// within them are in <see cref="VrpSolution.Unassigned"/>.

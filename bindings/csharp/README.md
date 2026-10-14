@@ -53,6 +53,19 @@ if (solution.Unassigned.Count > 0)
 customers no route serves within capacities, time windows, each vehicle's `MaxDistance` /
 `MaxDuration` and `VrpConfig.MaxVehicles`.
 
+Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
+`MaxIterations` by `Alns`, `Seed` by both, `MaxVehicles` by all — and a setting the
+method does not read is refused (`invalid_option`). `GetMethods()` returns that table,
+the one the refusal is made from:
+
+```csharp
+foreach (var m in routing.GetMethods())      // MethodInfo(Name, Reads)
+    Console.WriteLine($"{m.Name}: {string.Join(", ", m.Reads)}");
+bool shown = routing.GetMethods()
+    .Single(m => m.Name == RoutingMethod.Genetic)
+    .Reads.Contains(RoutingSetting.MaxIterations);   // false
+```
+
 A request the solver cannot honour raises `RoutingException`. `Message` is
 readable text; `ErrorCode` is a stable code to branch on (the error body's `code`),
 `Parameter` and `Index` say which value it is about, `Details` is the error body

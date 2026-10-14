@@ -164,6 +164,12 @@ const result = solve_vrp({
 
 ### Functions
 
+#### `available_methods() -> MethodInfo[]`
+
+Every method `solve_vrp` takes, with the `config` settings each reads (`{ name, reads }`).
+It is the table `solve_vrp`'s refusal of an unread setting is made from, so the two cannot
+disagree. See the example under `solve_vrp`.
+
 #### `solve_vrp(input) -> VrpOutput`
 
 Solve a capacitated VRP with optional time windows. Four solver methods available,
@@ -188,9 +194,23 @@ all of which keep time windows (see below).
 ```
 
 **GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
-**ALNS config** uses `max_iterations`. Both accept `seed`. A setting the request's
-`method` does not read is refused (`invalid_option`, naming the methods that do)
-rather than accepted and ignored.
+**ALNS config** uses `max_iterations`. Both accept `seed`; every method reads
+`max_vehicles`. A setting the request's `method` does not read is refused
+(`invalid_option`, naming the methods that do) rather than accepted and ignored.
+`available_methods()` returns that table, so a form can offer only the settings that
+change the chosen method's run:
+
+```js
+import { available_methods } from '@iyulab/u-routing';
+
+const methods = available_methods();
+// [{ name: "nn", reads: ["max_vehicles"] }, { name: "savings", reads: ["max_vehicles"] },
+//  { name: "ga", reads: ["population_size", "max_generations", "mutation_rate", "elite_ratio", "seed", "max_vehicles"] },
+//  { name: "alns", reads: ["max_iterations", "seed", "max_vehicles"] }]
+const reads = (method, setting) =>
+  methods.some((m) => m.name === method && m.reads.includes(setting));
+console.log(reads('ga', 'max_iterations')); // false -- leave the field out
+```
 
 **How each method reads `vehicles`.** `"nn"` assigns every route to a vehicle
 in the list, so it uses at most that many vehicles, each with its own capacity;

@@ -14,4 +14,7 @@ internal static partial class NativeInterop
 
     [LibraryImport(DllName)]
     public static partial IntPtr urouting_version();
+
+    [LibraryImport(DllName)]
+    public static partial IntPtr urouting_methods();
 }

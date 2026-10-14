@@ -16,6 +16,34 @@ public enum RoutingMethod
     [JsonStringEnumMemberName("alns")] Alns,
 }
 
+/// <summary>A setting of <see cref="VrpConfig"/>, by the key the engine reads.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<RoutingSetting>))]
+public enum RoutingSetting
+{
+    /// <summary><see cref="VrpConfig.PopulationSize"/>.</summary>
+    [JsonStringEnumMemberName("population_size")] PopulationSize,
+    /// <summary><see cref="VrpConfig.MaxGenerations"/>.</summary>
+    [JsonStringEnumMemberName("max_generations")] MaxGenerations,
+    /// <summary><see cref="VrpConfig.MutationRate"/>.</summary>
+    [JsonStringEnumMemberName("mutation_rate")] MutationRate,
+    /// <summary><see cref="VrpConfig.EliteRatio"/>.</summary>
+    [JsonStringEnumMemberName("elite_ratio")] EliteRatio,
+    /// <summary><see cref="VrpConfig.MaxIterations"/>.</summary>
+    [JsonStringEnumMemberName("max_iterations")] MaxIterations,
+    /// <summary><see cref="VrpConfig.Seed"/>.</summary>
+    [JsonStringEnumMemberName("seed")] Seed,
+    /// <summary><see cref="VrpConfig.MaxVehicles"/>.</summary>
+    [JsonStringEnumMemberName("max_vehicles")] MaxVehicles,
+}
+
+/// <summary>
+/// A method and the settings it reads — the table the engine's refusal of a setting the
+/// method does not read (<c>invalid_option</c>) is made from.
+/// </summary>
+/// <param name="Name">The method.</param>
+/// <param name="Reads">The <see cref="VrpConfig"/> settings it reads; any other is refused.</param>
+public sealed record MethodInfo(RoutingMethod Name, IReadOnlyList<RoutingSetting> Reads);
+
 /// <summary>When a customer may be served: arrival before <see cref="Ready"/> waits, after <see cref="Due"/> is not allowed.</summary>
 public readonly record struct TimeWindow(double Ready, double Due);
 
@@ -97,4 +125,5 @@ public sealed record VrpSolution(
     RespectRequiredConstructorParameters = true)]
 [JsonSerializable(typeof(VrpSolution))]
 [JsonSerializable(typeof(RoutingMethod))]
+[JsonSerializable(typeof(IReadOnlyList<MethodInfo>))]
 internal sealed partial class RoutingJson : JsonSerializerContext;

@@ -486,6 +486,58 @@ pub(crate) struct VrpOutput {
 // Methods
 // ============================================================================
 
+/// The settings a request's `config` can carry, in the order of
+/// [`InputConfig`]'s fields. Which of them a method reads is
+/// [`Method::reads_setting`].
+pub(crate) const SETTINGS: [&str; 7] = [
+    "population_size",
+    "max_generations",
+    "mutation_rate",
+    "elite_ratio",
+    "max_iterations",
+    "seed",
+    "max_vehicles",
+];
+
+/// One method and the `config` settings it reads; a request giving any other
+/// setting with this method is refused (`invalid_option`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MethodInfo {
+    /// The method, as a request's `method` names it.
+    #[cfg_attr(
+        feature = "wasm",
+        tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")
+    )]
+    pub(crate) name: String,
+    /// The settings it reads, in [`SETTINGS`] order.
+    #[cfg_attr(
+        feature = "wasm",
+        tsify(
+            type = "(\"population_size\" | \"max_generations\" | \"mutation_rate\" | \"elite_ratio\" | \"max_iterations\" | \"seed\" | \"max_vehicles\")[]"
+        )
+    )]
+    pub(crate) reads: Vec<String>,
+}
+
+/// Every method, with the settings each reads -- made from the same table as
+/// the refusal of a setting the method does not read, so the two cannot
+/// disagree.
+pub(crate) fn methods() -> Vec<MethodInfo> {
+    Method::ALL
+        .into_iter()
+        .map(|m| MethodInfo {
+            name: m.name().to_string(),
+            reads: SETTINGS
+                .into_iter()
+                .filter(|s| m.reads_setting(s))
+                .map(String::from)
+                .collect(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Method {
     NearestNeighbor,
@@ -508,6 +560,28 @@ impl Method {
             Method::Savings => "savings",
             Method::Genetic => "ga",
             Method::Alns => "alns",
+        }
+    }
+
+    /// Whether this method reads `setting` (one of [`SETTINGS`]). This is the
+    /// one table both the refusal of a setting the method does not read and
+    /// the published catalog ([`methods`]) come from.
+    ///
+    /// - `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`:
+    ///   the genetic algorithm.
+    /// - `max_iterations`: ALNS.
+    /// - `seed`: the two stochastic methods (GA, ALNS).
+    /// - `max_vehicles`: every method -- the fixed fleet all of them keep to.
+    fn reads_setting(self, setting: &str) -> bool {
+        use Method::*;
+        match setting {
+            "population_size" | "max_generations" | "mutation_rate" | "elite_ratio" => {
+                self == Genetic
+            }
+            "max_iterations" => self == Alns,
+            "seed" => matches!(self, Genetic | Alns),
+            "max_vehicles" => true,
+            _ => false,
         }
     }
 
@@ -761,26 +835,22 @@ fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
 /// Run without it, the request would claim a setting that changed nothing; it
 /// used to be accepted and ignored.
 fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), ServiceError> {
-    use Method::*;
     let given = [
-        (
-            "population_size",
-            cfg.population_size.is_some(),
-            &[Genetic][..],
-        ),
-        (
-            "max_generations",
-            cfg.max_generations.is_some(),
-            &[Genetic][..],
-        ),
-        ("mutation_rate", cfg.mutation_rate.is_some(), &[Genetic][..]),
-        ("elite_ratio", cfg.elite_ratio.is_some(), &[Genetic][..]),
-        ("max_iterations", cfg.max_iterations.is_some(), &[Alns][..]),
-        ("seed", cfg.seed.is_some(), &[Genetic, Alns][..]),
+        cfg.population_size.is_some(),
+        cfg.max_generations.is_some(),
+        cfg.mutation_rate.is_some(),
+        cfg.elite_ratio.is_some(),
+        cfg.max_iterations.is_some(),
+        cfg.seed.is_some(),
+        cfg.max_vehicles.is_some(),
     ];
-    for (setting, present, readers) in given {
-        if present && !readers.contains(&method) {
-            let names: Vec<&str> = readers.iter().map(|m| m.name()).collect();
+    for (setting, present) in SETTINGS.into_iter().zip(given) {
+        if present && !method.reads_setting(setting) {
+            let names: Vec<&str> = Method::ALL
+                .into_iter()
+                .filter(|m| m.reads_setting(setting))
+                .map(Method::name)
+                .collect();
             return Err(ServiceError::new(
                 "invalid_option",
                 format!(
@@ -1990,6 +2060,55 @@ mod tests {
                 &quick(method)
             )
             .is_ok());
+        }
+    }
+
+    /// The catalog and the refusal are one table: with each method, a setting
+    /// is accepted exactly when the catalog says the method reads it -- and
+    /// every setting is read by some method.
+    #[test]
+    fn the_method_catalog_is_what_solve_accepts() {
+        use serde_json::json;
+        let value = |setting: &str| match setting {
+            "population_size" => json!(10),
+            "max_generations" => json!(5),
+            "mutation_rate" => json!(0.2),
+            "elite_ratio" => json!(0.2),
+            "max_iterations" => json!(20),
+            "seed" => json!(1),
+            "max_vehicles" => json!(4),
+            other => panic!("no sample value for {other}"),
+        };
+        // Small budgets the method reads, so each run is quick.
+        let base = |method: &str| match method {
+            "ga" => json!({ "population_size": 10, "max_generations": 5 }),
+            "alns" => json!({ "max_iterations": 20 }),
+            _ => json!({}),
+        };
+        let catalog = methods();
+        assert_eq!(
+            catalog.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            ["nn", "savings", "ga", "alns"]
+        );
+        for info in &catalog {
+            for setting in SETTINGS {
+                let mut request = base(&info.name);
+                request[setting] = value(setting);
+                let config: InputConfig = serde_json::from_value(request).expect("a config");
+                let run = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), &info.name, &config);
+                if info.reads.iter().any(|r| r == setting) {
+                    run.unwrap_or_else(|e| panic!("{} refused {setting} it reads: {e}", info.name));
+                } else {
+                    let err = run.expect_err(setting);
+                    assert_eq!(err.code(), "invalid_option", "{} {setting}", info.name);
+                }
+            }
+        }
+        for setting in SETTINGS {
+            assert!(
+                catalog.iter().any(|m| m.reads.iter().any(|r| r == setting)),
+                "{setting}"
+            );
         }
     }
 

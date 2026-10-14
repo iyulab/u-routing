@@ -191,6 +191,19 @@ pub unsafe extern "C" fn urouting_free_string(ptr: *mut libc::c_char) {
     }
 }
 
+/// Every method `urouting_solve_vrp` takes, with the `config` settings each
+/// reads, as JSON: `[{"name": "nn", "reads": ["max_vehicles"]}, ...]` -- the
+/// table its refusal of a setting the method does not read (`invalid_option`)
+/// comes from. The string is owned by the caller and must be released with
+/// [`urouting_free_string`].
+#[no_mangle]
+pub extern "C" fn urouting_methods() -> *mut libc::c_char {
+    let json = serde_json::to_string(&crate::service::methods()).expect("names serialize");
+    CString::new(json)
+        .expect("JSON has no interior NUL")
+        .into_raw()
+}
+
 /// Get u-routing version
 #[no_mangle]
 pub extern "C" fn urouting_version() -> *mut libc::c_char {
@@ -235,6 +248,19 @@ mod tests {
             "depot_y": 0.0,
             "method": method
         })
+    }
+
+    #[test]
+    fn the_methods_are_the_service_catalog() {
+        let ptr = urouting_methods();
+        let json = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_str()
+            .expect("UTF-8")
+            .to_owned();
+        unsafe { urouting_free_string(ptr) };
+        let methods: Vec<crate::service::MethodInfo> =
+            serde_json::from_str(&json).expect("a method list");
+        assert_eq!(methods, crate::service::methods());
     }
 
     #[test]
