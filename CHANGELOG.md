@@ -8,6 +8,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-14
+
 ### Added
 
 - **Which settings each method reads, as data**: `available_methods()` (WASM,
