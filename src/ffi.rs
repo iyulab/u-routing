@@ -310,6 +310,43 @@ mod tests {
         (code, serde_json::from_str(&body).expect("JSON"))
     }
 
+    /// Every plan says why its method stopped: the one-pass constructions
+    /// ran to their end, the searches on the budget they were given.
+    #[test]
+    fn a_plan_says_why_its_method_stopped() {
+        let with = |method: &str, config: serde_json::Value| {
+            let mut request = problem(method);
+            request["config"] = config;
+            let (code, plan) = solve(&request);
+            assert_eq!(code, 0, "{plan}");
+            plan["stop_reason"].clone()
+        };
+        assert_eq!(with("nn", serde_json::json!({})), "completed");
+        assert_eq!(with("savings", serde_json::json!({})), "completed");
+        assert_eq!(
+            with(
+                "ga",
+                serde_json::json!({ "population_size": 20, "max_generations": 2, "seed": 1 })
+            ),
+            "iteration_limit"
+        );
+        assert_eq!(
+            with(
+                "alns",
+                serde_json::json!({ "max_iterations": 3, "seed": 1 })
+            ),
+            "iteration_limit"
+        );
+        // A long enough GA run on four customers stops when it stalls.
+        assert_eq!(
+            with(
+                "ga",
+                serde_json::json!({ "population_size": 20, "max_generations": 100000, "seed": 1 })
+            ),
+            "no_improvement"
+        );
+    }
+
     /// A solved plan, handed back as it came, checks clean; a broken one is a
     /// result with its violations, not an error.
     #[test]

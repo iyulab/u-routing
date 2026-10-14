@@ -343,9 +343,15 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
   "num_vehicles": 2,
   "method_used": "ga",
   "computation_time_ms": 120.0,
-  "unassigned": []
+  "unassigned": [],
+  "stop_reason": "no_improvement"
 }
 ```
+
+`stop_reason` says why the method stopped: `"completed"` for `"nn"` and
+`"savings"`, which build the plan in one pass; `"iteration_limit"` when `"ga"`
+or `"alns"` spent its `max_generations` / `max_iterations`; `"no_improvement"`
+when `"ga"` went its stall budget without a better plan.
 
 `unassigned` lists the customers (by `id`) that no route serves — for example
 when a fixed fleet under `"nn"` cannot carry the total demand. A non-empty list

@@ -111,6 +111,7 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 /// <see cref="VrpRequest.Vehicles"/> (<c>0</c> for the single vehicle type of the methods
 /// other than nearest neighbour, and when the request lists none); <see cref="Unassigned"/>
 /// lists the customers no route serves, so a partial plan does not read as a complete one.
+/// <see cref="StopReason"/> says why the method stopped.
 /// </summary>
 public sealed record VrpSolution(
     IReadOnlyList<IReadOnlyList<long>> Routes,
@@ -119,7 +120,30 @@ public sealed record VrpSolution(
     int NumVehicles,
     RoutingMethod MethodUsed,
     double ComputationTimeMs,
-    IReadOnlyList<long> Unassigned);
+    IReadOnlyList<long> Unassigned,
+    StopReason StopReason);
+
+/// <summary>
+/// Why the method stopped — the run's own account of the plan it returned.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<StopReason>))]
+public enum StopReason
+{
+    /// <summary>The method ran to its own end: nearest neighbour and savings build the plan in one pass.</summary>
+    [JsonStringEnumMemberName("completed")] Completed,
+    /// <summary>An exact method proved the plan optimal.</summary>
+    [JsonStringEnumMemberName("optimal")] Optimal,
+    /// <summary>The plan met the target the caller set.</summary>
+    [JsonStringEnumMemberName("target_reached")] TargetReached,
+    /// <summary>The search spent its generation or iteration budget.</summary>
+    [JsonStringEnumMemberName("iteration_limit")] IterationLimit,
+    /// <summary>The search went its stall budget without a better plan.</summary>
+    [JsonStringEnumMemberName("no_improvement")] NoImprovement,
+    /// <summary>The time limit ran out; the plan is the best found by then.</summary>
+    [JsonStringEnumMemberName("time_limit")] TimeLimit,
+    /// <summary>The caller cancelled the run.</summary>
+    [JsonStringEnumMemberName("cancelled")] Cancelled,
+}
 
 /// <summary>
 /// A plan to check with <see cref="RoutingClient.CheckSolution"/>: customer ids per route, the

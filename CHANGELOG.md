@@ -10,6 +10,15 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
+- **A plan says why its method stopped**: `stop_reason` on every `solve_vrp`
+  output (WASM, C ABI, .NET `VrpSolution.StopReason`) — `"completed"` for `"nn"`
+  and `"savings"`, which build the plan in one pass; `"iteration_limit"` when
+  `"ga"` or `"alns"` spent its budget; `"no_improvement"` when `"ga"` stalled. The
+  vocabulary is `u-metaheur`'s `StopReason`, the one every search in this family
+  reports.
+
+### Added
+
 - **A plan checker**: `evaluation::check_solution(customers, distances, &Fleet, &Solution)`
   reports every way a plan breaks its problem — each customer served once or
   reported unassigned, each route's vehicle in the fleet (`Fleet::usage`: one

@@ -26,7 +26,7 @@ use crate::local_search::{or_opt_improve, two_opt_improve};
 use crate::models::{Customer, TimeWindow, Vehicle};
 use u_metaheur::alns::{AlnsConfig, AlnsRunner};
 use u_metaheur::ga::{GaConfig, GaRunner};
-use u_metaheur::ConfigError;
+use u_metaheur::{ConfigError, StopReason};
 
 // ============================================================================
 // Refusals
@@ -486,6 +486,17 @@ pub(crate) struct VrpOutput {
     /// fleet cannot carry the total demand. They would otherwise simply be
     /// missing from `routes`, and a partial plan would read as a complete one.
     pub(crate) unassigned: Vec<usize>,
+    /// Why the method stopped: `"completed"` for `"nn"` and `"savings"`, which
+    /// build the plan in one pass; `"iteration_limit"` when `"ga"` or `"alns"`
+    /// spent its generation or iteration budget; `"no_improvement"` when
+    /// `"ga"` went its stall budget without a better plan.
+    #[cfg_attr(
+        feature = "wasm",
+        tsify(
+            type = "\"completed\" | \"optimal\" | \"target_reached\" | \"iteration_limit\" | \"no_improvement\" | \"time_limit\" | \"cancelled\""
+        )
+    )]
+    pub(crate) stop_reason: StopReason,
 }
 
 // ============================================================================
@@ -660,6 +671,7 @@ pub(crate) fn solve(
             method_used: method.name().to_string(),
             computation_time_ms: 0.0,
             unassigned: Vec::new(),
+            stop_reason: StopReason::Completed,
         });
     }
 
@@ -692,6 +704,7 @@ pub(crate) fn solve(
                 vehicles: limited.vehicles,
                 total_distance,
                 method,
+                stop_reason: plan.stop_reason,
             }
         }
         _ => plan,
@@ -713,6 +726,7 @@ pub(crate) fn solve(
         method_used: plan.method.name().to_string(),
         computation_time_ms: 0.0,
         unassigned,
+        stop_reason: plan.stop_reason,
     })
 }
 
@@ -1025,6 +1039,8 @@ struct Plan {
     vehicles: Vec<usize>,
     total_distance: f64,
     method: Method,
+    /// Why the method stopped.
+    stop_reason: StopReason,
 }
 
 // ============================================================================
@@ -1350,6 +1366,7 @@ fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicle]) -
         vehicles: solution.routes().iter().map(|r| r.vehicle_id()).collect(),
         total_distance: solution.total_distance(),
         method: Method::NearestNeighbor,
+        stop_reason: StopReason::Completed,
     }
 }
 
@@ -1362,6 +1379,7 @@ fn solve_savings(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicl
         routes,
         total_distance: solution.total_distance(),
         method: Method::Savings,
+        stop_reason: StopReason::Completed,
     }
 }
 
@@ -1454,6 +1472,7 @@ fn solve_ga(
         routes,
         total_distance,
         method: Method::Genetic,
+        stop_reason: ga_result.stop_reason,
     })
 }
 
@@ -1500,6 +1519,7 @@ fn solve_alns(
         routes,
         total_distance,
         method: Method::Alns,
+        stop_reason: result.stop_reason,
     })
 }
 
