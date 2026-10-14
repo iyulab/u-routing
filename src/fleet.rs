@@ -25,7 +25,7 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
-use crate::models::Customer;
+use crate::models::{Customer, Vehicle};
 
 /// Whether inserting `customer_id` at `pos` of `route` keeps every customer
 /// of the route on time. Always true when `windowed` is false.
@@ -106,10 +106,9 @@ pub fn cheapest_insertion(
 pub struct LimitedPlan {
     /// At most `max_routes` routes of customer indices (depot excluded).
     pub routes: Vec<Vec<usize>>,
-    /// The capacity of each route in `routes`, in the same order.
-    pub capacities: Vec<i32>,
-    /// The distance and duration limits of each route, in the same order.
-    pub limits: Vec<RouteLimits>,
+    /// The vehicle of each route in `routes` -- its index in the fleet the
+    /// plan was limited with -- in the same order.
+    pub vehicles: Vec<usize>,
     /// Customers of eliminated routes that no remaining route could take,
     /// in ascending index order.
     pub unserved: Vec<usize>,
@@ -123,16 +122,18 @@ pub struct LimitedPlan {
 /// never making a customer late. A customer that fits nowhere is `unserved`.
 /// A plan already within the limit is returned unchanged.
 ///
-/// `capacities[i]` is the capacity of `routes[i]`, so a fleet of mixed
-/// vehicles keeps each route's own limit.
+/// `vehicles[i]` is the index in `fleet` of the vehicle that drives
+/// `routes[i]`, so a fleet of mixed vehicles keeps each route's own capacity
+/// and distance/duration limits.
 ///
 /// # Panics
-/// If `capacities` and `routes` differ in length (a caller bug).
+/// If `vehicles` and `routes` differ in length, or a vehicle index is outside
+/// `fleet` (a caller bug).
 ///
 /// # Examples
 ///
 /// ```
-/// use u_routing::evaluation::RouteLimits;
+/// use u_routing::models::Vehicle;
 /// use u_routing::distance::DistanceMatrix;
 /// use u_routing::fleet::limit_routes;
 /// use u_routing::models::Customer;
@@ -145,31 +146,29 @@ pub struct LimitedPlan {
 ///     Customer::new(3, 0.0, 5.0, 10, 0.0),
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
-/// let plan = limit_routes(vec![vec![1], vec![2], vec![3]], vec![20, 20, 20], vec![RouteLimits::NONE; 3], 2, &dm, &customers);
+/// let plan = limit_routes(vec![vec![1], vec![2], vec![3]], vec![0; 3], &[Vehicle::new(0, 20)], 2, &dm, &customers);
 /// assert_eq!(plan.routes.len(), 2);
 /// assert!(plan.unserved.is_empty()); // one route took a second customer
 /// ```
 pub fn limit_routes(
     routes: Vec<Vec<usize>>,
-    capacities: Vec<i32>,
-    limits: Vec<RouteLimits>,
+    vehicles: Vec<usize>,
+    fleet: &[Vehicle],
     max_routes: usize,
     distances: &DistanceMatrix,
     customers: &[Customer],
 ) -> LimitedPlan {
     assert_eq!(
         routes.len(),
-        capacities.len(),
-        "one capacity per route is required"
+        vehicles.len(),
+        "one vehicle per route is required"
     );
-    assert_eq!(
-        routes.len(),
-        limits.len(),
-        "one set of limits per route is required"
+    assert!(
+        vehicles.iter().all(|&v| v < fleet.len()),
+        "every route's vehicle is in the fleet"
     );
     let mut routes = routes;
-    let mut capacities = capacities;
-    let mut limits = limits;
+    let mut vehicles = vehicles;
     let mut unserved = Vec::new();
 
     while routes.len() > max_routes {
@@ -178,8 +177,7 @@ pub fn limit_routes(
             .min_by_key(|&i| (load(&routes[i]), routes[i].len()))
             .expect("more routes than the limit, so at least one");
         let mut pending = routes.remove(victim);
-        capacities.remove(victim);
-        limits.remove(victim);
+        vehicles.remove(victim);
 
         // Cheapest insertion first, until nothing pending fits anywhere.
         loop {
@@ -189,8 +187,8 @@ pub fn limit_routes(
                 .filter_map(|(pi, &cid)| {
                     cheapest_insertion(
                         &routes,
-                        |ri| capacities[ri],
-                        |ri| limits[ri],
+                        |ri| fleet[vehicles[ri]].capacity(),
+                        |ri| RouteLimits::of(&fleet[vehicles[ri]]),
                         cid,
                         distances,
                         customers,
@@ -212,8 +210,7 @@ pub fn limit_routes(
     unserved.sort_unstable();
     LimitedPlan {
         routes,
-        capacities,
-        limits,
+        vehicles,
         unserved,
     }
 }
@@ -240,8 +237,8 @@ mod tests {
         let routes = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
         let plan = limit_routes(
             routes.clone(),
-            vec![20; 3],
-            vec![RouteLimits::NONE; 3],
+            vec![0; 3],
+            &[Vehicle::new(0, 20)],
             3,
             &dm,
             &customers,
@@ -255,8 +252,8 @@ mod tests {
         let (customers, dm) = six_on_a_ring();
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5, 6]],
-            vec![20; 3],
-            vec![RouteLimits::NONE; 3],
+            vec![0; 3],
+            &[Vehicle::new(0, 20)],
             2,
             &dm,
             &customers,
@@ -272,8 +269,8 @@ mod tests {
         let (customers, dm) = six_on_a_ring();
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5, 6]],
-            vec![30; 3],
-            vec![RouteLimits::NONE; 3],
+            vec![0; 3],
+            &[Vehicle::new(0, 30)],
             2,
             &dm,
             &customers,
@@ -294,8 +291,8 @@ mod tests {
         // Route [6] carries 1 unit; it is the one emptied, and it fits elsewhere.
         let plan = limit_routes(
             vec![vec![1, 2], vec![3, 4], vec![5], vec![6]],
-            vec![21, 21, 21, 21],
-            vec![RouteLimits::NONE; 4],
+            vec![0; 4],
+            &[Vehicle::new(0, 21)],
             3,
             &dm,
             &customers,
@@ -314,8 +311,8 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         let plan = limit_routes(
             vec![vec![1], vec![2, 3], vec![4, 5, 6]],
-            vec![40; 3],
-            vec![RouteLimits::NONE; 3],
+            vec![0; 3],
+            &[Vehicle::new(0, 40)],
             2,
             &dm,
             &customers,

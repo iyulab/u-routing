@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::{self, InputConfig, InputCustomer, InputVehicle, ServiceError};
+use crate::service::{self, InputConfig, InputCustomer, InputSolution, InputVehicle, ServiceError};
 
 /// Status for a request whose JSON could not be read into the expected shape.
 const ERR_PARSE: i32 = -2;
@@ -50,6 +50,15 @@ struct VrpInput {
     method: String,
     #[serde(default)]
     config: Option<InputConfig>,
+}
+
+/// A plan to check and the problem it was solved for: `problem` is the
+/// `urouting_solve_vrp` request, unchanged.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckInput {
+    problem: VrpInput,
+    solution: InputSolution,
 }
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -157,13 +166,52 @@ pub unsafe extern "C" fn urouting_solve_vrp(
     })
 }
 
+/// Checks a plan against the problem it was solved for. The request is
+/// `{"problem": <the urouting_solve_vrp request>, "solution": {"routes": [[..]],
+/// "route_vehicles": [..], "unassigned": [..], "total_distance": ..}}`; the
+/// result is `{"feasible": bool, "violations": [{"code": .., ..}]}` -- a plan
+/// that breaks its problem is a result (status 0), not an error.
+///
+/// # Safety
+///
+/// As [`urouting_solve_vrp`].
+#[no_mangle]
+pub unsafe extern "C" fn urouting_check_solution(
+    request_json: *const libc::c_char,
+    result_ptr: *mut *mut libc::c_char,
+) -> i32 {
+    ffi_catch(result_ptr, || {
+        let json = match unsafe { read_json(request_json) } {
+            Ok(j) => j,
+            Err(e) => return e,
+        };
+        let input: CheckInput = match parse_request(&json) {
+            Ok(r) => r,
+            Err(e) => return write_error(result_ptr, ERR_PARSE, e),
+        };
+        let problem = input.problem;
+        let config = problem.config.unwrap_or_default();
+        match service::check(
+            (problem.depot_x, problem.depot_y),
+            &problem.customers,
+            &problem.vehicles,
+            &problem.method,
+            &config,
+            &input.solution,
+        ) {
+            Ok(output) => write_json(result_ptr, &output),
+            Err(e) => write_error(result_ptr, ERR_COMPUTE, e),
+        }
+    })
+}
+
 /// Reads the request, or refuses it where it stopped: `parameter` names the
 /// field (`customers[1].id`, `config.seed`) and `index` its array position,
 /// as the WebAssembly binding reports them; text that is not JSON at all is
 /// refused as `request`.
-fn parse_request(json: &str) -> Result<VrpInput, ServiceError> {
+fn parse_request<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, ServiceError> {
     let mut deserializer = serde_json::Deserializer::from_str(json);
-    let input: VrpInput = serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
+    let input: T = serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
         if e.inner().is_data() {
             service::malformed_at("request", &e)
         } else {
@@ -248,6 +296,53 @@ mod tests {
             "depot_y": 0.0,
             "method": method
         })
+    }
+
+    fn check(request: &serde_json::Value) -> (i32, serde_json::Value) {
+        let request = CString::new(request.to_string()).expect("no interior NUL");
+        let mut out: *mut libc::c_char = std::ptr::null_mut();
+        let code = unsafe { urouting_check_solution(request.as_ptr(), &mut out) };
+        let body = unsafe { CStr::from_ptr(out) }
+            .to_str()
+            .expect("UTF-8")
+            .to_owned();
+        unsafe { urouting_free_string(out) };
+        (code, serde_json::from_str(&body).expect("JSON"))
+    }
+
+    /// A solved plan, handed back as it came, checks clean; a broken one is a
+    /// result with its violations, not an error.
+    #[test]
+    fn a_plan_is_checked_against_the_problem_it_was_solved_for() {
+        let savings = problem("savings");
+        let (code, plan) = solve(&savings);
+        assert_eq!(code, 0, "{plan}");
+        let solution = serde_json::json!({
+            "routes": plan["routes"], "route_vehicles": plan["route_vehicles"],
+            "unassigned": plan["unassigned"], "total_distance": plan["total_distance"]
+        });
+        let (code, out) = check(&serde_json::json!({ "problem": savings, "solution": solution }));
+        assert_eq!(
+            (code, out),
+            (0, serde_json::json!({ "feasible": true, "violations": [] }))
+        );
+
+        let broken = serde_json::json!({ "routes": [[11, 12, 13, 14]] });
+        let (code, out) = check(&serde_json::json!({ "problem": savings, "solution": broken }));
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(out["feasible"], false);
+        assert_eq!(
+            out["violations"][0],
+            serde_json::json!({ "code": "capacity_exceeded", "route": 0, "load": 50, "capacity": 30 })
+        );
+        // The problem is refused as solve refuses it.
+        let (code, out) = check(&serde_json::json!({
+            "problem": problem("tabu"), "solution": { "routes": [] }
+        }));
+        assert_eq!(
+            (code, &out["code"]),
+            (-3, &serde_json::json!("unknown_option"))
+        );
     }
 
     #[test]

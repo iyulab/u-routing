@@ -21,6 +21,28 @@ public class RoutingClientTests
     public static TheoryData<RoutingMethod> AllMethods() =>
         [RoutingMethod.NearestNeighbor, RoutingMethod.Savings, RoutingMethod.Genetic, RoutingMethod.Alns];
 
+    /// <summary>A solved plan checks clean; a broken one comes back as typed violations.</summary>
+    [Fact]
+    public void A_plan_is_checked_and_the_check_carries_exactly_what_the_engine_sent()
+    {
+        var request = new VrpRequest(0, 0, Customers) { Vehicles = [new(30), new(30)] };
+        var solution = _client.SolveVrp(request);
+        Assert.Equal(solution.Routes.Count, solution.RouteVehicles.Count);
+        var clean = _client.CheckSolution(request, VrpPlan.Of(solution));
+        Assert.True(clean.Feasible);
+        Assert.Empty(clean.Violations);
+
+        string? raw = null;
+        _client.ResponseObserver = body => raw = body;
+        var everyone = new[] { Customers.Select(c => c.Id).ToArray() };
+        var broken = _client.CheckSolution(request, new VrpPlan(everyone) { RouteVehicles = [0], TotalDistance = 1 });
+        var written = JsonSerializer.SerializeToNode(broken, RoutingJson.Default.PlanCheck);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(raw!), written), $"engine: {raw}\nrecord: {written}");
+        Assert.False(broken.Feasible);
+        Assert.Contains(broken.Violations, v => v is PlanViolation.CapacityExceeded { Route: 0, Capacity: 30 });
+        Assert.Contains(broken.Violations, v => v is PlanViolation.DistanceMismatch { Reported: 1 });
+    }
+
     [Fact]
     public void The_method_list_carries_exactly_what_the_engine_sent()
     {

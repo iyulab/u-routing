@@ -72,9 +72,41 @@ public sealed class RoutingClient : IDisposable
     {
         var json = Body(request).ToJsonString();
         RequestObserver?.Invoke(nameof(NativeInterop.urouting_solve_vrp), json);
-        var body = Invoke(json);
+        var body = Invoke(NativeInterop.urouting_solve_vrp, json);
         ResponseObserver?.Invoke(body);
         return JsonSerializer.Deserialize(body, RoutingJson.Default.VrpSolution)
+               ?? throw new RoutingException(-4, "The engine returned null.");
+    }
+
+    /// <summary>
+    /// Checks a plan against the problem it was solved for, read as <see cref="SolveVrp"/>
+    /// reads it: every customer served once or reported unassigned, each route within its
+    /// vehicle's capacity, time windows, <see cref="Vehicle.MaxDistance"/> and
+    /// <see cref="Vehicle.MaxDuration"/>, <see cref="VrpConfig.MaxVehicles"/> and (for
+    /// nearest neighbour) one route per vehicle, and the reported total distance. A plan that
+    /// breaks the problem is a result, not an exception.
+    /// </summary>
+    /// <exception cref="RoutingException">The engine refused the problem, or the plan's
+    /// <see cref="VrpPlan.RouteVehicles"/> does not have one entry per route.</exception>
+    public PlanCheck CheckSolution(VrpRequest request, VrpPlan plan)
+    {
+        var routes = new JsonArray();
+        foreach (var route in plan.Routes)
+            routes.Add((JsonNode)new JsonArray(route.Select(id => (JsonNode)JsonValue.Create(id)).ToArray()));
+        var solution = new JsonObject
+        {
+            ["routes"] = routes,
+            ["unassigned"] = new JsonArray(plan.Unassigned.Select(id => (JsonNode)JsonValue.Create(id)).ToArray()),
+        };
+        if (plan.RouteVehicles is { } vehicles)
+            solution["route_vehicles"] = new JsonArray(vehicles.Select(v => (JsonNode)JsonValue.Create(v)).ToArray());
+        if (plan.TotalDistance is { } total)
+            solution["total_distance"] = Num("solution.total_distance", total);
+        var json = new JsonObject { ["problem"] = Body(request), ["solution"] = solution }.ToJsonString();
+        RequestObserver?.Invoke(nameof(NativeInterop.urouting_check_solution), json);
+        var body = Invoke(NativeInterop.urouting_check_solution, json);
+        ResponseObserver?.Invoke(body);
+        return JsonSerializer.Deserialize(body, RoutingJson.Default.PlanCheck)
                ?? throw new RoutingException(-4, "The engine returned null.");
     }
 
@@ -166,9 +198,11 @@ public sealed class RoutingClient : IDisposable
         throw RoutingException.FromErrorBody(-3, error.ToJsonString());
     }
 
-    private static string Invoke(string requestJson)
+    private delegate int Entry(string requestJson, out IntPtr resultPtr);
+
+    private static string Invoke(Entry entry, string requestJson)
     {
-        var code = NativeInterop.urouting_solve_vrp(requestJson, out var resultPtr);
+        var code = entry(requestJson, out var resultPtr);
 
         try
         {

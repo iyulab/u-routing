@@ -9,6 +9,9 @@ internal static partial class NativeInterop
     [LibraryImport(DllName, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int urouting_solve_vrp(string requestJson, out IntPtr resultPtr);
 
+    [LibraryImport(DllName, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int urouting_check_solution(string requestJson, out IntPtr resultPtr);
+
     [LibraryImport(DllName)]
     public static partial void urouting_free_string(IntPtr ptr);
 

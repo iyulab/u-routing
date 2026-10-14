@@ -8,6 +8,33 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- **A plan checker**: `evaluation::check_solution(customers, distances, &Fleet, &Solution)`
+  reports every way a plan breaks its problem — each customer served once or
+  reported unassigned, each route's vehicle in the fleet (`Fleet::usage`: one
+  route per vehicle, or any number), at most `Fleet::max_routes` routes, each
+  route within its own vehicle's capacity, time windows, distance and duration
+  limits, and each route's reported distance equal to its own. On the wire:
+  WASM `check_vrp_solution(problem, solution)`, C ABI `urouting_check_solution`
+  and .NET `RoutingClient.CheckSolution(request, plan)` (typed `PlanViolation`
+  records) take the `solve_vrp` request unchanged and a plan in the shape it
+  returns, and answer `{feasible, violations: [{code, ...}]}`.
+- `solve_vrp` reports `route_vehicles`: the vehicle that drives each route, as
+  its index in the request's `vehicles` (.NET `VrpSolution.RouteVehicles`).
+
+### Changed
+
+- **Breaking (Rust API):** `fleet::limit_routes` takes each route's vehicle
+  (`vehicles: Vec<usize>` and the `fleet: &[Vehicle]` they index) instead of
+  parallel capacity and limit lists, and `LimitedPlan` carries `vehicles` in
+  place of `capacities` / `limits`. `ViolationType::TimeWindowViolated` carries
+  `route_index`, and the type gains the plan-level violations above.
+- **Breaking (Rust API):** `RouteEvaluator::evaluate_solution` is removed. It
+  judged every route with the evaluator's one vehicle whatever the route's own,
+  so a mixed fleet was checked against the wrong capacities; use
+  `check_solution`.
+
 ## [0.16.0] - 2026-10-14
 
 ### Added

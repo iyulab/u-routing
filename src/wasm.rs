@@ -44,7 +44,7 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use crate::service::{self, InputConfig, InputCustomer, InputVehicle, ServiceError};
+use crate::service::{self, InputConfig, InputCustomer, InputSolution, InputVehicle, ServiceError};
 
 // ============================================================================
 // Error helper
@@ -220,6 +220,40 @@ struct VrpInput {
 // ============================================================================
 // Public WASM entry point
 // ============================================================================
+
+/// Checks a plan against the problem it was solved for: every customer served
+/// once or reported unassigned, each route within its vehicle's capacity,
+/// time windows, `max_distance` and `max_duration`, the fleet's
+/// `max_vehicles` and (for `"nn"`) one route per vehicle, and the reported
+/// `total_distance`. `problem` is the `solve_vrp` request, read the same way;
+/// `solution` is a plan in the shape `solve_vrp` returns -- its `routes`,
+/// `route_vehicles`, `unassigned` and `total_distance`, from `solve_vrp` or
+/// from anywhere else.
+///
+/// # Errors
+/// The refusals of `solve_vrp` for the problem, and `dimension_mismatch` when
+/// `solution.route_vehicles` does not have one entry per route. A plan that
+/// breaks the problem is not an error: its violations are the result.
+#[wasm_bindgen(unchecked_return_type = "CheckOutput")]
+pub fn check_vrp_solution(
+    #[wasm_bindgen(unchecked_param_type = "VrpInput")] problem: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "InputSolution")] solution: JsValue,
+) -> Result<JsValue, JsValue> {
+    let input: VrpInput = from_js(problem, "problem")?;
+    let solution: InputSolution = from_js(solution, "solution")?;
+    let config = input.config.unwrap_or_default();
+    let output = service::check(
+        (input.depot.x, input.depot.y),
+        &input.customers,
+        &input.vehicles,
+        &input.method,
+        &config,
+        &solution,
+    )
+    .map_err(js_err)?;
+    serde_wasm_bindgen::to_value(&output)
+        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+}
 
 /// Every method `solve_vrp` takes, with the `config` settings each reads:
 /// `[{ name: "nn", reads: ["max_vehicles"] }, { name: "ga", reads: [...] }, ...]`.

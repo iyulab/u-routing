@@ -66,6 +66,21 @@ bool shown = routing.GetMethods()
     .Reads.Contains(RoutingSetting.MaxIterations);   // false
 ```
 
+`VrpSolution.RouteVehicles` says which vehicle drives each route (its index in
+`Vehicles`). `CheckSolution` checks any plan — this one, an edited one, one from another
+solver — against the request, and returns every rule it breaks as a typed record:
+
+```csharp
+PlanCheck check = routing.CheckSolution(request, VrpPlan.Of(solution));
+foreach (var v in check.Violations)
+    Console.WriteLine(v switch
+    {
+        PlanViolation.CapacityExceeded c => $"route {c.Route}: load {c.Load} over {c.Capacity}",
+        PlanViolation.TimeWindowViolated t => $"route {t.Route}: customer {t.Customer} late",
+        _ => v.ToString(),
+    });
+```
+
 A request the solver cannot honour raises `RoutingException`. `Message` is
 readable text; `ErrorCode` is a stable code to branch on (the error body's `code`),
 `Parameter` and `Index` say which value it is about, `Details` is the error body

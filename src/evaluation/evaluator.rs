@@ -1,6 +1,6 @@
 //! Route evaluator that computes timing, load, and feasibility.
 
-use crate::models::{Customer, Route, Solution, Vehicle, Violation, ViolationType, Visit};
+use crate::models::{Customer, Route, Vehicle, Violation, ViolationType, Visit};
 
 /// Evaluates routes by computing visit timing, cumulative load, total distance,
 /// and checking constraints (capacity, time windows, max distance/duration).
@@ -68,6 +68,7 @@ impl<'a> RouteEvaluator<'a> {
             let service_start = if let Some(tw) = customer.time_window() {
                 if tw.is_violated(arrival) {
                     violations.push(Violation::new(ViolationType::TimeWindowViolated {
+                        route_index: 0,
                         customer_id: cid,
                         arrival,
                         due: tw.due(),
@@ -132,35 +133,6 @@ impl<'a> RouteEvaluator<'a> {
         }
 
         (route, violations)
-    }
-
-    /// Evaluates an entire solution, computing route metrics and violations.
-    pub fn evaluate_solution(&self, solution: &Solution) -> (f64, Vec<Violation>) {
-        let mut total_cost = 0.0;
-        let mut all_violations = Vec::new();
-
-        for (idx, route) in solution.routes().iter().enumerate() {
-            let customer_ids = route.customer_ids();
-            let (_, mut violations) = self.build_route(&customer_ids);
-
-            // Adjust route_index in violations
-            for v in &mut violations {
-                match &mut v.kind {
-                    ViolationType::CapacityExceeded { route_index, .. }
-                    | ViolationType::MaxDistanceExceeded { route_index, .. }
-                    | ViolationType::MaxDurationExceeded { route_index, .. } => {
-                        *route_index = idx;
-                    }
-                    ViolationType::TimeWindowViolated { .. } => {}
-                }
-            }
-
-            total_cost += route.total_distance() * self.vehicle.cost_per_distance()
-                + self.vehicle.fixed_cost();
-            all_violations.append(&mut violations);
-        }
-
-        (total_cost, all_violations)
     }
 }
 

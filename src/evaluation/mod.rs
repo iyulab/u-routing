@@ -1,7 +1,9 @@
 //! Route feasibility checking and cost evaluation.
 
+mod check;
 mod evaluator;
 
+pub use check::{check_solution, Fleet, VehicleUse};
 pub use evaluator::RouteEvaluator;
 
 use crate::distance::DistanceMatrix;

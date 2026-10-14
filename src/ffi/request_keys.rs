@@ -303,12 +303,32 @@ fn solve_vrp() -> Value {
     })
 }
 
+/// The solve request as the problem, and a plan for it with every key given.
+fn check_solution() -> Value {
+    json!({
+        "problem": solve_vrp(),
+        "solution": {
+            "routes": [[1, 2]],
+            "route_vehicles": [0],
+            "unassigned": [],
+            "total_distance": 10.0
+        }
+    })
+}
+
 fn entry_points() -> Vec<(&'static str, Entry, Value)> {
-    vec![(
-        "urouting_solve_vrp",
-        urouting_solve_vrp as Entry,
-        solve_vrp(),
-    )]
+    vec![
+        (
+            "urouting_check_solution",
+            urouting_check_solution as Entry,
+            check_solution(),
+        ),
+        (
+            "urouting_solve_vrp",
+            urouting_solve_vrp as Entry,
+            solve_vrp(),
+        ),
+    ]
 }
 
 fn held_file() -> PathBuf {

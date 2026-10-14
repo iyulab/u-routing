@@ -16,6 +16,8 @@ pub enum ViolationType {
     },
     /// Arrival after the customer's time window closes.
     TimeWindowViolated {
+        /// Route index.
+        route_index: usize,
         /// Customer ID where violation occurred.
         customer_id: usize,
         /// Actual arrival time.
@@ -40,6 +42,63 @@ pub enum ViolationType {
         duration: f64,
         /// Maximum allowed duration.
         max_duration: f64,
+    },
+    /// A route visits something that is not a customer of the problem: an id
+    /// past the last customer, or the depot.
+    UnknownCustomer {
+        /// Route index.
+        route_index: usize,
+        /// The id visited.
+        customer_id: usize,
+    },
+    /// A customer is visited more than once -- on two routes, or twice on one.
+    CustomerVisitedTwice {
+        /// The customer.
+        customer_id: usize,
+        /// The route of the repeated visit.
+        route_index: usize,
+    },
+    /// A customer is on no route and not reported unassigned.
+    CustomerMissing {
+        /// The customer.
+        customer_id: usize,
+    },
+    /// A customer is reported unassigned but a route serves it, or is not a
+    /// customer of the problem.
+    WronglyUnassigned {
+        /// The customer id reported.
+        customer_id: usize,
+    },
+    /// A route's vehicle is not in the fleet.
+    UnknownVehicle {
+        /// Route index.
+        route_index: usize,
+        /// The vehicle index given.
+        vehicle_id: usize,
+    },
+    /// A vehicle drives a second route where each vehicle drives one
+    /// ([`VehicleUse::OneRouteEach`](crate::evaluation::VehicleUse)).
+    VehicleReused {
+        /// Route index of the second use.
+        route_index: usize,
+        /// The vehicle.
+        vehicle_id: usize,
+    },
+    /// The plan uses more routes than the fleet allows.
+    TooManyRoutes {
+        /// Routes used.
+        routes: usize,
+        /// Routes allowed.
+        max_routes: usize,
+    },
+    /// A route's reported distance differs from its own, depot to depot.
+    DistanceMismatch {
+        /// Route index.
+        route_index: usize,
+        /// The distance reported.
+        reported: f64,
+        /// The route's distance, depot to depot.
+        actual: f64,
     },
 }
 

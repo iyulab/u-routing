@@ -338,6 +338,7 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
 ```json
 {
   "routes": [[1, 3, 5], [2, 4]],
+  "route_vehicles": [0, 0],
   "total_distance": 42.5,
   "num_vehicles": 2,
   "method_used": "ga",
@@ -348,7 +349,68 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
 
 `unassigned` lists the customers (by `id`) that no route serves — for example
 when a fixed fleet under `"nn"` cannot carry the total demand. A non-empty list
-means the plan is partial.
+means the plan is partial. `route_vehicles` says which vehicle drives each route:
+its index in `vehicles` — `"nn"` gives each route its own vehicle from the list,
+`"savings"`, `"ga"` and `"alns"` drive every route with the single vehicle type,
+`0` (also `0` when the request lists no vehicles).
+
+#### `check_vrp_solution(problem, solution) -> CheckOutput`
+
+Checks a plan against the problem it was solved for — the `solve_vrp` request,
+read the same way (the same refusals, and `method` decides whether each vehicle
+drives one route, `"nn"`, or is a type any number of routes use). The plan is in
+the shape `solve_vrp` returns: `routes`, `route_vehicles` (optional — `0` for
+every route), `unassigned` and, optionally, `total_distance` — these four keys
+and no others (the rest of `solve_vrp`'s output says nothing a check reads, and
+an unread key is refused rather than ignored). The plan can come from
+`solve_vrp` or from anywhere else (a hand edit, another solver). A plan that
+breaks the problem is a result, not an error:
+
+```js
+import { solve_vrp, check_vrp_solution } from '@iyulab/u-routing';
+
+const problem = {
+  customers: [
+    { id: 1, x: 1.0, y: 0.0, demand: 10 },
+    { id: 2, x: 0.0, y: 1.0, demand: 10 },
+  ],
+  vehicles: [{ capacity: 15 }],
+  depot: { x: 0.0, y: 0.0 },
+  method: "savings",
+};
+const { routes, route_vehicles, unassigned, total_distance } = solve_vrp(problem);
+const plan = { routes, route_vehicles, unassigned, total_distance };
+console.log(check_vrp_solution(problem, plan).feasible); // true
+
+const edited = { routes: [[1, 2]], unassigned: [] };
+console.log(check_vrp_solution(problem, edited).violations[0]);
+// { code: "capacity_exceeded", route: 0, load: 20, capacity: 15 }
+```
+
+`violations` lists every rule broken, each with a `code` and the values behind
+it (`route` is an index into `routes`; `customer` and `vehicle` are as the
+request and plan name them):
+
+| `code` | Fields | Meaning |
+|---|---|---|
+| `capacity_exceeded` | `route`, `load`, `capacity` | The route carries more than its vehicle's capacity |
+| `time_window_violated` | `route`, `customer`, `arrival`, `due` | The route reaches the customer after its window closes |
+| `max_distance_exceeded` | `route`, `distance`, `max_distance` | The route is longer than its vehicle's `max_distance` |
+| `max_duration_exceeded` | `route`, `duration`, `max_duration` | The route returns later than its vehicle's `max_duration` |
+| `unknown_customer` | `route`, `customer` | The route visits an id no customer has |
+| `customer_visited_twice` | `route`, `customer` | The customer is visited a second time, on this route |
+| `customer_missing` | `customer` | The customer is on no route and not in `unassigned` |
+| `wrongly_unassigned` | `customer` | In `unassigned` but served, listed twice, or no customer of the request |
+| `unknown_vehicle` | `route`, `vehicle` | The route's vehicle is not in `vehicles` |
+| `vehicle_reused` | `route`, `vehicle` | `"nn"` drives each vehicle once; this route uses one again |
+| `too_many_routes` | `routes`, `max_routes` | More routes than `config.max_vehicles` |
+| `distance_mismatch` | `reported`, `actual` | The reported `total_distance` differs from the routes' own (compared only when every route can be driven) |
+
+Refusals are those of `solve_vrp`, and `dimension_mismatch` (`parameter`
+`solution.route_vehicles`, `expected`, `got`) when `route_vehicles` does not have
+one entry per route. The C library takes `{"problem": <the solve request>,
+"solution": {...}}` (`urouting_check_solution`) and the .NET package
+`RoutingClient.CheckSolution(request, VrpPlan.Of(solution))`.
 
 ## npm (WebAssembly)
 

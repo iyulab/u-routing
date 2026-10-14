@@ -60,7 +60,10 @@ public class RequestContractTests
             client.RequestObserver = (entry, body) => written.Add((entry, body));
             try
             {
-                client.SolveVrp(Full(method));
+                // The solve, then its plan checked against the same request -- with every
+                // key of the plan given.
+                var solution = client.SolveVrp(Full(method));
+                client.CheckSolution(Full(method), VrpPlan.Of(solution));
             }
             catch (RoutingException)
             {

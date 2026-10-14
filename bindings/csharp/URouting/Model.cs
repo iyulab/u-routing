@@ -107,16 +107,95 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 
 /// <summary>
 /// A plan. <see cref="Routes"/> lists customer ids per route (the depot is implied at both
-/// ends); <see cref="Unassigned"/> lists the customers no route serves, so a partial plan does
-/// not read as a complete one.
+/// ends) and <see cref="RouteVehicles"/> the vehicle that drives each — its index in
+/// <see cref="VrpRequest.Vehicles"/> (<c>0</c> for the single vehicle type of the methods
+/// other than nearest neighbour, and when the request lists none); <see cref="Unassigned"/>
+/// lists the customers no route serves, so a partial plan does not read as a complete one.
 /// </summary>
 public sealed record VrpSolution(
     IReadOnlyList<IReadOnlyList<long>> Routes,
+    IReadOnlyList<int> RouteVehicles,
     double TotalDistance,
     int NumVehicles,
     RoutingMethod MethodUsed,
     double ComputationTimeMs,
     IReadOnlyList<long> Unassigned);
+
+/// <summary>
+/// A plan to check with <see cref="RoutingClient.CheckSolution"/>: customer ids per route, the
+/// vehicle of each (its index in <see cref="VrpRequest.Vehicles"/>; <c>null</c> = <c>0</c> for
+/// every route), the customers reported unassigned and, if set, the total distance reported.
+/// </summary>
+public sealed record VrpPlan(IReadOnlyList<IReadOnlyList<long>> Routes)
+{
+    /// <summary>The vehicle of each route, or <c>null</c> for vehicle <c>0</c> on every route.</summary>
+    public IReadOnlyList<int>? RouteVehicles { get; init; }
+    /// <summary>Customers reported as served by no route.</summary>
+    public IReadOnlyList<long> Unassigned { get; init; } = [];
+    /// <summary>The total distance reported, or <c>null</c> to leave it unchecked.</summary>
+    public double? TotalDistance { get; init; }
+
+    /// <summary>The plan a solve returned, as a plan to check.</summary>
+    public static VrpPlan Of(VrpSolution solution) => new(solution.Routes)
+    {
+        RouteVehicles = solution.RouteVehicles,
+        Unassigned = solution.Unassigned,
+        TotalDistance = solution.TotalDistance,
+    };
+}
+
+/// <summary>Whether a plan keeps every rule of its problem, and each rule it breaks.</summary>
+/// <param name="Feasible">No violations.</param>
+/// <param name="Violations">Every rule the plan breaks; empty when <paramref name="Feasible"/>.</param>
+public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Violations);
+
+/// <summary>
+/// One way a plan breaks its problem — the engine's <c>code</c> picks the record. <c>Route</c> is
+/// an index into the plan's routes; <c>Customer</c> and <c>Vehicle</c> are as the request and the
+/// plan name them.
+/// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "code")]
+[JsonDerivedType(typeof(CapacityExceeded), "capacity_exceeded")]
+[JsonDerivedType(typeof(TimeWindowViolated), "time_window_violated")]
+[JsonDerivedType(typeof(MaxDistanceExceeded), "max_distance_exceeded")]
+[JsonDerivedType(typeof(MaxDurationExceeded), "max_duration_exceeded")]
+[JsonDerivedType(typeof(UnknownCustomer), "unknown_customer")]
+[JsonDerivedType(typeof(CustomerVisitedTwice), "customer_visited_twice")]
+[JsonDerivedType(typeof(CustomerMissing), "customer_missing")]
+[JsonDerivedType(typeof(WronglyUnassigned), "wrongly_unassigned")]
+[JsonDerivedType(typeof(UnknownVehicle), "unknown_vehicle")]
+[JsonDerivedType(typeof(VehicleReused), "vehicle_reused")]
+[JsonDerivedType(typeof(TooManyRoutes), "too_many_routes")]
+[JsonDerivedType(typeof(DistanceMismatch), "distance_mismatch")]
+public abstract record PlanViolation
+{
+    private PlanViolation() { }
+
+    /// <summary>The route carries more than its vehicle's capacity.</summary>
+    public sealed record CapacityExceeded(int Route, long Load, long Capacity) : PlanViolation;
+    /// <summary>The route reaches the customer after its window closes.</summary>
+    public sealed record TimeWindowViolated(int Route, long Customer, double Arrival, double Due) : PlanViolation;
+    /// <summary>The route is longer than its vehicle's <see cref="Vehicle.MaxDistance"/>.</summary>
+    public sealed record MaxDistanceExceeded(int Route, double Distance, double MaxDistance) : PlanViolation;
+    /// <summary>The route returns later than its vehicle's <see cref="Vehicle.MaxDuration"/>.</summary>
+    public sealed record MaxDurationExceeded(int Route, double Duration, double MaxDuration) : PlanViolation;
+    /// <summary>The route visits an id no customer of the request has.</summary>
+    public sealed record UnknownCustomer(int Route, long Customer) : PlanViolation;
+    /// <summary>The customer is visited a second time, on this route.</summary>
+    public sealed record CustomerVisitedTwice(int Route, long Customer) : PlanViolation;
+    /// <summary>The customer is on no route and not reported unassigned.</summary>
+    public sealed record CustomerMissing(long Customer) : PlanViolation;
+    /// <summary>The customer is reported unassigned but served, listed twice, or unknown.</summary>
+    public sealed record WronglyUnassigned(long Customer) : PlanViolation;
+    /// <summary>The route's vehicle is not in the request's vehicles.</summary>
+    public sealed record UnknownVehicle(int Route, long Vehicle) : PlanViolation;
+    /// <summary>Nearest neighbour drives each vehicle once; this route uses one again.</summary>
+    public sealed record VehicleReused(int Route, long Vehicle) : PlanViolation;
+    /// <summary>More routes than <see cref="VrpConfig.MaxVehicles"/>.</summary>
+    public sealed record TooManyRoutes(int Routes, int MaxRoutes) : PlanViolation;
+    /// <summary>The reported total distance differs from the routes' own.</summary>
+    public sealed record DistanceMismatch(double Reported, double Actual) : PlanViolation;
+}
 
 /// <summary>Source-generated reading of results — no reflection, so trimmed and NativeAOT hosts work.</summary>
 [JsonSourceGenerationOptions(
@@ -126,4 +205,5 @@ public sealed record VrpSolution(
 [JsonSerializable(typeof(VrpSolution))]
 [JsonSerializable(typeof(RoutingMethod))]
 [JsonSerializable(typeof(IReadOnlyList<MethodInfo>))]
+[JsonSerializable(typeof(PlanCheck))]
 internal sealed partial class RoutingJson : JsonSerializerContext;

@@ -471,6 +471,12 @@ pub(crate) fn default_method() -> String {
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 pub(crate) struct VrpOutput {
     pub(crate) routes: Vec<Vec<usize>>,
+    /// The vehicle that drives each route: its index in the request's
+    /// `vehicles`, in the order of `routes`. `"nn"` gives each route its own
+    /// vehicle from the list; `"savings"`, `"ga"` and `"alns"` drive every
+    /// route with the request's single vehicle type, `0`. A request with no
+    /// `vehicles` is solved with one vehicle of unlimited capacity, also `0`.
+    pub(crate) route_vehicles: Vec<usize>,
     pub(crate) total_distance: f64,
     pub(crate) num_vehicles: usize,
     pub(crate) method_used: String,
@@ -648,6 +654,7 @@ pub(crate) fn solve(
     if customers.len() <= 1 {
         return Ok(VrpOutput {
             routes: vec![],
+            route_vehicles: vec![],
             total_distance: 0.0,
             num_vehicles: 0,
             method_used: method.name().to_string(),
@@ -672,20 +679,17 @@ pub(crate) fn solve(
     // vehicle list, but it can exceed a smaller `max_vehicles`.
     let plan = match max_vehicles {
         Some(max) if plan.routes.len() > max => {
-            let limited = limit_routes(
-                plan.routes,
-                plan.capacities,
-                plan.limits,
-                max,
-                &dm,
-                &customers,
-            );
+            let limited = limit_routes(plan.routes, plan.vehicles, &vehicles, max, &dm, &customers);
+            let limits: Vec<RouteLimits> = limited
+                .vehicles
+                .iter()
+                .map(|&v| RouteLimits::of(&vehicles[v]))
+                .collect();
             let (routes, total_distance) =
-                apply_local_search(&limited.routes, &limited.limits, &dm, &customers);
+                apply_local_search(&limited.routes, &limits, &dm, &customers);
             Plan {
                 routes,
-                capacities: limited.capacities,
-                limits: limited.limits,
+                vehicles: limited.vehicles,
                 total_distance,
                 method,
             }
@@ -705,9 +709,309 @@ pub(crate) fn solve(
         num_vehicles: routes.len(),
         total_distance: plan.total_distance,
         routes,
+        route_vehicles: plan.vehicles,
         method_used: plan.method.name().to_string(),
         computation_time_ms: 0.0,
         unassigned,
+    })
+}
+
+// ============================================================================
+// Checking a plan
+// ============================================================================
+
+/// A plan to check, in the shape `solve` returns one: customer ids per route
+/// (the depot implied at both ends), the vehicle of each route, the
+/// customers reported unassigned and, optionally, the total distance reported.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InputSolution {
+    /// Customer ids per route, as `solve` reports them.
+    #[cfg_attr(feature = "wasm", tsify(type = "number[][]"))]
+    routes: Vec<Vec<i128>>,
+    /// The vehicle of each route: its index in the request's `vehicles`.
+    /// Absent: `0` for every route.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number[] | null"))]
+    route_vehicles: Option<Vec<i128>>,
+    /// Customers reported as served by no route.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number[]"))]
+    unassigned: Vec<i128>,
+    /// The plan's total distance as reported. Absent: not checked.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
+    total_distance: Option<f64>,
+}
+
+/// One way a plan breaks its problem. `route` is an index into the plan's
+/// `routes`; `customer` and `vehicle` are as the request and plan name them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum PlanViolation {
+    /// The route carries more than its vehicle's capacity.
+    CapacityExceeded {
+        route: usize,
+        load: i64,
+        capacity: i64,
+    },
+    /// The route reaches `customer` after its window closes.
+    TimeWindowViolated {
+        route: usize,
+        customer: i64,
+        arrival: f64,
+        due: f64,
+    },
+    /// The route is longer than its vehicle's `max_distance`.
+    MaxDistanceExceeded {
+        route: usize,
+        distance: f64,
+        max_distance: f64,
+    },
+    /// The route returns later than its vehicle's `max_duration`.
+    MaxDurationExceeded {
+        route: usize,
+        duration: f64,
+        max_duration: f64,
+    },
+    /// The route visits an id that is no customer of the request.
+    UnknownCustomer { route: usize, customer: i64 },
+    /// `customer` is visited a second time, on `route`.
+    CustomerVisitedTwice { route: usize, customer: i64 },
+    /// `customer` is on no route and not in `unassigned`.
+    CustomerMissing { customer: i64 },
+    /// `customer` is in `unassigned` but a route serves it, it is listed
+    /// twice, or it is no customer of the request.
+    WronglyUnassigned { customer: i64 },
+    /// The route's vehicle is not in the request's `vehicles`.
+    UnknownVehicle { route: usize, vehicle: i64 },
+    /// `"nn"` drives each vehicle once; this route uses one a second time.
+    VehicleReused { route: usize, vehicle: i64 },
+    /// More routes than `config.max_vehicles`.
+    TooManyRoutes { routes: usize, max_routes: usize },
+    /// The reported `total_distance` differs from the routes' own.
+    DistanceMismatch { reported: f64, actual: f64 },
+}
+
+/// Whether a plan keeps every rule of its problem, and each rule it breaks.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+pub(crate) struct CheckOutput {
+    /// No violations.
+    pub(crate) feasible: bool,
+    /// Every rule the plan breaks; empty when `feasible`.
+    pub(crate) violations: Vec<PlanViolation>,
+}
+
+/// Checks `solution` against the problem a `solve` request states, read as
+/// `solve` reads it -- the same `method` (it decides whether each vehicle
+/// drives one route, `"nn"`, or is a type any number of routes use) and the
+/// same refusals. `config.max_vehicles` bounds the routes; the method's search
+/// settings change nothing here but are judged as `solve` judges them, so a
+/// request `solve` takes is a request `check` takes.
+pub(crate) fn check(
+    depot: (f64, f64),
+    input_customers: &[InputCustomer],
+    input_vehicles: &[InputVehicle],
+    method: &str,
+    config: &InputConfig,
+    solution: &InputSolution,
+) -> Result<CheckOutput, ServiceError> {
+    use crate::evaluation::{check_solution, Fleet, VehicleUse};
+    use crate::models::{Route, Solution, ViolationType, Visit};
+
+    let method = Method::parse(method)?;
+    refuse_unread_settings(method, config)?;
+    let max_routes = config
+        .max_vehicles
+        .map(|n| whole_in::<usize>("config.max_vehicles", n, 1, usize::MAX as i128))
+        .transpose()?;
+    let (customers, id_map) = build_customers(depot, input_customers)?;
+    let vehicles = build_vehicles(input_vehicles)?;
+    if method != Method::NearestNeighbor {
+        refuse_mixed_fleet(method, &vehicles)?;
+    }
+    if let Some(route_vehicles) = &solution.route_vehicles {
+        if route_vehicles.len() != solution.routes.len() {
+            return Err(ServiceError::new(
+                "dimension_mismatch",
+                format!(
+                    "solution.route_vehicles has {} entries for {} routes -- one per route",
+                    route_vehicles.len(),
+                    solution.routes.len()
+                ),
+                json!({ "parameter": "solution.route_vehicles",
+                        "expected": solution.routes.len(), "got": route_vehicles.len() }),
+            ));
+        }
+    }
+
+    // Caller ids <-> internal indices. An id no customer has gets an index
+    // past the last customer, which the checker reports as unknown.
+    let internal_of: std::collections::HashMap<i128, usize> = id_map
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id as i128, i + 1))
+        .collect();
+    let mut caller_of: Vec<i128> = std::iter::once(-1)
+        .chain(id_map.iter().map(|&id| id as i128))
+        .collect();
+    let mut internal = |id: i128| -> usize {
+        internal_of.get(&id).copied().unwrap_or_else(|| {
+            caller_of.push(id);
+            caller_of.len() - 1
+        })
+    };
+
+    let dm = DistanceMatrix::from_customers(&customers);
+    let mut plan = Solution::new();
+    let mut actual_total = Some(0.0);
+    for (r, ids) in solution.routes.iter().enumerate() {
+        let vehicle = solution
+            .route_vehicles
+            .as_ref()
+            .map_or(0, |v| v[r])
+            .try_into()
+            .unwrap_or(usize::MAX);
+        let mut route = Route::new(vehicle);
+        let internal_ids: Vec<usize> = ids.iter().map(|&id| internal(id)).collect();
+        for &customer_id in &internal_ids {
+            route.push_visit(Visit {
+                customer_id,
+                arrival_time: 0.0,
+                departure_time: 0.0,
+                load_after: 0,
+            });
+        }
+        // The distance is the route's own (the plan reports only a total, which
+        // is compared below), so the checker finds no per-route mismatch.
+        if internal_ids.iter().all(|&c| c < customers.len()) {
+            let (mut prev, mut d) = (0, 0.0);
+            for &c in &internal_ids {
+                d += dm.get(prev, c);
+                prev = c;
+            }
+            d += dm.get(prev, 0);
+            route.set_total_distance(d);
+            actual_total = actual_total.map(|t| t + d);
+        } else {
+            actual_total = None;
+        }
+        plan.add_route(route);
+    }
+    for &id in &solution.unassigned {
+        let i = internal(id);
+        plan.add_unassigned(i);
+    }
+
+    let fleet = Fleet {
+        vehicles: &vehicles,
+        usage: if method == Method::NearestNeighbor {
+            VehicleUse::OneRouteEach
+        } else {
+            VehicleUse::AnyNumber
+        },
+        max_routes,
+    };
+    let caller = |internal: usize| -> i64 { caller_of[internal] as i64 };
+    let vehicle_given = |route: usize| -> i64 {
+        solution
+            .route_vehicles
+            .as_ref()
+            .map_or(0, |v| v[route] as i64)
+    };
+    let mut violations: Vec<PlanViolation> = check_solution(&customers, &dm, &fleet, &plan)
+        .into_iter()
+        .filter_map(|v| {
+            Some(match v.kind {
+                ViolationType::CapacityExceeded {
+                    route_index,
+                    load,
+                    capacity,
+                } => PlanViolation::CapacityExceeded {
+                    route: route_index,
+                    load: load.into(),
+                    capacity: capacity.into(),
+                },
+                ViolationType::TimeWindowViolated {
+                    route_index,
+                    customer_id,
+                    arrival,
+                    due,
+                } => PlanViolation::TimeWindowViolated {
+                    route: route_index,
+                    customer: caller(customer_id),
+                    arrival,
+                    due,
+                },
+                ViolationType::MaxDistanceExceeded {
+                    route_index,
+                    distance,
+                    max_distance,
+                } => PlanViolation::MaxDistanceExceeded {
+                    route: route_index,
+                    distance,
+                    max_distance,
+                },
+                ViolationType::MaxDurationExceeded {
+                    route_index,
+                    duration,
+                    max_duration,
+                } => PlanViolation::MaxDurationExceeded {
+                    route: route_index,
+                    duration,
+                    max_duration,
+                },
+                ViolationType::UnknownCustomer {
+                    route_index,
+                    customer_id,
+                } => PlanViolation::UnknownCustomer {
+                    route: route_index,
+                    customer: caller(customer_id),
+                },
+                ViolationType::CustomerVisitedTwice {
+                    customer_id,
+                    route_index,
+                } => PlanViolation::CustomerVisitedTwice {
+                    route: route_index,
+                    customer: caller(customer_id),
+                },
+                ViolationType::CustomerMissing { customer_id } => PlanViolation::CustomerMissing {
+                    customer: caller(customer_id),
+                },
+                ViolationType::WronglyUnassigned { customer_id } => {
+                    PlanViolation::WronglyUnassigned {
+                        customer: caller(customer_id),
+                    }
+                }
+                ViolationType::UnknownVehicle { route_index, .. } => {
+                    PlanViolation::UnknownVehicle {
+                        route: route_index,
+                        vehicle: vehicle_given(route_index),
+                    }
+                }
+                ViolationType::VehicleReused { route_index, .. } => PlanViolation::VehicleReused {
+                    route: route_index,
+                    vehicle: vehicle_given(route_index),
+                },
+                ViolationType::TooManyRoutes { routes, max_routes } => {
+                    PlanViolation::TooManyRoutes { routes, max_routes }
+                }
+                // Each route's distance was set to its own above.
+                ViolationType::DistanceMismatch { .. } => return None,
+            })
+        })
+        .collect();
+    if let (Some(reported), Some(actual)) = (solution.total_distance, actual_total) {
+        if (reported - actual).abs() > 1e-6 * actual.abs().max(1.0) {
+            violations.push(PlanViolation::DistanceMismatch { reported, actual });
+        }
+    }
+    Ok(CheckOutput {
+        feasible: violations.is_empty(),
+        violations,
     })
 }
 
@@ -716,10 +1020,9 @@ pub(crate) fn solve(
 #[derive(Debug)]
 struct Plan {
     routes: Vec<Vec<usize>>,
-    /// The capacity of each route, in the same order.
-    capacities: Vec<i32>,
-    /// The distance and duration limits of each route, in the same order.
-    limits: Vec<RouteLimits>,
+    /// The vehicle of each route -- its index in the request's fleet -- in the
+    /// same order. Capacity and limits come from the vehicle.
+    vehicles: Vec<usize>,
     total_distance: f64,
     method: Method,
 }
@@ -1043,17 +1346,8 @@ fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicle]) -
     };
     Plan {
         routes: solution.routes().iter().map(|r| r.customer_ids()).collect(),
-        // Nearest neighbour fills each vehicle with its own capacity.
-        capacities: solution
-            .routes()
-            .iter()
-            .map(|r| vehicles[r.vehicle_id()].capacity())
-            .collect(),
-        limits: solution
-            .routes()
-            .iter()
-            .map(|r| RouteLimits::of(&vehicles[r.vehicle_id()]))
-            .collect(),
+        // Nearest neighbour drives each route with its own vehicle.
+        vehicles: solution.routes().iter().map(|r| r.vehicle_id()).collect(),
         total_distance: solution.total_distance(),
         method: Method::NearestNeighbor,
     }
@@ -1064,8 +1358,7 @@ fn solve_savings(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicl
     let solution = clarke_wright_savings(customers, dm, vehicle_template);
     let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     Plan {
-        capacities: vec![vehicle_template.capacity(); routes.len()],
-        limits: vec![RouteLimits::of(vehicle_template); routes.len()],
+        vehicles: vec![0; routes.len()],
         routes,
         total_distance: solution.total_distance(),
         method: Method::Savings,
@@ -1157,8 +1450,7 @@ fn solve_ga(
     let route_limits = vec![limits; routes.len()];
     let (routes, total_distance) = apply_local_search(&routes, &route_limits, dm, customers);
     Ok(Plan {
-        capacities: vec![capacity; routes.len()],
-        limits: route_limits,
+        vehicles: vec![0; routes.len()],
         routes,
         total_distance,
         method: Method::Genetic,
@@ -1204,8 +1496,7 @@ fn solve_alns(
     let route_limits = vec![limits; alns_routes.len()];
     let (routes, total_distance) = apply_local_search(&alns_routes, &route_limits, dm, customers);
     Ok(Plan {
-        capacities: vec![capacity; routes.len()],
-        limits: route_limits,
+        vehicles: vec![0; routes.len()],
         routes,
         total_distance,
         method: Method::Alns,
@@ -2061,6 +2352,157 @@ mod tests {
             )
             .is_ok());
         }
+    }
+
+    // ---- check ----
+
+    /// The plan `solve` returned, as `check` reads one.
+    fn as_solution(out: &VrpOutput) -> InputSolution {
+        serde_json::from_value(json!({
+            "routes": out.routes,
+            "route_vehicles": out.route_vehicles,
+            "unassigned": out.unassigned,
+            "total_distance": out.total_distance,
+        }))
+        .expect("a solution")
+    }
+
+    /// Every method's own plan passes the checker -- under time windows,
+    /// distance and duration limits, a fixed fleet and (for `"nn"`) a mixed
+    /// one. The checker and the solvers share no code past the distance
+    /// matrix and the route evaluator, so this is a property of both.
+    #[test]
+    fn every_method_s_plan_passes_the_check() {
+        let windows: Vec<InputCustomer> = (1..=10)
+            .map(|i| {
+                let a = i as f64;
+                customer(json!({
+                    "id": 100 + i, "x": a.cos() * 10.0, "y": a.sin() * 10.0, "demand": 4.0,
+                    "service_time": 1.0, "time_window": [0.0, 30.0 + 5.0 * a]
+                }))
+            })
+            .collect();
+        let problems: Vec<(&str, Vec<InputCustomer>, Vec<InputVehicle>)> = vec![
+            ("plain", ring(9), fleet(&[15.0])),
+            ("windows", windows, fleet(&[20.0])),
+            (
+                "limits",
+                ring(9),
+                vec![vehicle(
+                    json!({ "capacity": 15.0, "max_distance": 40.0, "max_duration": 45.0 }),
+                )],
+            ),
+            ("mixed (nn)", ring(9), fleet(&[20.0, 10.0, 15.0])),
+        ];
+        for (name, customers, vehicles) in &problems {
+            for max_vehicles in [None, Some(2)] {
+                for method in ["nn", "savings", "ga", "alns"] {
+                    if name.starts_with("mixed") && method != "nn" {
+                        continue;
+                    }
+                    let config = InputConfig {
+                        max_vehicles,
+                        ..quick(method)
+                    };
+                    let out = solve((0.0, 0.0), customers, vehicles, method, &config)
+                        .unwrap_or_else(|e| panic!("{name} {method}: {e:?}"));
+                    let checked = check(
+                        (0.0, 0.0),
+                        customers,
+                        vehicles,
+                        method,
+                        &config,
+                        &as_solution(&out),
+                    )
+                    .unwrap_or_else(|e| panic!("{name} {method}: {e:?}"));
+                    assert!(
+                        checked.feasible && checked.violations.is_empty(),
+                        "{name} {method} {max_vehicles:?}: {:?} on {out:?}",
+                        checked.violations
+                    );
+                }
+            }
+        }
+    }
+
+    /// A plan that breaks the problem is a result, each rule by name, in the
+    /// caller's ids.
+    #[test]
+    fn a_broken_plan_reports_each_rule_it_breaks() {
+        let customers: Vec<InputCustomer> = (1..=4)
+            .map(|i| customer(json!({ "id": 10 * i, "x": i as f64, "y": 0.0, "demand": 5.0 })))
+            .collect();
+        let vehicles = fleet(&[10.0, 5.0]);
+        let config = InputConfig {
+            max_vehicles: Some(2),
+            ..InputConfig::default()
+        };
+        // 10 twice, 40 missing, 77 unknown, vehicle 1 over capacity and used
+        // twice, three routes for two, and a total nobody drove.
+        let solution: InputSolution = serde_json::from_value(json!({
+            "routes": [[10, 20], [10, 30], [77]],
+            "route_vehicles": [1, 0, 1],
+            "unassigned": [],
+            "total_distance": 1.0
+        }))
+        .expect("a solution");
+        let out =
+            check((0.0, 0.0), &customers, &vehicles, "nn", &config, &solution).expect("checked");
+        assert!(!out.feasible);
+        assert_eq!(
+            out.violations,
+            [
+                PlanViolation::TooManyRoutes {
+                    routes: 3,
+                    max_routes: 2
+                },
+                PlanViolation::CapacityExceeded {
+                    route: 0,
+                    load: 10,
+                    capacity: 5
+                },
+                PlanViolation::CustomerVisitedTwice {
+                    route: 1,
+                    customer: 10
+                },
+                PlanViolation::UnknownCustomer {
+                    route: 2,
+                    customer: 77
+                },
+                PlanViolation::VehicleReused {
+                    route: 2,
+                    vehicle: 1
+                },
+                PlanViolation::CustomerMissing { customer: 40 },
+            ]
+        );
+        // The total is not compared once a route cannot be driven (77).
+        let wire = serde_json::to_value(&out.violations[1]).expect("json");
+        assert_eq!(
+            wire,
+            json!({ "code": "capacity_exceeded", "route": 0, "load": 10, "capacity": 5 })
+        );
+    }
+
+    #[test]
+    fn a_reported_distance_is_compared_and_route_vehicles_must_match_the_routes() {
+        let customers = ring(2);
+        let vehicles = fleet(&[100.0]);
+        let config = InputConfig::default();
+        let out = solve((0.0, 0.0), &customers, &vehicles, "nn", &config).expect("solved");
+        let mut solution = as_solution(&out);
+        solution.total_distance = Some(out.total_distance + 1.0);
+        let checked =
+            check((0.0, 0.0), &customers, &vehicles, "nn", &config, &solution).expect("checked");
+        assert!(matches!(
+            checked.violations.as_slice(),
+            [PlanViolation::DistanceMismatch { reported, .. }] if *reported == out.total_distance + 1.0
+        ));
+        solution.route_vehicles = Some(vec![]);
+        let e = check((0.0, 0.0), &customers, &vehicles, "nn", &config, &solution)
+            .expect_err("no vehicle per route");
+        assert_eq!(e.code(), "dimension_mismatch");
+        assert_eq!(e.fields["parameter"], "solution.route_vehicles");
     }
 
     /// The catalog and the refusal are one table: with each method, a setting
