@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-16
+
+Depends on u-metaheur 0.11 and u-numflow 0.13. The .NET client is `URouting` 0.15.0.
+
 ### Added
 
 - `codes()` (WebAssembly): every refusal `code` the package throws (with the
