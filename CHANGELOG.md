@@ -8,12 +8,26 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- `"ga"` is now a hybrid GA in the manner of Prins (2004): the initial
+  population is seeded with the savings, sweep and (with time windows) Solomon
+  I1 solutions, and each mutation is followed by local search on the split
+  routes (relocate, cross-exchange, 2-opt, or-opt) written back into the
+  tour. The permutation GA it replaces used every vehicle of the fleet on
+  Solomon's instances and ended further from the best known distance than
+  `"savings"` (+21 to +338 %); the hybrid reaches the best known solutions of
+  c101 and c201 and is ahead of `"savings"` on all six measured instances.
+  A run takes longer (0.7–2.7 s against 0.1–0.5 s on 100 customers with the
+  default settings).
+
 ### Added
 
 - `examples/solomon.rs`: measures every method on Solomon's VRPTW instances
   through the C entry points and checks each answer with
   `urouting_check_solution`; the README's *Benchmarks* section has the first
-  measurement. The instances are downloaded, not shipped.
+  measurement. The instances are downloaded, not shipped. An optional JSON
+  argument is merged into the `ga` / `alns` settings.
 
 ### Fixed
 

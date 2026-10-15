@@ -5,8 +5,11 @@
 //!
 //! # Operators
 //!
+//! - **Initial population**: the giant tours of the savings, sweep and (with
+//!   time windows) Solomon I1 constructions, educated, then random tours
 //! - **Crossover**: Order crossover (OX) — preserves relative customer ordering
-//! - **Mutation**: Swap + invert (2-opt) with equal probability
+//! - **Mutation**: Swap or invert, then education — local search on the split
+//!   routes written back into the tour
 //! - **Evaluation**: Split DP → local search (optional 2-opt) → total distance
 //!
 //! # Reference
@@ -18,12 +21,14 @@ use rand::{Rng, RngExt};
 use u_metaheur::ga::operators::{invert_mutation, order_crossover, swap_mutation};
 use u_metaheur::ga::GaProblem;
 
+use crate::constructive::{clarke_wright_savings, solomon_i1, sweep};
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteLimits;
 use crate::local_search::two_opt_improve;
-use crate::models::Customer;
+use crate::models::{Customer, Solution, Vehicle};
 
 use super::chromosome::GiantTour;
+use super::educate::{concatenate, educate, route_vehicle};
 use super::split::split;
 use super::split_tw::split_tw;
 
@@ -68,6 +73,8 @@ pub struct RoutingGaProblem {
     customers: Vec<Customer>,
     distances: DistanceMatrix,
     capacity: i32,
+    /// The vehicle each route is planned with -- the capacity and the limits.
+    vehicle: Vehicle,
     apply_local_search: bool,
     /// Whether any customer carries a time window.
     time_windows: bool,
@@ -97,6 +104,7 @@ impl RoutingGaProblem {
             customers,
             distances,
             capacity,
+            vehicle: route_vehicle(capacity, &RouteLimits::NONE),
             apply_local_search: true,
             time_windows,
             limits: RouteLimits::NONE,
@@ -109,6 +117,7 @@ impl RoutingGaProblem {
     /// takes moves that keep them.
     pub fn with_limits(mut self, limits: RouteLimits) -> Self {
         self.limits = limits;
+        self.vehicle = route_vehicle(self.capacity, &limits);
         self
     }
 
@@ -121,6 +130,12 @@ impl RoutingGaProblem {
     /// Returns the number of customers (excluding depot).
     fn num_customers(&self) -> usize {
         self.customers.len() - 1
+    }
+
+    /// The giant tour of a constructed solution.
+    fn tour_of(&self, solution: &Solution) -> Vec<usize> {
+        let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
+        concatenate(&routes, self.num_customers())
     }
 }
 
@@ -138,6 +153,34 @@ impl GaProblem for RoutingGaProblem {
         }
 
         GiantTour::new(perm)
+    }
+
+    /// The savings and sweep constructions -- and Solomon's I1 insertion when
+    /// customers carry time windows -- each educated: the population starts
+    /// from good routes as well as from random ones (Prins 2004 seeds with
+    /// constructive heuristics in the same way).
+    fn initial_individuals(&self) -> Vec<GiantTour> {
+        if self.num_customers() == 0 {
+            return Vec::new();
+        }
+        let mut seeds = vec![
+            clarke_wright_savings(&self.customers, &self.distances, &self.vehicle),
+            sweep(&self.customers, &self.distances, &self.vehicle),
+        ];
+        if self.time_windows {
+            seeds.push(solomon_i1(&self.customers, &self.distances, &self.vehicle));
+        }
+        seeds
+            .iter()
+            .map(|s| {
+                GiantTour::new(educate(
+                    &self.tour_of(s),
+                    &self.customers,
+                    &self.distances,
+                    &self.vehicle,
+                ))
+            })
+            .collect()
     }
 
     fn evaluate(&self, individual: &GiantTour) -> f64 {
@@ -200,12 +243,20 @@ impl GaProblem for RoutingGaProblem {
         if individual.len() < 2 {
             return;
         }
-        // 50% swap, 50% invert (2-opt style)
+        // 50% swap, 50% invert (2-opt style), then local search on the
+        // routes the tour splits into, written back into the tour.
         if rng.random_range(0..2u64) == 0 {
             swap_mutation(individual.customers_mut(), rng);
         } else {
             invert_mutation(individual.customers_mut(), rng);
         }
+        let educated = educate(
+            individual.customers(),
+            &self.customers,
+            &self.distances,
+            &self.vehicle,
+        );
+        *individual = GiantTour::new(educated);
     }
 }
 

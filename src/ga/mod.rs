@@ -4,8 +4,10 @@
 //! - [`split()`] — Prins (2004) split DP to partition giant tour into routes
 //! - [`split_tw()`] — Time-window-aware split for VRPTW
 //! - [`RoutingGaProblem`] — [`GaProblem`](u_metaheur::ga::GaProblem) implementation
+//! - `educate` — local search on a giant tour (the hybrid GA's mutation)
 
 mod chromosome;
+mod educate;
 mod problem;
 pub mod split;
 pub mod split_tw;

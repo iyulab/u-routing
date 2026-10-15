@@ -7,13 +7,15 @@
 //! the directory holding `c101.txt` …:
 //!
 //! ```text
-//! cargo run --release --features ffi --example solomon -- <dir> [bks.csv] [methods]
+//! cargo run --release --features ffi --example solomon -- <dir> [bks.csv] [methods] [settings]
 //! ```
 //!
 //! `bks.csv` (optional) has lines `instance,vehicles,distance` -- best known
 //! results under the usual hierarchical objective (vehicles first, then
 //! distance); the gap columns are against it. `methods` is a comma list of
-//! `nn,savings,ga,alns` (default all), each run once with seed 1.
+//! `nn,savings,ga,alns` (default all), each run once with seed 1. `settings`
+//! (optional) is a JSON object merged into `config` for `ga` and `alns`, e.g.
+//! `{"max_generations":1000}`.
 //!
 //! Mapping: the depot's due date is every vehicle's `max_duration` (return by
 //! it), the fleet is the instance's vehicle count at its capacity
@@ -86,7 +88,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let dir = args
         .next()
-        .expect("usage: solomon <dir> [bks.csv] [methods]");
+        .expect("usage: solomon <dir> [bks.csv] [methods] [settings]");
     let bks: HashMap<String, (f64, f64)> = args
         .next()
         .filter(|p| !p.is_empty())
@@ -110,6 +112,10 @@ fn main() {
         .split(',')
         .map(String::from)
         .collect();
+    let settings: serde_json::Map<String, Value> = args
+        .next()
+        .map(|s| serde_json::from_str(&s).expect("settings: a JSON object"))
+        .unwrap_or_default();
 
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .expect("instance directory")
@@ -137,7 +143,10 @@ fn main() {
             // Only the settings the method reads: any other is refused
             // (`invalid_option`, `urouting_methods`).
             let config = if matches!(method.as_str(), "ga" | "alns") {
-                json!({ "seed": 1, "max_vehicles": inst.vehicles })
+                let mut config = json!({ "seed": 1, "max_vehicles": inst.vehicles });
+                let fields = config.as_object_mut().expect("an object");
+                fields.extend(settings.clone());
+                config
             } else {
                 json!({ "max_vehicles": inst.vehicles })
             };
