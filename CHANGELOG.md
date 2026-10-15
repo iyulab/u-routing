@@ -8,6 +8,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- `codes()` (WebAssembly): every refusal `code` the package throws (with the
+  fields that can come with it) and every `check_vrp_solution` violation
+  `code`, as data — `{ refusals: [{ code, fields }], violations: [{ code,
+  fields, checker }] }` — built from the tables the refusals and violations are
+  built from, so a caller that translates codes can check its list against the
+  package's rather than parse the README.
+
+### Fixed
+
+- The README's refusal table lists `dimension_mismatch` (from
+  `check_vrp_solution`) and `internal`, which the package throws; a test keeps
+  the tables and `codes()` equal.
+
 ## [0.17.0] - 2026-10-15
 
 ### Added

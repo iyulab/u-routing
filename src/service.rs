@@ -41,6 +41,86 @@ use u_metaheur::{ConfigError, StopReason};
 /// breaks when it does. Both bindings carry the same pair: the WebAssembly one
 /// copies `fields` onto the thrown `Error`, the C one writes them next to
 /// `"error"` in its error body.
+/// Every reason the solver refuses a request with: the `code` both bindings
+/// carry, and the fields that can stand beside it. A refusal is built from one
+/// of these ([`ServiceError::new`]), so [`codes`] -- the list a caller reads --
+/// is the list the solver refuses from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Code {
+    MalformedInput,
+    /// Only JavaScript can send a NaN or an infinity: JSON has none.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    ValueNotFinite,
+    UnknownOption,
+    InvalidOption,
+    ParameterOutOfRange,
+    DimensionMismatch,
+    DuplicateId,
+    InvalidTimeWindow,
+    NotWholeUnits,
+    MixedFleet,
+    Internal,
+}
+
+impl Code {
+    #[cfg(feature = "wasm")]
+    pub(crate) const ALL: [Code; 11] = [
+        Code::MalformedInput,
+        Code::ValueNotFinite,
+        Code::UnknownOption,
+        Code::InvalidOption,
+        Code::ParameterOutOfRange,
+        Code::DimensionMismatch,
+        Code::DuplicateId,
+        Code::InvalidTimeWindow,
+        Code::NotWholeUnits,
+        Code::MixedFleet,
+        Code::Internal,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Code::MalformedInput => "malformed_input",
+            Code::ValueNotFinite => "value_not_finite",
+            Code::UnknownOption => "unknown_option",
+            Code::InvalidOption => "invalid_option",
+            Code::ParameterOutOfRange => "parameter_out_of_range",
+            Code::DimensionMismatch => "dimension_mismatch",
+            Code::DuplicateId => "duplicate_id",
+            Code::InvalidTimeWindow => "invalid_time_window",
+            Code::NotWholeUnits => "not_whole_units",
+            Code::MixedFleet => "mixed_fleet",
+            Code::Internal => "internal",
+        }
+    }
+
+    /// The fields a refusal with this code can carry besides `code`.
+    pub(crate) fn fields(self) -> &'static [&'static str] {
+        match self {
+            Code::MalformedInput | Code::ValueNotFinite => &["parameter", "index"],
+            Code::UnknownOption => &["parameter", "got", "expected"],
+            Code::InvalidOption => &["parameter", "method"],
+            Code::ParameterOutOfRange => &[
+                "parameter",
+                "index",
+                "id",
+                "method",
+                "min",
+                "max",
+                "exclusive_min",
+                "exclusive_max",
+                "got",
+            ],
+            Code::DimensionMismatch => &["parameter", "expected", "got"],
+            Code::DuplicateId => &["id", "first", "second"],
+            Code::InvalidTimeWindow => &["id", "index", "ready", "due"],
+            Code::NotWholeUnits => &["parameter", "index", "id", "value"],
+            Code::MixedFleet => &["method", "parameter", "values", "capacities", "index"],
+            Code::Internal => &[],
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ServiceError {
     pub(crate) message: String,
@@ -48,9 +128,17 @@ pub(crate) struct ServiceError {
 }
 
 impl ServiceError {
-    fn new(code: &str, message: String, mut fields: serde_json::Value) -> Self {
+    fn new(code: Code, message: String, mut fields: serde_json::Value) -> Self {
+        if let Some(extra) = fields.as_object() {
+            debug_assert!(
+                extra.keys().all(|k| code.fields().contains(&k.as_str())),
+                "{} refusal with undeclared fields: {:?}",
+                code.name(),
+                extra.keys().collect::<Vec<_>>()
+            );
+        }
         let mut all = serde_json::Map::new();
-        all.insert("code".into(), json!(code));
+        all.insert("code".into(), json!(code.name()));
         if let Some(extra) = fields.as_object_mut() {
             all.append(extra);
         }
@@ -64,7 +152,7 @@ impl ServiceError {
     /// unknown key. `parameter` names the argument.
     pub(crate) fn malformed_input(parameter: &str, message: String) -> Self {
         Self::new(
-            "malformed_input",
+            Code::MalformedInput,
             message,
             json!({ "parameter": parameter }),
         )
@@ -74,13 +162,13 @@ impl ServiceError {
     /// `parameter` and `index`. Only JavaScript can send one: JSON has none.
     #[cfg(feature = "wasm")]
     pub(crate) fn value_not_finite(message: String, fields: serde_json::Value) -> Self {
-        Self::new("value_not_finite", message, fields)
+        Self::new(Code::ValueNotFinite, message, fields)
     }
 
     /// A failure inside the library rather than a refusal of the input.
     #[cfg(feature = "ffi")]
     pub(crate) fn internal(message: &str) -> Self {
-        Self::new("internal", message.to_string(), json!({}))
+        Self::new(Code::Internal, message.to_string(), json!({}))
     }
 
     /// The stable reason, as the `code` field carries it.
@@ -291,7 +379,7 @@ fn whole_in<T: TryFrom<i128>>(
     let mut fields = json!({ "parameter": parameter, "got": value as f64 });
     bounds.insert_into(&mut fields);
     Err(ServiceError::new(
-        "parameter_out_of_range",
+        Code::ParameterOutOfRange,
         format!("{parameter} must be {rule}, got {value}"),
         fields,
     ))
@@ -516,6 +604,67 @@ pub(crate) const SETTINGS: [&str; 7] = [
     "max_vehicles",
 ];
 
+/// A refusal reason: the `code` and the fields that can stand beside it.
+#[cfg(feature = "wasm")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RefusalCode {
+    pub(crate) code: String,
+    pub(crate) fields: Vec<String>,
+}
+
+/// A violation the checker reports: its `code`, the fields beside it, and the
+/// function that reports it.
+#[cfg(feature = "wasm")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ViolationCode {
+    pub(crate) code: String,
+    pub(crate) fields: Vec<String>,
+    #[cfg_attr(feature = "wasm", tsify(type = "\"check_vrp_solution\""))]
+    pub(crate) checker: String,
+}
+
+/// What the solver can answer with besides a result: every refusal `code`
+/// and every checker violation `code`.
+#[cfg(feature = "wasm")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Codes {
+    pub(crate) refusals: Vec<RefusalCode>,
+    pub(crate) violations: Vec<ViolationCode>,
+}
+
+/// The vocabularies, from the tables the refusals and violations are built
+/// from: [`Code`] and [`PlanViolation::examples`].
+#[cfg(feature = "wasm")]
+pub(crate) fn codes() -> Codes {
+    Codes {
+        refusals: Code::ALL
+            .into_iter()
+            .map(|c| RefusalCode {
+                code: c.name().to_string(),
+                fields: c.fields().iter().map(|f| f.to_string()).collect(),
+            })
+            .collect(),
+        violations: PlanViolation::examples()
+            .iter()
+            .map(|v| {
+                let value = serde_json::to_value(v).expect("a violation serializes");
+                let object = value.as_object().expect("a violation is an object");
+                ViolationCode {
+                    code: object["code"].as_str().expect("tagged").to_string(),
+                    fields: object.keys().filter(|k| *k != "code").cloned().collect(),
+                    checker: "check_vrp_solution".to_string(),
+                }
+            })
+            .collect(),
+    }
+}
+
 /// One method and the `config` settings it reads; a request giving any other
 /// setting with this method is refused (`invalid_option`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -610,7 +759,7 @@ impl Method {
                 let expected: Vec<&str> = Self::ALL.iter().map(|m| m.name()).collect();
                 let quoted: Vec<String> = expected.iter().map(|m| format!("\"{m}\"")).collect();
                 ServiceError::new(
-                    "unknown_option",
+                    Code::UnknownOption,
                     format!("unknown method '{name}'. Supported: {}", quoted.join(", ")),
                     json!({ "parameter": "method", "got": name, "expected": expected }),
                 )
@@ -809,6 +958,63 @@ pub(crate) enum PlanViolation {
     DistanceMismatch { reported: f64, actual: f64 },
 }
 
+#[cfg(feature = "wasm")]
+impl PlanViolation {
+    /// One of each violation, for the published vocabulary ([`codes`]): its
+    /// code and fields are read off these, so they are the enum's.
+    pub(crate) fn examples() -> Vec<Self> {
+        vec![
+            Self::CapacityExceeded {
+                route: 0,
+                load: 0,
+                capacity: 0,
+            },
+            Self::TimeWindowViolated {
+                route: 0,
+                customer: 0,
+                arrival: 0.0,
+                due: 0.0,
+            },
+            Self::MaxDistanceExceeded {
+                route: 0,
+                distance: 0.0,
+                max_distance: 0.0,
+            },
+            Self::MaxDurationExceeded {
+                route: 0,
+                duration: 0.0,
+                max_duration: 0.0,
+            },
+            Self::UnknownCustomer {
+                route: 0,
+                customer: 0,
+            },
+            Self::CustomerVisitedTwice {
+                route: 0,
+                customer: 0,
+            },
+            Self::CustomerMissing { customer: 0 },
+            Self::WronglyUnassigned { customer: 0 },
+            Self::UnknownVehicle {
+                route: 0,
+                vehicle: 0,
+            },
+            Self::VehicleReused {
+                route: 0,
+                vehicle: 0,
+            },
+            Self::TooManyRoutes {
+                routes: 0,
+                max_routes: 0,
+            },
+            Self::DistanceMismatch {
+                reported: 0.0,
+                actual: 0.0,
+            },
+        ]
+    }
+}
+
 /// Whether a plan keeps every rule of its problem, and each rule it breaks.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -850,7 +1056,7 @@ pub(crate) fn check(
     if let Some(route_vehicles) = &solution.route_vehicles {
         if route_vehicles.len() != solution.routes.len() {
             return Err(ServiceError::new(
-                "dimension_mismatch",
+                Code::DimensionMismatch,
                 format!(
                     "solution.route_vehicles has {} entries for {} routes -- one per route",
                     route_vehicles.len(),
@@ -1081,7 +1287,7 @@ fn build_customers(
         })?;
         if let Some(first) = first_at.insert(id, position) {
             return Err(ServiceError::new(
-                "duplicate_id",
+                Code::DuplicateId,
                 format!(
                     "customer {id}: the id is given twice, at positions {first} and \
                      {position} of customers (counting from 0); routes and unassigned \
@@ -1099,7 +1305,7 @@ fn build_customers(
         if let Some([ready, due]) = ic.time_window {
             let tw = TimeWindow::new(ready, due).ok_or_else(|| {
                 ServiceError::new(
-                    "invalid_time_window",
+                    Code::InvalidTimeWindow,
                     format!(
                         "customer {id}: time_window [{ready}, {due}] is not a window \
                          (it needs ready <= due)"
@@ -1140,10 +1346,10 @@ fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
                 exclusive_max,
             }
             .insert_into(&mut fields);
-            ServiceError::new("parameter_out_of_range", message, fields)
+            ServiceError::new(Code::ParameterOutOfRange, message, fields)
         }
         _ => ServiceError::new(
-            "invalid_option",
+            Code::InvalidOption,
             message,
             json!({ "parameter": parameter, "method": method.name() }),
         ),
@@ -1171,7 +1377,7 @@ fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), Servi
                 .map(Method::name)
                 .collect();
             return Err(ServiceError::new(
-                "invalid_option",
+                Code::InvalidOption,
                 format!(
                     "config.{setting} is read by {} -- method \"{}\" does not read it; leave it out",
                     names.join(", "),
@@ -1238,7 +1444,7 @@ fn whole_units(
     let accepted = 0.0..=f64::from(i32::MAX);
     if value.fract() != 0.0 {
         return Err(ServiceError::new(
-            "not_whole_units",
+            Code::NotWholeUnits,
             format!(
                 "{} is {value}; it must be a whole number of units -- scale the unit \
                  (kilograms to grams, say) to keep a fractional amount",
@@ -1251,7 +1457,7 @@ fn whole_units(
         let mut fields = json!({ "parameter": parameter, "index": index, "id": id, "got": value });
         Bounds::of(accepted).insert_into(&mut fields);
         return Err(ServiceError::new(
-            "parameter_out_of_range",
+            Code::ParameterOutOfRange,
             format!(
                 "{} is {value}; it must be from 0 to {} units",
                 what(),
@@ -1291,7 +1497,7 @@ fn refuse_mixed_fleet(method: Method, vehicles: &[Vehicle]) -> Result<(), Servic
                 parameter
             };
             return Err(ServiceError::new(
-                "mixed_fleet",
+                Code::MixedFleet,
                 format!(
                     "method \"{}\" plans every route with one vehicle, but the fleet has \
                      {plural} {a} and {b}; give every vehicle the same {parameter}, or use \
@@ -1334,7 +1540,7 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, Servi
                     let mut fields = json!({ "parameter": parameter, "index": i, "got": limit });
                     Bounds::of((Bound::Excluded(0.0), Bound::Unbounded)).insert_into(&mut fields);
                     return Err(ServiceError::new(
-                        "parameter_out_of_range",
+                        Code::ParameterOutOfRange,
                         format!("vehicle {i}: {parameter} must be > 0, got {limit}"),
                         fields,
                     ));
@@ -1433,7 +1639,7 @@ fn solve_ga(
             let mut fields = json!({ "parameter": parameter, "got": v });
             Bounds::of(accepted).insert_into(&mut fields);
             return Err(ServiceError::new(
-                "parameter_out_of_range",
+                Code::ParameterOutOfRange,
                 format!("{parameter} must be in {text}, got {v}"),
                 fields,
             ));
@@ -1530,6 +1736,77 @@ fn solve_alns(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published vocabulary is what the solver answers with: every
+    /// violation has an example (a new variant fails to compile here until it
+    /// has one), and the fields listed are the ones it serializes.
+    #[test]
+    #[cfg(feature = "wasm")]
+    fn the_code_catalog_covers_every_violation() {
+        let mut seen = [false; 12];
+        for v in PlanViolation::examples() {
+            let i = match v {
+                PlanViolation::CapacityExceeded { .. } => 0,
+                PlanViolation::TimeWindowViolated { .. } => 1,
+                PlanViolation::MaxDistanceExceeded { .. } => 2,
+                PlanViolation::MaxDurationExceeded { .. } => 3,
+                PlanViolation::UnknownCustomer { .. } => 4,
+                PlanViolation::CustomerVisitedTwice { .. } => 5,
+                PlanViolation::CustomerMissing { .. } => 6,
+                PlanViolation::WronglyUnassigned { .. } => 7,
+                PlanViolation::UnknownVehicle { .. } => 8,
+                PlanViolation::VehicleReused { .. } => 9,
+                PlanViolation::TooManyRoutes { .. } => 10,
+                PlanViolation::DistanceMismatch { .. } => 11,
+            };
+            assert!(!seen[i], "two examples of variant {i}");
+            seen[i] = true;
+        }
+        assert!(seen.iter().all(|s| *s), "a violation without an example");
+        let catalog = codes();
+        let capacity = &catalog.violations[0];
+        // serde_json orders an object's keys by name.
+        assert_eq!(capacity.fields, ["capacity", "load", "route"]);
+        assert!(catalog
+            .violations
+            .iter()
+            .all(|v| v.checker == "check_vrp_solution"));
+        assert_eq!(catalog.refusals.len(), Code::ALL.len());
+    }
+
+    /// The README's code tables list exactly the published vocabulary, so the
+    /// tables and `codes()` cannot drift apart.
+    #[test]
+    #[cfg(feature = "wasm")]
+    fn the_readme_documents_every_code_and_no_other() {
+        let readme = include_str!("../README.md");
+        let mut documented = std::collections::BTreeSet::new();
+        let mut in_table = false;
+        for line in readme.lines() {
+            if line.starts_with("| `code` |") {
+                in_table = true;
+                continue;
+            }
+            if !line.starts_with('|') {
+                in_table = false;
+                continue;
+            }
+            if in_table && !line.starts_with("|---") {
+                let first = line.split('|').nth(1).expect("a cell");
+                for code in first.split('·') {
+                    documented.insert(code.trim().trim_matches('`').to_string());
+                }
+            }
+        }
+        let catalog = codes();
+        let published: std::collections::BTreeSet<String> = catalog
+            .refusals
+            .iter()
+            .map(|r| r.code.clone())
+            .chain(catalog.violations.iter().map(|v| v.code.clone()))
+            .collect();
+        assert_eq!(documented, published);
+    }
     use crate::distance::DistanceMatrix;
     use crate::models::Customer;
 

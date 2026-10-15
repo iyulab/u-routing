@@ -164,6 +164,15 @@ const result = solve_vrp({
 
 ### Functions
 
+#### `codes() -> Codes`
+
+Every refusal `code` this package's functions throw, with the fields that can come
+with it, and every violation `code` `check_vrp_solution` reports:
+`{ refusals: [{ code, fields }], violations: [{ code, fields, checker }] }`. It is
+built from the tables the refusals and violations come from, so a caller that
+translates codes can compare its list with the package's; the tables below list
+the same codes with their meaning.
+
 #### `available_methods() -> MethodInfo[]`
 
 Every method `solve_vrp` takes, with the `config` settings each reads (`{ name, reads }`).
@@ -329,6 +338,8 @@ try {
 | `invalid_option` | `parameter`, `method` | A setting the method does not read (`config.max_iterations` with `"ga"`), or settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter`, `index` (inside an array) | An argument of the wrong shape or type (a missing or unknown key), a count, seed or `id` that is not a whole number (`config.population_size: 2.5` — `parameter` is the field), or a JSON string. The C ABI names the field the same way (`customers[1].id`); text that is not JSON at all is `request` |
+| `dimension_mismatch` | `parameter`, `expected`, `got` | `check_vrp_solution` only: a `solution.route_vehicles` without one entry per route |
+| `internal` | — | A fault in this package rather than in the request — please report it |
 
 The C library and the .NET package report the same `code` and fields: the C
 error body is `{"error": "<message>", "code": ..., ...}`, and `RoutingException`
@@ -412,9 +423,8 @@ request and plan name them):
 | `too_many_routes` | `routes`, `max_routes` | More routes than `config.max_vehicles` |
 | `distance_mismatch` | `reported`, `actual` | The reported `total_distance` differs from the routes' own (compared only when every route can be driven) |
 
-Refusals are those of `solve_vrp`, and `dimension_mismatch` (`parameter`
-`solution.route_vehicles`, `expected`, `got`) when `route_vehicles` does not have
-one entry per route. The C library takes `{"problem": <the solve request>,
+Refusals are those of `solve_vrp`, and `dimension_mismatch` when `route_vehicles`
+does not have one entry per route. The C library takes `{"problem": <the solve request>,
 "solution": {...}}` (`urouting_check_solution`) and the .NET package
 `RoutingClient.CheckSolution(request, VrpPlan.Of(solution))`.
 

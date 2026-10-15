@@ -267,6 +267,18 @@ pub fn available_methods() -> Result<JsValue, JsValue> {
         .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
 }
 
+/// Every refusal `code` this package's functions throw, with the fields that
+/// can come with it, and every violation `code` `check_vrp_solution` reports:
+/// `{ refusals: [{ code, fields }], violations: [{ code, fields, checker }] }`.
+///
+/// It is built from the tables the refusals and violations come from, so a
+/// caller that translates codes can check its list against the package's.
+#[wasm_bindgen(unchecked_return_type = "Codes")]
+pub fn codes() -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&service::codes())
+        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+}
+
 /// Solve a capacitated VRP problem.
 ///
 /// # Arguments
