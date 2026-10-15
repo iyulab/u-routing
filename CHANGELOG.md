@@ -8,6 +8,13 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- `examples/solomon.rs`: measures every method on Solomon's VRPTW instances
+  through the C entry points and checks each answer with
+  `urouting_check_solution`; the README's *Benchmarks* section has the first
+  measurement. The instances are downloaded, not shipped.
+
 ### Fixed
 
 - A result the package fails to hand back to JavaScript is refused as

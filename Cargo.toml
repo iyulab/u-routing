@@ -50,6 +50,12 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+# Solomon VRPTW measurement through the C entry points (instances not in the
+# repository -- see the file's header).
+[[example]]
+name = "solomon"
+required-features = ["ffi"]
+
 [dev-dependencies]
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 proptest = "1.4"

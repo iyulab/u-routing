@@ -105,6 +105,38 @@ u-routing
 └── alns/            Destroy/Repair operators + AlnsProblem bridge
 ```
 
+## Benchmarks
+
+`examples/solomon.rs` measures the four methods on Solomon's VRPTW instances
+through the C entry points, and checks every answer with
+`urouting_check_solution`. The instances are not in this repository: download
+the 100-customer set (SINTEF's "Solomon benchmark" page has a zip) and run
+
+```bash
+cargo run --release --features ffi --example solomon -- <dir> [bks.csv] [nn,savings,ga,alns]
+```
+
+`bks.csv` lines are `instance,vehicles,distance`. Best known results rank
+**vehicles first, then distance**, so a distance below the best known one with
+more routes is not a better solution — read the gap together with the route
+count. The depot's due date is each vehicle's `max_duration`; the fleet is the
+instance's vehicle count and capacity.
+
+First measurement (0.18.0, default settings, seed 1, one run; routes / distance;
+every answer checked feasible):
+
+| Instance | Best known | `nn` | `savings` | `ga` | `alns` |
+|---|---|---|---|---|---|
+| c101 | 10 / 828.94 | 21 / 1870.69 | 15 / 1127.48 | 25 / 2425.97 | 11 / 859.30 |
+| c201 | 3 / 591.56 | 15 / 1880.47 | 9 / 1029.66 | 25 / 2589.19 | 5 / 678.26 |
+| r101 | 19 / 1650.80 | 25 / 1666.05 (21 unassigned) | 25 / 1920.25 (1 unassigned) | 25 / 2001.36 (1 unassigned) | 23 / 1771.41 |
+| r201 | 4 / 1252.37 | 15 / 1984.96 | 15 / 1401.27 | 25 / 2471.72 | 8 / 1187.35 |
+| rc101 | 14 / 1696.95 | 25 / 2479.98 (6 unassigned) | 23 / 1999.35 | 25 / 2740.91 | 19 / 1819.56 |
+| rc201 | 4 / 1406.94 | 15 / 2468.25 | 16 / 1654.13 | 25 / 2836.29 | 8 / 1296.88 |
+
+Best known values: SINTEF TOP, 100-customer table (rc101 is listed there as
+`rc101b`).
+
 ## Dependencies
 
 - [`u-metaheur`](https://crates.io/crates/u-metaheur) — GA/ALNS framework
