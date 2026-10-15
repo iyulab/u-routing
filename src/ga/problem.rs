@@ -39,8 +39,10 @@ use super::split_tw::split_tw;
 /// Fitness is evaluated by splitting the permutation into feasible routes using
 /// the Prins (2004) split DP algorithm, optionally followed by intra-route 2-opt.
 ///
-/// When any customer has a time window, the split is [`split_tw`] and 2-opt is
-/// skipped -- it reverses route segments without regard to time. A tour whose
+/// When any customer has a time window, the split is [`split_tw`], and every
+/// local-search move -- the 2-opt of the evaluation and the education of the
+/// initial tours and mutations -- is taken only if it keeps every customer on
+/// time and the route within its limits. A tour whose
 /// split leaves customers unserved is ranked behind every tour that serves
 /// them all: the split's partial cost would otherwise make dropping a customer
 /// look cheaper than serving it.

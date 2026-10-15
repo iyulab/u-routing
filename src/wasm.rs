@@ -287,8 +287,8 @@ pub fn codes() -> Result<JsValue, JsValue> {
 /// # Supported methods
 /// - `"nn"` — Nearest Neighbor (default, fast)
 /// - `"savings"` — Clarke-Wright Savings
-/// - `"ga"` — Genetic Algorithm with Prins split + local search (the local
-///   search is skipped when customers carry time windows)
+/// - `"ga"` — Hybrid genetic algorithm (Prins 2004): split, a population seeded
+///   with constructive solutions, and local search after each mutation
 /// - `"alns"` — Adaptive Large Neighborhood Search + local search
 ///
 /// Only `"nn"` reads each vehicle; the others plan with one capacity. Every
