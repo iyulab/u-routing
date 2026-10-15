@@ -252,7 +252,7 @@ pub fn check_vrp_solution(
     )
     .map_err(js_err)?;
     serde_wasm_bindgen::to_value(&output)
-        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+        .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }
 
 /// Every method `solve_vrp` takes, with the `config` settings each reads:
@@ -264,7 +264,7 @@ pub fn check_vrp_solution(
 #[wasm_bindgen(unchecked_return_type = "MethodInfo[]")]
 pub fn available_methods() -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&service::methods())
-        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+        .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }
 
 /// Every refusal `code` this package's functions throw, with the fields that
@@ -276,7 +276,7 @@ pub fn available_methods() -> Result<JsValue, JsValue> {
 #[wasm_bindgen(unchecked_return_type = "Codes")]
 pub fn codes() -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&service::codes())
-        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+        .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }
 
 /// Solve a capacitated VRP problem.
@@ -327,7 +327,7 @@ pub fn solve_vrp(
     output.computation_time_ms = elapsed_ms(start);
 
     serde_wasm_bindgen::to_value(&output)
-        .map_err(|e| js_err(ServiceError::malformed_input("result", e.to_string())))
+        .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }
 
 // ============================================================================

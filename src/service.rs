@@ -165,7 +165,6 @@ impl ServiceError {
     }
 
     /// A failure inside the library rather than a refusal of the input.
-    #[cfg(feature = "ffi")]
     pub(crate) fn internal(message: &str) -> Self {
         Self::new(Code::Internal, message.to_string(), json!({}))
     }
