@@ -16,6 +16,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   fields, checkers }] }` — built from the tables the refusals and violations are
   built from, so a caller that translates codes can check its list against the
   package's rather than parse the README.
+- The same catalog over the C ABI (`urouting_codes()`) and in .NET
+  (`RoutingClient.GetCodes()` → `Codes(Refusals, Violations)`).
 
 ### Fixed
 

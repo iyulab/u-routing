@@ -252,6 +252,21 @@ pub extern "C" fn urouting_methods() -> *mut libc::c_char {
         .into_raw()
 }
 
+/// Every refusal `code` the solver and the checker answer with, and every
+/// violation `code` the checker reports, with the fields beside each, as JSON:
+/// `{"refusals": [{"code", "fields"}], "violations": [{"code", "fields",
+/// "checkers"}]}` -- built from the tables the refusals and violations are
+/// made from, so a caller that translates codes can check its list against the
+/// engine's. The string is owned by the caller and must be released with
+/// [`urouting_free_string`].
+#[no_mangle]
+pub extern "C" fn urouting_codes() -> *mut libc::c_char {
+    let json = serde_json::to_string(&crate::service::codes()).expect("codes serialize");
+    CString::new(json)
+        .expect("JSON has no interior NUL")
+        .into_raw()
+}
+
 /// Get u-routing version
 #[no_mangle]
 pub extern "C" fn urouting_version() -> *mut libc::c_char {
@@ -393,6 +408,23 @@ mod tests {
         let methods: Vec<crate::service::MethodInfo> =
             serde_json::from_str(&json).expect("a method list");
         assert_eq!(methods, crate::service::methods());
+    }
+
+    #[test]
+    fn the_codes_are_the_service_catalog() {
+        let ptr = urouting_codes();
+        let json = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_str()
+            .expect("UTF-8")
+            .to_owned();
+        unsafe { urouting_free_string(ptr) };
+        let codes: crate::service::Codes = serde_json::from_str(&json).expect("a catalog");
+        assert_eq!(codes, crate::service::codes());
+        assert!(codes.refusals.iter().any(|r| r.code == "unknown_option"));
+        assert!(codes
+            .violations
+            .iter()
+            .any(|v| v.code == "capacity_exceeded"));
     }
 
     #[test]

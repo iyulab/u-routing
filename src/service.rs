@@ -48,8 +48,8 @@ use u_metaheur::{ConfigError, StopReason};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Code {
     MalformedInput,
-    /// Only JavaScript can send a NaN or an infinity: JSON has none.
-    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    /// Only JavaScript can send a NaN or an infinity (JSON has none); the
+    /// .NET client refuses one with this code while it assembles the request.
     ValueNotFinite,
     UnknownOption,
     InvalidOption,
@@ -63,7 +63,6 @@ pub(crate) enum Code {
 }
 
 impl Code {
-    #[cfg(feature = "wasm")]
     pub(crate) const ALL: [Code; 11] = [
         Code::MalformedInput,
         Code::ValueNotFinite,
@@ -605,7 +604,6 @@ pub(crate) const SETTINGS: [&str; 7] = [
 ];
 
 /// A refusal reason: the `code` and the fields that can stand beside it.
-#[cfg(feature = "wasm")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
@@ -616,7 +614,6 @@ pub(crate) struct RefusalCode {
 
 /// A violation the checker reports: its `code`, the fields beside it, and the
 /// functions that report it.
-#[cfg(feature = "wasm")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
@@ -629,7 +626,6 @@ pub(crate) struct ViolationCode {
 
 /// What the solver can answer with besides a result: every refusal `code`
 /// and every checker violation `code`.
-#[cfg(feature = "wasm")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[serde(deny_unknown_fields)]
@@ -640,7 +636,6 @@ pub(crate) struct Codes {
 
 /// The vocabularies, from the tables the refusals and violations are built
 /// from: [`Code`] and [`PlanViolation::examples`].
-#[cfg(feature = "wasm")]
 pub(crate) fn codes() -> Codes {
     Codes {
         refusals: Code::ALL
@@ -958,7 +953,6 @@ pub(crate) enum PlanViolation {
     DistanceMismatch { reported: f64, actual: f64 },
 }
 
-#[cfg(feature = "wasm")]
 impl PlanViolation {
     /// One of each violation, for the published vocabulary ([`codes`]): its
     /// code and fields are read off these, so they are the enum's.
@@ -1741,7 +1735,6 @@ mod tests {
     /// violation has an example (a new variant fails to compile here until it
     /// has one), and the fields listed are the ones it serializes.
     #[test]
-    #[cfg(feature = "wasm")]
     fn the_code_catalog_covers_every_violation() {
         let mut seen = [false; 12];
         for v in PlanViolation::examples() {
@@ -1777,7 +1770,6 @@ mod tests {
     /// The README's code tables list exactly the published vocabulary, so the
     /// tables and `codes()` cannot drift apart.
     #[test]
-    #[cfg(feature = "wasm")]
     fn the_readme_documents_every_code_and_no_other() {
         let readme = include_str!("../README.md");
         let mut documented = std::collections::BTreeSet::new();

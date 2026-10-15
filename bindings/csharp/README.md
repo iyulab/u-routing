@@ -98,7 +98,16 @@ catch (RoutingException ex) when (ex.ErrorCode == "duplicate_id")
 }
 ```
 
-The codes and their fields are listed in the crate README's *Errors* section. A NaN or
+The codes and their fields are listed in the crate README's *Errors* section, and
+`GetCodes()` returns them as data — every refusal code with the fields beside it, and
+every `PlanViolation` code — from the tables the engine makes them from:
+
+```csharp
+Codes codes = routing.GetCodes();   // Codes(Refusals, Violations)
+bool known = codes.Refusals.Any(r => r.Code == "duplicate_id");   // true
+```
+
+A NaN or
 infinity in the request is refused before it reaches the engine, as `value_not_finite`
 with the path to it as `Parameter` (`customers[1].x`) — `Index` is set only when
 the value itself is an array element.

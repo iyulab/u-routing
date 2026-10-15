@@ -44,6 +44,26 @@ public enum RoutingSetting
 /// <param name="Reads">The <see cref="VrpConfig"/> settings it reads; any other is refused.</param>
 public sealed record MethodInfo(RoutingMethod Name, IReadOnlyList<RoutingSetting> Reads);
 
+/// <summary>A refusal reason: the <c>code</c> an exception's <c>ErrorCode</c> carries and the
+/// body fields that can stand beside it.</summary>
+/// <param name="Code">The stable reason, e.g. <c>parameter_out_of_range</c>.</param>
+/// <param name="Fields">The error body's fields beside it (<c>parameter</c>, <c>min</c>, …).</param>
+public sealed record RefusalCode(string Code, IReadOnlyList<string> Fields);
+
+/// <summary>A violation a checker reports: its <c>code</c>, the fields beside it, and the
+/// engine operations that report it.</summary>
+/// <param name="Code">The stable reason, e.g. <c>capacity_exceeded</c>.</param>
+/// <param name="Fields">The violation's fields beside <c>code</c>, in wire names.</param>
+/// <param name="Checkers">The engine operations reporting it, by their engine names
+/// (<c>check_vrp_solution</c> is <see cref="RoutingClient.CheckSolution"/>).</param>
+public sealed record ViolationCode(string Code, IReadOnlyList<string> Fields, IReadOnlyList<string> Checkers);
+
+/// <summary>Every code the engine can answer with besides a result — the same catalog the
+/// WebAssembly package's <c>codes()</c> returns.</summary>
+/// <param name="Refusals">Each refusal reason.</param>
+/// <param name="Violations">Each checker violation.</param>
+public sealed record Codes(IReadOnlyList<RefusalCode> Refusals, IReadOnlyList<ViolationCode> Violations);
+
 /// <summary>When a customer may be served: arrival before <see cref="Ready"/> waits, after <see cref="Due"/> is not allowed.</summary>
 public readonly record struct TimeWindow(double Ready, double Due);
 
@@ -229,5 +249,6 @@ public abstract record PlanViolation
 [JsonSerializable(typeof(VrpSolution))]
 [JsonSerializable(typeof(RoutingMethod))]
 [JsonSerializable(typeof(IReadOnlyList<MethodInfo>))]
+[JsonSerializable(typeof(Codes))]
 [JsonSerializable(typeof(PlanCheck))]
 internal sealed partial class RoutingJson : JsonSerializerContext;

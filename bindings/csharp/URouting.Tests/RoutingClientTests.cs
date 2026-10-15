@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Xunit;
 
 namespace URouting.Tests;
@@ -56,6 +57,25 @@ public class RoutingClientTests
         Assert.Contains(RoutingSetting.EliteRatio, ga.Reads);
         Assert.DoesNotContain(RoutingSetting.MaxIterations, ga.Reads);
         Assert.All(methods, m => Assert.Contains(RoutingSetting.MaxVehicles, m.Reads));
+    }
+
+    [Fact]
+    public void The_code_catalog_carries_exactly_what_the_engine_sent()
+    {
+        var raw = RoutingClient.CodesJson();
+        var codes = _client.GetCodes();
+        var written = JsonSerializer.SerializeToNode(codes, RoutingJson.Default.Codes);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(raw), written), $"engine: {raw}\nrecord: {written}");
+
+        // The client raises value_not_finite itself; the catalog must name it.
+        Assert.Contains(codes.Refusals, r => r.Code == "value_not_finite");
+        // Every violation the engine names has a PlanViolation type, and no type is missing one.
+        var typed = typeof(PlanViolation)
+            .GetCustomAttributes(typeof(JsonDerivedTypeAttribute), false)
+            .Cast<JsonDerivedTypeAttribute>()
+            .Select(a => (string)a.TypeDiscriminator!)
+            .Order(StringComparer.Ordinal);
+        Assert.Equal(codes.Violations.Select(v => v.Code).Order(StringComparer.Ordinal), typed);
     }
 
     [Theory]

@@ -47,6 +47,31 @@ public sealed class RoutingClient : IDisposable
         JsonSerializer.Deserialize(MethodsJson(), RoutingJson.Default.IReadOnlyListMethodInfo)
         ?? throw new InvalidOperationException("The native engine returned no method list.");
 
+    /// <summary>
+    /// Every refusal <see cref="RoutingException.ErrorCode"/> the engine and this client raise,
+    /// and every <see cref="PlanViolation"/> code <see cref="CheckSolution"/> reports, with the
+    /// fields beside each — built from the tables the refusals and violations are made from, so
+    /// a caller that translates codes can check its list against the engine's.
+    /// </summary>
+    public Codes GetCodes() =>
+        JsonSerializer.Deserialize(CodesJson(), RoutingJson.Default.Codes)
+        ?? throw new InvalidOperationException("The native engine returned no code catalog.");
+
+    /// <summary>The code catalog as the native engine returns it.</summary>
+    internal static string CodesJson()
+    {
+        var ptr = NativeInterop.urouting_codes();
+        try
+        {
+            return Marshal.PtrToStringUTF8(ptr)
+                ?? throw new InvalidOperationException("The native engine returned no code catalog.");
+        }
+        finally
+        {
+            NativeInterop.urouting_free_string(ptr);
+        }
+    }
+
     /// <summary>The method list as the native engine returns it.</summary>
     internal static string MethodsJson()
     {
