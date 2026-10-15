@@ -615,7 +615,7 @@ pub(crate) struct RefusalCode {
 }
 
 /// A violation the checker reports: its `code`, the fields beside it, and the
-/// function that reports it.
+/// functions that report it.
 #[cfg(feature = "wasm")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -623,8 +623,8 @@ pub(crate) struct RefusalCode {
 pub(crate) struct ViolationCode {
     pub(crate) code: String,
     pub(crate) fields: Vec<String>,
-    #[cfg_attr(feature = "wasm", tsify(type = "\"check_vrp_solution\""))]
-    pub(crate) checker: String,
+    #[cfg_attr(feature = "wasm", tsify(type = "\"check_vrp_solution\"[]"))]
+    pub(crate) checkers: Vec<String>,
 }
 
 /// What the solver can answer with besides a result: every refusal `code`
@@ -658,7 +658,7 @@ pub(crate) fn codes() -> Codes {
                 ViolationCode {
                     code: object["code"].as_str().expect("tagged").to_string(),
                     fields: object.keys().filter(|k| *k != "code").cloned().collect(),
-                    checker: "check_vrp_solution".to_string(),
+                    checkers: vec!["check_vrp_solution".to_string()],
                 }
             })
             .collect(),
@@ -1770,7 +1770,7 @@ mod tests {
         assert!(catalog
             .violations
             .iter()
-            .all(|v| v.checker == "check_vrp_solution"));
+            .all(|v| v.checkers == ["check_vrp_solution"]));
         assert_eq!(catalog.refusals.len(), Code::ALL.len());
     }
 

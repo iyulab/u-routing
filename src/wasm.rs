@@ -269,7 +269,7 @@ pub fn available_methods() -> Result<JsValue, JsValue> {
 
 /// Every refusal `code` this package's functions throw, with the fields that
 /// can come with it, and every violation `code` `check_vrp_solution` reports:
-/// `{ refusals: [{ code, fields }], violations: [{ code, fields, checker }] }`.
+/// `{ refusals: [{ code, fields }], violations: [{ code, fields, checkers }] }`.
 ///
 /// It is built from the tables the refusals and violations come from, so a
 /// caller that translates codes can check its list against the package's.

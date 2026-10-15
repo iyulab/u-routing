@@ -168,7 +168,7 @@ const result = solve_vrp({
 
 Every refusal `code` this package's functions throw, with the fields that can come
 with it, and every violation `code` `check_vrp_solution` reports:
-`{ refusals: [{ code, fields }], violations: [{ code, fields, checker }] }`. It is
+`{ refusals: [{ code, fields }], violations: [{ code, fields, checkers }] }`. It is
 built from the tables the refusals and violations come from, so a caller that
 translates codes can compare its list with the package's; the tables below list
 the same codes with their meaning.
