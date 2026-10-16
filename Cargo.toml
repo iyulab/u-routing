@@ -1,6 +1,6 @@
 [package]
 name = "u-routing"
-version = "0.18.0"
+version = "0.19.0"
 rust-version = "1.87"
 edition = "2021"
 authors = ["iyulab"]
@@ -29,7 +29,7 @@ wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:serde_json", "dep:js-
 ffi = ["dep:serde_json", "dep:libc", "dep:serde_path_to_error"]
 
 [dependencies]
-u-metaheur = { version = "0.11", features = ["serde"] }
+u-metaheur = { version = "0.12", features = ["serde"] }
 u-numflow = "0.13"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
