@@ -33,6 +33,20 @@ fn open_route(
         || route_feasible(&[customer_id], 0, distances, customers, limits)
 }
 
+/// What opening a route for `customer_id` alone costs: `route_cost` (the
+/// vehicle's fixed cost in distance units) plus the round trip, or `None` when
+/// even that route breaks a time window or a limit.
+fn new_route_cost(
+    customer_id: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    limits: &RouteLimits,
+    route_cost: f64,
+) -> Option<f64> {
+    open_route(customer_id, distances, customers, limits)
+        .then(|| route_cost + distances.get(0, customer_id) + distances.get(customer_id, 0))
+}
+
 /// Finds the best insertion position for a customer across all routes of one
 /// capacity. Returns `(route_index, position, cost_increase)`. A position that
 /// would make a customer late is not a candidate.
@@ -85,6 +99,7 @@ pub struct GreedyInsertion {
     distances: DistanceMatrix,
     customers: Vec<Customer>,
     capacity: i32,
+    route_cost: f64,
 }
 
 impl GreedyInsertion {
@@ -95,6 +110,7 @@ impl GreedyInsertion {
             customers,
             capacity,
             limits: RouteLimits::NONE,
+            route_cost: 0.0,
         }
     }
 
@@ -102,6 +118,15 @@ impl GreedyInsertion {
     /// limits (none by default).
     pub fn with_limits(mut self, limits: RouteLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// The cost of opening a route, in distance units (a vehicle's
+    /// [`fixed_cost_in_distance`](crate::models::Vehicle::fixed_cost_in_distance);
+    /// 0 by default). A new route is a candidate like any insertion, priced
+    /// at this plus its round trip.
+    pub fn with_route_cost(mut self, route_cost: f64) -> Self {
+        self.route_cost = route_cost;
         self
     }
 }
@@ -140,6 +165,22 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
                         found = true;
                     }
                 }
+                // A route of its own is a candidate at its price.
+                if let Some(cost) = new_route_cost(
+                    cid,
+                    &self.distances,
+                    &self.customers,
+                    &self.limits,
+                    self.route_cost,
+                ) {
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_cust_idx = ui;
+                        best_route = NEW_ROUTE;
+                        best_pos = 0;
+                        found = true;
+                    }
+                }
             }
 
             if !found {
@@ -153,12 +194,24 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
                 }
             } else {
                 let cid = unassigned.remove(best_cust_idx);
-                sol.routes_mut()[best_route].insert(best_pos, cid);
+                place(&mut sol, best_route, best_pos, cid);
             }
         }
 
         sol.recalculate_distance(&self.distances);
         sol
+    }
+}
+
+/// The route index that stands for a new route in a candidate.
+const NEW_ROUTE: usize = usize::MAX;
+
+/// Puts `cid` at `pos` of route `route`, or on a new route of its own.
+fn place(sol: &mut RoutingSolution, route: usize, pos: usize, cid: usize) {
+    if route == NEW_ROUTE {
+        sol.routes_mut().push(vec![cid]);
+    } else {
+        sol.routes_mut()[route].insert(pos, cid);
     }
 }
 
@@ -175,6 +228,7 @@ pub struct RegretInsertion {
     customers: Vec<Customer>,
     capacity: i32,
     k: usize,
+    route_cost: f64,
 }
 
 impl RegretInsertion {
@@ -186,7 +240,14 @@ impl RegretInsertion {
             capacity,
             k: 2,
             limits: RouteLimits::NONE,
+            route_cost: 0.0,
         }
+    }
+
+    /// The cost of opening a route, as [`GreedyInsertion::with_route_cost`].
+    pub fn with_route_cost(mut self, route_cost: f64) -> Self {
+        self.route_cost = route_cost;
+        self
     }
 
     /// Inserts only where the route keeps the vehicle's distance and duration
@@ -249,6 +310,16 @@ impl RegretInsertion {
             if best_cost.is_finite() {
                 costs.push((ri, best_pos, best_cost));
             }
+        }
+        // A route of its own is one more alternative, at its price.
+        if let Some(cost) = new_route_cost(
+            customer_id,
+            &self.distances,
+            &self.customers,
+            &self.limits,
+            self.route_cost,
+        ) {
+            costs.push((NEW_ROUTE, 0, cost));
         }
 
         costs.sort_by(|a, b| {
@@ -318,7 +389,7 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
                 }
             } else {
                 let cid = unassigned.remove(best_cust_idx);
-                sol.routes_mut()[best_route].insert(best_pos, cid);
+                place(&mut sol, best_route, best_pos, cid);
             }
         }
 

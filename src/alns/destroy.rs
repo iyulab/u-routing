@@ -279,6 +279,41 @@ fn remove_customer(sol: &mut RoutingSolution, customer_id: usize) {
     }
 }
 
+/// Removes every customer of one route, chosen uniformly among the routes
+/// that serve any (route removal, Pisinger & Ropke 2007).
+///
+/// The other operators remove scattered customers, which repair puts back
+/// into the routes they came from; emptying a whole route is the move that
+/// lets the search close one -- the only way a plan loses a route, and what a
+/// vehicle's fixed cost rewards. `degree` is not read: the route decides how
+/// many customers go.
+pub struct RouteRemoval;
+
+impl DestroyOperator<RoutingSolution> for RouteRemoval {
+    fn name(&self) -> &str {
+        "route_removal"
+    }
+
+    fn destroy<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        _degree: f64,
+        rng: &mut R,
+    ) -> RoutingSolution {
+        let mut sol = solution.clone();
+        let served: Vec<usize> = (0..sol.routes().len())
+            .filter(|&r| !sol.routes()[r].is_empty())
+            .collect();
+        if served.is_empty() {
+            return sol;
+        }
+        let r = served[rng.random_range(0..served.len() as u64) as usize];
+        let removed = std::mem::take(&mut sol.routes_mut()[r]);
+        sol.unassigned_mut().extend(removed);
+        sol
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

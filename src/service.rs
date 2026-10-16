@@ -13,7 +13,7 @@ use std::ops::{Bound, RangeBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::alns::destroy::{RandomRemoval, ShawRemoval, WorstRemoval};
+use crate::alns::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemoval};
 use crate::alns::repair::{GreedyInsertion, RegretInsertion};
 use crate::alns::{Destroy, Repair, RoutingAlnsProblem};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
@@ -1818,14 +1818,19 @@ fn solve_alns(
         Destroy::Random(RandomRemoval),
         Destroy::Worst(WorstRemoval::new(dm.clone())),
         Destroy::Shaw(ShawRemoval::new(dm.clone(), customers.to_vec())),
+        Destroy::Route(RouteRemoval),
     ];
+    let route_cost = vehicle.fixed_cost_in_distance();
     let repair_ops = vec![
         Repair::Greedy(
-            GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity).with_limits(limits),
+            GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity)
+                .with_limits(limits)
+                .with_route_cost(route_cost),
         ),
         Repair::Regret(
             RegretInsertion::new(dm.clone(), customers.to_vec(), capacity)
                 .with_limits(limits)
+                .with_route_cost(route_cost)
                 .with_k(2),
         ),
     ];

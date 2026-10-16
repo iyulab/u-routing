@@ -8,6 +8,23 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- `"alns"` removes whole routes (`RouteRemoval`, Pisinger & Ropke 2007) beside
+  random, worst and Shaw removal, and its greedy and regret insertions price a
+  new route — the vehicle's fixed cost plus the round trip — against every
+  insertion; a route used to open only when no insertion fit. With
+  `fixed_cost: 1000` on Solomon's 56 instances (three seeds) the mean route
+  count falls to 7.9 (best known 7.2; R2 3.3, RC2 3.9), every answer feasible;
+  with the default costs it is 8.7 routes at +0.5 % distance. Rust:
+  `GreedyInsertion::with_route_cost`, `RegretInsertion::with_route_cost`,
+  `alns::Destroy::Route`.
+
+### Changed
+
+- **Breaking** `alns::Destroy` has a `Route` variant (a `match` over it must
+  handle it).
+
 ## [0.20.0] - 2026-10-16
 
 Depends on u-numflow 0.14. The .NET client is `URouting` 0.17.0.

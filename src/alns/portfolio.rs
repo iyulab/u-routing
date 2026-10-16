@@ -9,7 +9,7 @@
 use rand::Rng;
 use u_metaheur::alns::{DestroyOperator, RepairOperator};
 
-use super::destroy::{RandomRemoval, ShawRemoval, WorstRemoval};
+use super::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemoval};
 use super::repair::{GreedyInsertion, RegretInsertion};
 use super::solution_repr::RoutingSolution;
 
@@ -21,6 +21,8 @@ pub enum Destroy {
     Worst(WorstRemoval),
     /// [`ShawRemoval`].
     Shaw(ShawRemoval),
+    /// [`RouteRemoval`].
+    Route(RouteRemoval),
 }
 
 impl DestroyOperator<RoutingSolution> for Destroy {
@@ -29,6 +31,7 @@ impl DestroyOperator<RoutingSolution> for Destroy {
             Self::Random(op) => op.name(),
             Self::Worst(op) => op.name(),
             Self::Shaw(op) => op.name(),
+            Self::Route(op) => op.name(),
         }
     }
 
@@ -42,6 +45,7 @@ impl DestroyOperator<RoutingSolution> for Destroy {
             Self::Random(op) => op.destroy(solution, degree, rng),
             Self::Worst(op) => op.destroy(solution, degree, rng),
             Self::Shaw(op) => op.destroy(solution, degree, rng),
+            Self::Route(op) => op.destroy(solution, degree, rng),
         }
     }
 }
