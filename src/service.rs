@@ -13,9 +13,9 @@ use std::ops::{Bound, RangeBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::alns::destroy::RandomRemoval;
-use crate::alns::repair::GreedyInsertion;
-use crate::alns::RoutingAlnsProblem;
+use crate::alns::destroy::{RandomRemoval, ShawRemoval, WorstRemoval};
+use crate::alns::repair::{GreedyInsertion, RegretInsertion};
+use crate::alns::{Destroy, Repair, RoutingAlnsProblem};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{has_time_windows, route_checks_needed, RouteLimits};
@@ -1712,9 +1712,24 @@ fn solve_alns(
     let problem =
         RoutingAlnsProblem::new(customers.to_vec(), dm.clone(), capacity).with_limits(limits);
 
-    let destroy_ops = vec![RandomRemoval];
-    let repair_ops =
-        vec![GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity).with_limits(limits)];
+    // The operator set of Ropke & Pisinger (2006): the search adapts among
+    // random, worst and related (Shaw) removal and greedy and regret-2
+    // insertion. Every insertion keeps time windows and the route limits.
+    let destroy_ops = vec![
+        Destroy::Random(RandomRemoval),
+        Destroy::Worst(WorstRemoval::new(dm.clone())),
+        Destroy::Shaw(ShawRemoval::new(dm.clone(), customers.to_vec())),
+    ];
+    let repair_ops = vec![
+        Repair::Greedy(
+            GreedyInsertion::new(dm.clone(), customers.to_vec(), capacity).with_limits(limits),
+        ),
+        Repair::Regret(
+            RegretInsertion::new(dm.clone(), customers.to_vec(), capacity)
+                .with_limits(limits)
+                .with_k(2),
+        ),
+    ];
 
     let method = Method::Alns;
     let max_iterations = match cfg.max_iterations {

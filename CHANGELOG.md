@@ -10,6 +10,14 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- `"alns"` adapts among the operators of Ropke & Pisinger (2006) — random,
+  worst and related (Shaw) removal, greedy and regret-2 insertion — where it
+  had one of each (random removal, greedy insertion), so there was nothing to
+  adapt between. On Solomon's 56 instances (three seeds) the mean distance gap
+  to the best known solutions falls from +5.7 % to +0.3 % and the mean route
+  count from 10.0 to 8.8; a run takes about twice as long (1.1–1.6 s on
+  100 customers). Rust: `alns::Destroy` / `alns::Repair` carry the operators
+  as one type each for `AlnsRunner`.
 - The README's *Benchmarks* section measures all 56 Solomon instances with
   three seeds, summarised by class.
 
