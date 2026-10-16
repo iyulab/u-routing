@@ -106,6 +106,20 @@ public class RoutingClientTests
     }
 
     [Fact]
+    public void A_time_limit_ends_a_search_and_says_so()
+    {
+        var request = new VrpRequest(0, 0, Customers)
+        {
+            Vehicles = [new(30)],
+            Method = RoutingMethod.Alns,
+            Config = new VrpConfig { Seed = 7, MaxIterations = 100_000_000, TimeLimitMs = 1 },
+        };
+        Assert.Equal(StopReason.TimeLimit, _client.SolveVrp(request).StopReason);
+        var ga = _client.GetMethods().Single(m => m.Name == RoutingMethod.Genetic);
+        Assert.Contains(RoutingSetting.TimeLimitMs, ga.Reads);
+    }
+
+    [Fact]
     public void Limits_and_windows_reach_the_engine()
     {
         // The far customer cannot be reached within the vehicle's distance limit.

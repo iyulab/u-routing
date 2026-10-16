@@ -68,4 +68,18 @@ try {
 } catch (e) { refused = e }
 ok(refused && refused.code === 'invalid_option' && refused.parameter === 'config.population_size',
    'nn with population_size: ' + (refused ? refused.code + ' ' + refused.parameter : 'accepted'))
+// The time limit holds in WebAssembly too: a budget far longer than the
+// limit ends on the clock (performance.now()), not on the budget -- on
+// sixty customers, which neither search finishes within a millisecond.
+const sixty = []
+for (let i = 1; i <= 60; i++) {
+  sixty.push({ id: i, x: Math.cos(i) * 10 * (1 + i % 3), y: Math.sin(i) * 10, demand: 1 })
+}
+for (const [method, budget] of [['ga', { max_generations: 1000000 }], ['alns', { max_iterations: 100000000 }]]) {
+  const started = Date.now()
+  const out = m.solve_vrp({ depot, customers: sixty, vehicles: [{ capacity: 20 }], method,
+                            config: Object.assign({ seed: 1, time_limit_ms: 1 }, budget) })
+  ok(out.stop_reason === 'time_limit', method + ': stop_reason ' + out.stop_reason)
+  ok(Date.now() - started < 5000, method + ': ran ' + (Date.now() - started) + ' ms past a 1 ms limit')
+}
 console.log(`behaviour gate: ok (${checks} checks)`)

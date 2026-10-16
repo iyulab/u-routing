@@ -185,6 +185,8 @@ public sealed class RoutingClient : IDisposable
             Put(config, "max_iterations", c2.MaxIterations);
             if (c2.Seed is { } seed)
                 config["seed"] = seed;
+            if (c2.TimeLimitMs is { } timeLimit)
+                config["time_limit_ms"] = timeLimit;
             Put(config, "max_vehicles", c2.MaxVehicles);
             body["config"] = config;
         }

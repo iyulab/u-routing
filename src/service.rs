@@ -421,6 +421,20 @@ fn runner_count(
     Err(e)
 }
 
+/// The time limit from `config`, for the methods that read one: a whole
+/// number of milliseconds from 1 to 2^64 - 1.
+fn time_limit(method: Method, cfg: &InputConfig) -> Result<Option<u64>, ServiceError> {
+    cfg.time_limit_ms
+        .map(|ms| {
+            whole_in("config.time_limit_ms", ms, 1, u64::MAX.into()).map_err(|mut e| {
+                e.fields["method"] = json!(method.name());
+                e.message = format!("method \"{}\": {}", method.name(), e.message);
+                e
+            })
+        })
+        .transpose()
+}
+
 /// The seed from `config`, for the methods that read one: a whole number from
 /// 0 to 2^64 - 1.
 fn seed(method: Method, cfg: &InputConfig) -> Result<Option<u64>, ServiceError> {
@@ -533,6 +547,13 @@ pub(crate) struct InputConfig {
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     seed: Option<i128>,
+    /// Wall-clock budget in milliseconds for GA and ALNS: a whole number, at
+    /// least 1. A run that spends it returns the best plan found by then,
+    /// `stop_reason: "time_limit"`. Unset, a run ends on its own budget.
+    #[serde(default, deserialize_with = "optional_whole")]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
+    time_limit_ms: Option<i128>,
     /// The number of routes the plan may use at most -- the fixed fleet.
     ///
     /// The length of `vehicles` is not this number: it says which capacities
@@ -575,7 +596,8 @@ pub(crate) struct VrpOutput {
     /// Why the method stopped: `"completed"` for `"nn"` and `"savings"`, which
     /// build the plan in one pass; `"iteration_limit"` when `"ga"` or `"alns"`
     /// spent its generation or iteration budget; `"no_improvement"` when
-    /// `"ga"` went its stall budget without a better plan.
+    /// `"ga"` went its stall budget without a better plan; `"time_limit"`
+    /// when `config.time_limit_ms` ran out first.
     #[cfg_attr(
         feature = "wasm",
         tsify(
@@ -592,13 +614,14 @@ pub(crate) struct VrpOutput {
 /// The settings a request's `config` can carry, in the order of
 /// [`InputConfig`]'s fields. Which of them a method reads is
 /// [`Method::reads_setting`].
-pub(crate) const SETTINGS: [&str; 7] = [
+pub(crate) const SETTINGS: [&str; 8] = [
     "population_size",
     "max_generations",
     "mutation_rate",
     "elite_ratio",
     "max_iterations",
     "seed",
+    "time_limit_ms",
     "max_vehicles",
 ];
 
@@ -675,7 +698,7 @@ pub(crate) struct MethodInfo {
     #[cfg_attr(
         feature = "wasm",
         tsify(
-            type = "(\"population_size\" | \"max_generations\" | \"mutation_rate\" | \"elite_ratio\" | \"max_iterations\" | \"seed\" | \"max_vehicles\")[]"
+            type = "(\"population_size\" | \"max_generations\" | \"mutation_rate\" | \"elite_ratio\" | \"max_iterations\" | \"seed\" | \"time_limit_ms\" | \"max_vehicles\")[]"
         )
     )]
     pub(crate) reads: Vec<String>,
@@ -730,7 +753,7 @@ impl Method {
     /// - `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`:
     ///   the genetic algorithm.
     /// - `max_iterations`: ALNS.
-    /// - `seed`: the two stochastic methods (GA, ALNS).
+    /// - `seed`, `time_limit_ms`: the two search methods (GA, ALNS).
     /// - `max_vehicles`: every method -- the fixed fleet all of them keep to.
     fn reads_setting(self, setting: &str) -> bool {
         use Method::*;
@@ -739,7 +762,7 @@ impl Method {
                 self == Genetic
             }
             "max_iterations" => self == Alns,
-            "seed" => matches!(self, Genetic | Alns),
+            "seed" | "time_limit_ms" => matches!(self, Genetic | Alns),
             "max_vehicles" => true,
             _ => false,
         }
@@ -1360,6 +1383,7 @@ fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), Servi
         cfg.elite_ratio.is_some(),
         cfg.max_iterations.is_some(),
         cfg.seed.is_some(),
+        cfg.time_limit_ms.is_some(),
         cfg.max_vehicles.is_some(),
     ];
     for (setting, present) in SETTINGS.into_iter().zip(given) {
@@ -1647,6 +1671,9 @@ fn solve_ga(
     if let Some(seed) = seed(method, cfg)? {
         ga_config = ga_config.with_seed(seed);
     }
+    if let Some(ms) = time_limit(method, cfg)? {
+        ga_config = ga_config.with_time_limit_ms(ms);
+    }
 
     ga_config
         .validate()
@@ -1700,6 +1727,9 @@ fn solve_alns(
 
     if let Some(seed) = seed(method, cfg)? {
         alns_config = alns_config.with_seed(seed);
+    }
+    if let Some(ms) = time_limit(method, cfg)? {
+        alns_config = alns_config.with_time_limit_ms(ms);
     }
 
     alns_config
@@ -2806,6 +2836,7 @@ mod tests {
             "elite_ratio" => json!(0.2),
             "max_iterations" => json!(20),
             "seed" => json!(1),
+            "time_limit_ms" => json!(60_000),
             "max_vehicles" => json!(4),
             other => panic!("no sample value for {other}"),
         };
@@ -2942,6 +2973,44 @@ mod tests {
             .expect_err("past u64");
         assert_eq!(err.fields["max"], serde_json::json!(u64::MAX as f64));
         assert_eq!(err.fields["min"], serde_json::json!(0.0));
+    }
+
+    /// `time_limit_ms` ends a GA or ALNS run that would otherwise go far
+    /// longer; it is a whole number of at least 1, and the one-pass methods
+    /// refuse it as a setting they do not read.
+    #[test]
+    fn a_time_limit_ends_the_search_methods() {
+        for method in ["ga", "alns"] {
+            let config = InputConfig {
+                max_generations: (method == "ga").then_some(1_000_000),
+                max_iterations: (method == "alns").then_some(100_000_000),
+                seed: Some(1),
+                time_limit_ms: Some(1),
+                ..InputConfig::default()
+            };
+            let out = solve((0.0, 0.0), &ring(30), &fleet(&[20.0]), method, &config)
+                .expect("a time-limited run");
+            assert_eq!(out.stop_reason, StopReason::TimeLimit, "{method}");
+            assert!(out.unassigned.is_empty(), "{method}");
+
+            let zero = InputConfig {
+                time_limit_ms: Some(0),
+                ..InputConfig::default()
+            };
+            let err =
+                solve((0.0, 0.0), &ring(3), &fleet(&[20.0]), method, &zero).expect_err("0 ms");
+            assert_eq!(err.fields["code"], "parameter_out_of_range");
+            assert_eq!(err.fields["parameter"], "config.time_limit_ms");
+            assert_eq!(err.fields["min"], serde_json::json!(1.0));
+        }
+        let unread = InputConfig {
+            time_limit_ms: Some(100),
+            ..InputConfig::default()
+        };
+        let err = solve((0.0, 0.0), &ring(3), &fleet(&[20.0]), "savings", &unread)
+            .expect_err("savings reads no time limit");
+        assert_eq!(err.fields["code"], "invalid_option");
+        assert_eq!(err.fields["parameter"], "config.time_limit_ms");
     }
 
     /// An id is a label from 0 up; a negative one is out of that range, at

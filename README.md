@@ -239,7 +239,7 @@ all of which keep time windows (see below).
 ```
 
 **GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
-**ALNS config** uses `max_iterations`. Both accept `seed`; every method reads
+**ALNS config** uses `max_iterations`. Both accept `seed` and `time_limit_ms`; every method reads
 `max_vehicles`. A setting the request's `method` does not read is refused
 (`invalid_option`, naming the methods that do) rather than accepted and ignored.
 `available_methods()` returns that table, so a form can offer only the settings that
@@ -250,8 +250,8 @@ import { available_methods } from '@iyulab/u-routing';
 
 const methods = available_methods();
 // [{ name: "nn", reads: ["max_vehicles"] }, { name: "savings", reads: ["max_vehicles"] },
-//  { name: "ga", reads: ["population_size", "max_generations", "mutation_rate", "elite_ratio", "seed", "max_vehicles"] },
-//  { name: "alns", reads: ["max_iterations", "seed", "max_vehicles"] }]
+//  { name: "ga", reads: ["population_size", "max_generations", "mutation_rate", "elite_ratio", "seed", "time_limit_ms", "max_vehicles"] },
+//  { name: "alns", reads: ["max_iterations", "seed", "time_limit_ms", "max_vehicles"] }]
 const reads = (method, setting) =>
   methods.some((m) => m.name === method && m.reads.includes(setting));
 console.log(reads('ga', 'max_iterations')); // false -- leave the field out
@@ -332,6 +332,7 @@ than being served late.
 | `elite_ratio` | GA | (0, 1) — outside is refused (`parameter_out_of_range`, `exclusive_min: 0`, `exclusive_max: 1`; 1 would make every individual an elite); must leave at least one elite in the population | 0.1 |
 | `max_iterations` | ALNS | >= 1 | 500 |
 | `seed` | Both | a whole number from 0 to 2^64 − 1 (optional) | random |
+| `time_limit_ms` | Both | a whole number of milliseconds, >= 1 (optional): the run returns the best plan found when it is spent | no limit |
 | `max_vehicles` | All | >= 1 (optional) | no limit |
 
 Counts, the seed and a customer's `id` are whole numbers. A negative one is
@@ -398,7 +399,8 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
 `stop_reason` says why the method stopped: `"completed"` for `"nn"` and
 `"savings"`, which build the plan in one pass; `"iteration_limit"` when `"ga"`
 or `"alns"` spent its `max_generations` / `max_iterations`; `"no_improvement"`
-when `"ga"` went its stall budget without a better plan.
+when `"ga"` went its stall budget without a better plan; `"time_limit"` when
+`time_limit_ms` ran out first.
 
 `unassigned` lists the customers (by `id`) that no route serves — for example
 when a fixed fleet under `"nn"` cannot carry the total demand. A non-empty list

@@ -13,7 +13,8 @@
                 "max_vehicles": {},
                 "mutation_rate": {},
                 "population_size": {},
-                "seed": {}
+                "seed": {},
+                "time_limit_ms": {}
               }
             },
             "customers": {
@@ -62,7 +63,8 @@
             "max_vehicles": {},
             "mutation_rate": {},
             "population_size": {},
-            "seed": {}
+            "seed": {},
+            "time_limit_ms": {}
           }
         },
         "customers": {

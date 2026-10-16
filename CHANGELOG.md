@@ -23,6 +23,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
+- `config.time_limit_ms` for `"ga"` and `"alns"` (.NET `VrpConfig.TimeLimitMs`):
+  a wall-clock budget in milliseconds, a whole number of at least 1. A run that
+  spends it returns the best plan found by then with `stop_reason:
+  "time_limit"`. The other methods refuse it (`invalid_option`); 0 is
+  `parameter_out_of_range` (`min: 1`).
+
 - `examples/solomon.rs`: measures every method on Solomon's VRPTW instances
   through the C entry points and checks each answer with
   `urouting_check_solution`; the README's *Benchmarks* section has the first

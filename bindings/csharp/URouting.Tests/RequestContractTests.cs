@@ -43,7 +43,7 @@ public class RequestContractTests
                 Seed = 7,
                 MaxVehicles = 3,
             },
-            RoutingMethod.Alns => new VrpConfig { MaxIterations = 20, Seed = 7, MaxVehicles = 3 },
+            RoutingMethod.Alns => new VrpConfig { MaxIterations = 20, Seed = 7, TimeLimitMs = 60_000, MaxVehicles = 3 },
             _ => new VrpConfig { MaxVehicles = 3 },
         },
     };

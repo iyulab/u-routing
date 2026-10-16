@@ -54,7 +54,7 @@ customers no route serves within capacities, time windows, each vehicle's `MaxDi
 `MaxDuration` and `VrpConfig.MaxVehicles`.
 
 Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
-`MaxIterations` by `Alns`, `Seed` by both, `MaxVehicles` by all — and a setting the
+`MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` by all — and a setting the
 method does not read is refused (`invalid_option`). `GetMethods()` returns that table,
 the one the refusal is made from:
 

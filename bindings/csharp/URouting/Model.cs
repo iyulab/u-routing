@@ -32,6 +32,8 @@ public enum RoutingSetting
     [JsonStringEnumMemberName("max_iterations")] MaxIterations,
     /// <summary><see cref="VrpConfig.Seed"/>.</summary>
     [JsonStringEnumMemberName("seed")] Seed,
+    /// <summary><see cref="VrpConfig.TimeLimitMs"/>.</summary>
+    [JsonStringEnumMemberName("time_limit_ms")] TimeLimitMs,
     /// <summary><see cref="VrpConfig.MaxVehicles"/>.</summary>
     [JsonStringEnumMemberName("max_vehicles")] MaxVehicles,
 }
@@ -86,7 +88,7 @@ public sealed record Vehicle(double? Capacity = null, double? MaxDistance = null
 /// <summary>
 /// Solver settings; a <c>null</c> takes the engine's default. Each method reads the ones that
 /// apply to it -- the GA ones by <see cref="RoutingMethod.Genetic"/>, <see cref="MaxIterations"/>
-/// by <see cref="RoutingMethod.Alns"/>, <see cref="Seed"/> by both -- and a setting the request's
+/// by <see cref="RoutingMethod.Alns"/>, <see cref="Seed"/> and <see cref="TimeLimitMs"/> by both -- and a setting the request's
 /// method does not read is refused (<c>invalid_option</c>), not ignored.
 /// <see cref="MaxVehicles"/> is the fixed fleet every method keeps to.
 /// </summary>
@@ -104,6 +106,8 @@ public sealed record VrpConfig
     public int? MaxIterations { get; init; }
     /// <summary>Random seed, for reproducible runs.</summary>
     public ulong? Seed { get; init; }
+    /// <summary>Wall-clock budget in milliseconds, at least 1: the run returns the best plan found by then (<c>StopReason</c> <c>time_limit</c>).</summary>
+    public ulong? TimeLimitMs { get; init; }
     /// <summary>The most routes the plan may use; customers that fit in none are <see cref="VrpSolution.Unassigned"/>.</summary>
     public int? MaxVehicles { get; init; }
 }
