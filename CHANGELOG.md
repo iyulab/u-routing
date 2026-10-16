@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-16
+
+Depends on u-numflow 0.14. The .NET client is `URouting` 0.17.0.
+
 ### Added
 
 - Vehicle costs: `fixed_cost` (default 0) and `cost_per_distance` (default 1)
@@ -46,7 +50,6 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 - The README and docs name the inter-route tail exchange 2-opt* (it was
   called cross-exchange, a different operator), and the README's
   architecture tree lists the modules as they are.
-
 
 ## [0.19.0] - 2026-10-16
 
