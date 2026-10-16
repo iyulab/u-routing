@@ -2,7 +2,7 @@
 //!
 //! # Algorithm
 //!
-//! The cross-exchange (2-opt*) operator swaps tail segments between two routes.
+//! The 2-opt* operator (Potvin & Rousseau 1995) swaps the tails of two routes.
 //! Given routes R1 = [a₁, ..., aᵢ, aᵢ₊₁, ..., aₙ] and
 //! R2 = [b₁, ..., bⱼ, bⱼ₊₁, ..., bₘ], produce:
 //!
@@ -26,7 +26,7 @@ use crate::evaluation::RouteEvaluator;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
-/// Applies inter-route cross-exchange (2-opt*) improvement.
+/// Applies inter-route 2-opt* (tail exchange) improvement.
 ///
 /// Swaps tail segments between pairs of routes to reduce total distance
 /// while respecting capacity constraints.
@@ -105,7 +105,7 @@ pub fn exchange_improve(
     rebuild_solution(&routes, solution, distances, customers, vehicle)
 }
 
-/// Finds the best cross-exchange between two routes.
+/// Finds the best 2-opt* tail exchange between two routes.
 /// Returns (cut_pos_r1, cut_pos_r2, delta) if improvement found.
 fn find_best_exchange(
     route1: &[usize],

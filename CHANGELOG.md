@@ -43,6 +43,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   read by nothing; `Solution::total_cost` was the total distance. Every
   constructor and improver now prices its solution with its vehicles.
 - `mixed_fleet` also names `fixed_cost` and `cost_per_distance`.
+- The README and docs name the inter-route tail exchange 2-opt* (it was
+  called cross-exchange, a different operator), and the README's
+  architecture tree lists the modules as they are.
 
 
 ## [0.19.0] - 2026-10-16

@@ -15,8 +15,8 @@ TSP, CVRP, and VRPTW variants.
 - **Evaluation** — Route feasibility checking (capacity, time windows, max distance/duration)
 - **Constructive heuristics** — Nearest Neighbor (O(n²)), Clarke-Wright Savings (O(n² log n))
 - **Time windows** — time-window Nearest Neighbor, Solomon (1987) I1 insertion, a time-window split for the GA, and every local-search move, savings merge and ALNS insertion gated on the windows
-- **Local search** — Intra-route 2-opt (Croes 1958), or-opt, 3-opt; inter-route Relocate (Or 1976), cross-exchange — all of them window-aware
-- **Genetic algorithm** — Prins (2004) hybrid GA: giant tour + split DP, a population seeded with the savings, sweep and (with time windows) Solomon I1 solutions, OX crossover, and mutation followed by local search (relocate, cross-exchange, 2-opt, or-opt) written back into the tour
+- **Local search** — Intra-route 2-opt (Croes 1958), or-opt, 3-opt; inter-route Relocate (Or 1976) and 2-opt* (exchange of route tails, Potvin & Rousseau 1995) — all of them window-aware
+- **Genetic algorithm** — Prins (2004) hybrid GA: giant tour + split DP, a population seeded with the savings, sweep and (with time windows) Solomon I1 solutions, OX crossover, and mutation followed by local search (relocate, 2-opt*, 2-opt, or-opt) written back into the tour
 - **ALNS** — Random/Worst/Shaw removal + Greedy/Regret-k insertion (Ropke & Pisinger 2006)
 
 ## Quick Start
@@ -98,11 +98,13 @@ println!("Best cost: {}", result.best_cost);
 u-routing
 ├── models/          Domain types (Customer, Vehicle, Route, Solution)
 ├── distance/        Distance matrix
-├── evaluation/      Route evaluator + constraint checking
-├── constructive/    Nearest Neighbor, Clarke-Wright Savings
-├── local_search/    2-opt, Relocate
-├── ga/              Giant tour + Split DP + GaProblem bridge
-└── alns/            Destroy/Repair operators + AlnsProblem bridge
+├── evaluation/      Route evaluator, feasibility, solution checker
+├── constructive/    Nearest Neighbor (+ time windows), Clarke-Wright Savings, Sweep, Solomon I1
+├── local_search/    2-opt, or-opt, 3-opt, Relocate, 2-opt*
+├── fleet.rs         Fixed fleet: empty the lightest routes into the rest
+├── ga/              Giant tour + Split DP (+ time windows) + education + GaProblem bridge
+├── alns/            Random/Worst/Shaw removal, Greedy/Regret insertion + AlnsProblem bridge
+└── service.rs       The request/response contract the WebAssembly, C and .NET bindings share
 ```
 
 ## Benchmarks

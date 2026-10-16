@@ -8,7 +8,7 @@
 //! carries what the search learned.
 //!
 //! [`educate`] splits the tour, improves the routes with the inter-route moves
-//! (relocate, then cross-exchange / 2-opt*) and the intra-route ones (2-opt,
+//! (relocate, then 2-opt* tail exchange) and the intra-route ones (2-opt,
 //! or-opt), and concatenates them back. Every move keeps capacity, time
 //! windows and the route limits, so the routes stay feasible; splitting the
 //! returned tour again costs at most what the improved routes cost, since
