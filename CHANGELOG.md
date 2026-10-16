@@ -8,6 +8,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- The README's *Benchmarks* section measures all 56 Solomon instances with
+  three seeds, summarised by class.
+
 ## [0.19.0] - 2026-10-16
 
 Depends on u-metaheur 0.12 and u-numflow 0.13. The .NET client is `URouting` 0.16.0.

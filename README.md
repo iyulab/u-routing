@@ -123,22 +123,28 @@ more routes is not a better solution — read the gap together with the route
 count. The depot's due date is each vehicle's `max_duration`; the fleet is the
 instance's vehicle count and capacity.
 
-Default settings, seed 1, one run; routes / distance; every answer checked
-feasible. `ga` is the hybrid GA of the next release (0.18.0's permutation GA
-used all 25 vehicles on every instance, +21 to +338 % over the best known
-distance); it took 0.7–2.7 s per instance, `alns` 0.5–0.8 s:
+All 56 instances, default settings; `ga` and `alns` with seeds 1, 2 and 3
+(168 runs each), `savings` once. Mean routes and mean distance gap to the best
+known solution, by Solomon's classes; every answer checked feasible:
 
-| Instance | Best known | `nn` | `savings` | `ga` | `alns` |
-|---|---|---|---|---|---|
-| c101 | 10 / 828.94 | 21 / 1870.69 | 15 / 1127.48 | 10 / 828.94 | 11 / 859.30 |
-| c201 | 3 / 591.56 | 15 / 1880.47 | 9 / 1029.66 | 3 / 591.56 | 5 / 678.26 |
-| r101 | 19 / 1650.80 | 25 / 1666.05 (21 unassigned) | 25 / 1920.25 (1 unassigned) | 20 / 1644.05 | 23 / 1771.41 |
-| r201 | 4 / 1252.37 | 15 / 1984.96 | 15 / 1401.27 | 9 / 1168.59 | 8 / 1187.35 |
-| rc101 | 14 / 1696.95 | 25 / 2479.98 (6 unassigned) | 23 / 1999.35 | 17 / 1667.43 | 19 / 1819.56 |
-| rc201 | 4 / 1406.94 | 15 / 2468.25 | 16 / 1654.13 | 10 / 1298.91 | 8 / 1296.88 |
+| Class | Best known routes | `savings` routes / gap | `ga` routes / gap | `alns` routes / gap |
+|---|---|---|---|---|
+| C1 (9) | 10.0 | 13.4 / +25.8 % | 10.0 / +0.2 % | 11.2 / +10.4 % |
+| C2 (8) | 3.0 | 5.5 / +31.6 % | 3.2 / +1.5 % | 4.3 / +11.4 % |
+| R1 (12) | 11.9 | 18.2 / +16.8 % ¹ | 14.3 / −0.0 % | 15.7 / +9.3 % |
+| R2 (11) | 2.7 | 10.4 / +10.3 % | 6.9 / −3.7 % | 5.7 / −2.8 % |
+| RC1 (8) | 11.5 | 17.4 / +16.6 % | 14.0 / +0.9 % | 15.5 / +10.9 % |
+| RC2 (8) | 3.2 | 10.6 / +9.6 % | 7.8 / −5.7 % | 6.5 / −4.2 % |
+| all (56) | 7.2 | 12.9 / +18.0 % | 9.6 / −1.2 % | 10.0 / +5.7 % |
 
-Best known values: SINTEF TOP, 100-customer table (rc101 is listed there as
-`rc101b`).
+¹ One `savings` run (r101) leaves a customer unassigned; no `ga` or `alns` run
+does. A negative gap comes with more routes than the best known solution —
+the methods minimise distance, the benchmark ranks routes first. `ga` was at
+least as good as `savings` (unassigned, then routes, then distance) on all 168
+runs; it took 0.9–1.9 s per instance on average, `alns` 0.6–0.8 s.
+
+Best known values: SINTEF TOP, 100-customer table, read without its marks
+(`rc101b`, `r205b`, `r111*`).
 
 ## Dependencies
 
