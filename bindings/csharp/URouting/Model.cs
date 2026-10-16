@@ -82,8 +82,16 @@ public sealed record Customer(
 /// A vehicle. <see cref="Capacity"/> <c>null</c> means effectively unlimited; a
 /// <see cref="MaxDistance"/> or <see cref="MaxDuration"/> bounds every route the vehicle drives
 /// (duration on the clock that starts at 0 at the depot, travel time equal to distance).
+/// A route the vehicle drives costs <see cref="FixedCost"/> plus <see cref="CostPerDistance"/> ×
+/// its distance (defaults 0 and 1); every method minimizes the plan's total cost, so a fixed
+/// cost trades distance for fewer routes.
 /// </summary>
-public sealed record Vehicle(double? Capacity = null, double? MaxDistance = null, double? MaxDuration = null);
+public sealed record Vehicle(
+    double? Capacity = null,
+    double? MaxDistance = null,
+    double? MaxDuration = null,
+    double? FixedCost = null,
+    double? CostPerDistance = null);
 
 /// <summary>
 /// Solver settings; a <c>null</c> takes the engine's default. Each method reads the ones that
@@ -135,12 +143,15 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 /// <see cref="VrpRequest.Vehicles"/> (<c>0</c> for the single vehicle type of the methods
 /// other than nearest neighbour, and when the request lists none); <see cref="Unassigned"/>
 /// lists the customers no route serves, so a partial plan does not read as a complete one.
-/// <see cref="StopReason"/> says why the method stopped.
+/// <see cref="StopReason"/> says why the method stopped. <see cref="TotalCost"/> sums, over the
+/// routes, the route's vehicle's <see cref="Vehicle.FixedCost"/> plus
+/// <see cref="Vehicle.CostPerDistance"/> × the route's distance.
 /// </summary>
 public sealed record VrpSolution(
     IReadOnlyList<IReadOnlyList<long>> Routes,
     IReadOnlyList<int> RouteVehicles,
     double TotalDistance,
+    double TotalCost,
     int NumVehicles,
     RoutingMethod MethodUsed,
     double ComputationTimeMs,
@@ -182,6 +193,8 @@ public sealed record VrpPlan(IReadOnlyList<IReadOnlyList<long>> Routes)
     public IReadOnlyList<long> Unassigned { get; init; } = [];
     /// <summary>The total distance reported, or <c>null</c> to leave it unchecked.</summary>
     public double? TotalDistance { get; init; }
+    /// <summary>The total cost reported, or <c>null</c> to leave it unchecked.</summary>
+    public double? TotalCost { get; init; }
 
     /// <summary>The plan a solve returned, as a plan to check.</summary>
     public static VrpPlan Of(VrpSolution solution) => new(solution.Routes)
@@ -189,6 +202,7 @@ public sealed record VrpPlan(IReadOnlyList<IReadOnlyList<long>> Routes)
         RouteVehicles = solution.RouteVehicles,
         Unassigned = solution.Unassigned,
         TotalDistance = solution.TotalDistance,
+        TotalCost = solution.TotalCost,
     };
 }
 
@@ -215,6 +229,7 @@ public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Viola
 [JsonDerivedType(typeof(VehicleReused), "vehicle_reused")]
 [JsonDerivedType(typeof(TooManyRoutes), "too_many_routes")]
 [JsonDerivedType(typeof(DistanceMismatch), "distance_mismatch")]
+[JsonDerivedType(typeof(CostMismatch), "cost_mismatch")]
 public abstract record PlanViolation
 {
     private PlanViolation() { }
@@ -243,6 +258,8 @@ public abstract record PlanViolation
     public sealed record TooManyRoutes(int Routes, int MaxRoutes) : PlanViolation;
     /// <summary>The reported total distance differs from the routes' own.</summary>
     public sealed record DistanceMismatch(double Reported, double Actual) : PlanViolation;
+    /// <summary>The reported total cost differs from what the routes cost with their vehicles.</summary>
+    public sealed record CostMismatch(double Reported, double Actual) : PlanViolation;
 }
 
 /// <summary>Source-generated reading of results — no reflection, so trimmed and NativeAOT hosts work.</summary>

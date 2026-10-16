@@ -2,6 +2,9 @@
 
 /// A vehicle that services routes in a routing problem.
 ///
+/// Using it for a route costs `fixed_cost + cost_per_distance × distance`
+/// ([`Vehicle::route_cost`]); every method minimizes the sum over routes.
+///
 /// # Examples
 ///
 /// ```
@@ -94,6 +97,23 @@ impl Vehicle {
         self.fixed_cost
     }
 
+    /// What a route of `distance` costs with this vehicle:
+    /// `fixed_cost + cost_per_distance × distance`.
+    pub fn route_cost(&self, distance: f64) -> f64 {
+        self.fixed_cost + self.cost_per_distance * distance
+    }
+
+    /// The fixed cost in units of distance, `fixed_cost / cost_per_distance`:
+    /// for a fleet of one vehicle type, minimizing total cost is minimizing
+    /// total distance plus this much per route.
+    pub fn fixed_cost_in_distance(&self) -> f64 {
+        if self.cost_per_distance > 0.0 {
+            self.fixed_cost / self.cost_per_distance
+        } else {
+            0.0
+        }
+    }
+
     /// Maximum distance limit, if any.
     pub fn max_distance(&self) -> Option<f64> {
         self.max_distance
@@ -133,6 +153,7 @@ mod tests {
         assert_eq!(v.capacity(), 100);
         assert_eq!(v.depot_id(), 2);
         assert_eq!(v.cost_per_distance(), 1.5);
+        assert_eq!(v.route_cost(10.0), v.fixed_cost() + 15.0);
         assert_eq!(v.fixed_cost(), 50.0);
         assert_eq!(v.max_distance(), Some(500.0));
         assert_eq!(v.max_duration(), Some(480.0));

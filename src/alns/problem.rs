@@ -49,6 +49,7 @@ pub struct RoutingAlnsProblem {
     distances: DistanceMatrix,
     capacity: i32,
     limits: RouteLimits,
+    route_cost: f64,
 }
 
 impl RoutingAlnsProblem {
@@ -59,7 +60,17 @@ impl RoutingAlnsProblem {
             distances,
             capacity,
             limits: RouteLimits::NONE,
+            route_cost: 0.0,
         }
+    }
+
+    /// Adds `route_cost` (distance units — a vehicle's
+    /// [`fixed_cost_in_distance`](crate::models::Vehicle::fixed_cost_in_distance))
+    /// for every route that serves a customer: the search minimizes total
+    /// distance plus this per route. 0 by default.
+    pub fn with_route_cost(mut self, route_cost: f64) -> Self {
+        self.route_cost = route_cost;
+        self
     }
 
     /// Plans every route within these distance and duration limits (none by
@@ -107,7 +118,8 @@ impl AlnsProblem for RoutingAlnsProblem {
     fn cost(&self, solution: &RoutingSolution) -> f64 {
         // Penalize unassigned customers heavily
         let unassigned_penalty = solution.unassigned().len() as f64 * 10_000.0;
-        solution.total_distance() + unassigned_penalty
+        let routes = solution.routes().iter().filter(|r| !r.is_empty()).count();
+        solution.total_distance() + self.route_cost * routes as f64 + unassigned_penalty
     }
 }
 

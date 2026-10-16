@@ -170,8 +170,7 @@ pub fn nearest_neighbor_tw(
         }
     }
 
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|r| super::nearest_neighbor::fleet_vehicle(vehicles, r));
     solution
 }
 

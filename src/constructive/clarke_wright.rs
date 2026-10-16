@@ -79,11 +79,13 @@ pub fn clarke_wright_savings(
     let depot = vehicle.depot_id();
     let num_customers = n - 1;
 
-    // Compute savings
+    // Compute savings. Merging two routes also saves one vehicle's fixed
+    // cost (in distance units), as in the fleet-cost extension of the method.
+    let fixed = vehicle.fixed_cost_in_distance();
     let mut savings = Vec::with_capacity(num_customers * (num_customers - 1) / 2);
     for i in 1..n {
         for j in (i + 1)..n {
-            let s = distances.get(depot, i) + distances.get(depot, j) - distances.get(i, j);
+            let s = distances.get(depot, i) + distances.get(depot, j) - distances.get(i, j) + fixed;
             if s > 0.0 {
                 savings.push(Saving { i, j, value: s });
             }
@@ -214,8 +216,7 @@ pub fn clarke_wright_savings(
         }
     }
 
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|_| vehicle);
     solution
 }
 

@@ -104,12 +104,20 @@ fn find_best_relocate(
     let depot = vehicle.depot_id();
     let limits = &RouteLimits::of(vehicle);
     let constrained = route_checks_needed(customers, limits);
+    // A route's fixed cost, in distance units: saved when a move empties it,
+    // paid when one fills an empty route.
+    let fixed = vehicle.fixed_cost_in_distance();
     let mut best: Option<RelocateMove> = None;
 
     for from_r in 0..routes.len() {
         for from_pos in 0..routes[from_r].len() {
             let cid = routes[from_r][from_pos];
-            let removal_delta = removal_cost(&routes[from_r], from_pos, depot, distances);
+            let removal_delta = removal_cost(&routes[from_r], from_pos, depot, distances)
+                - if routes[from_r].len() == 1 {
+                    fixed
+                } else {
+                    0.0
+                };
 
             for (to_r, to_route) in routes.iter().enumerate() {
                 if to_r == from_r {
@@ -124,7 +132,8 @@ fn find_best_relocate(
 
                 // Try all insertion positions
                 for to_pos in 0..=to_route.len() {
-                    let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances);
+                    let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
+                        + if to_route.is_empty() { fixed } else { 0.0 };
                     let delta = removal_delta + insertion_delta;
 
                     if delta < -1e-10 {
@@ -216,8 +225,7 @@ fn rebuild_solution(
         solution.add_unassigned(uid);
     }
 
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|_| vehicle);
     solution
 }
 

@@ -60,10 +60,19 @@ pub(crate) fn educate(
     vehicle: &Vehicle,
 ) -> Vec<usize> {
     let limits = RouteLimits::of(vehicle);
+    let fixed = vehicle.fixed_cost_in_distance();
     let routes = if route_checks_needed(customers, &limits) {
-        split_tw(tour, customers, distances, vehicle.capacity(), &limits).routes
+        split_tw(
+            tour,
+            customers,
+            distances,
+            vehicle.capacity(),
+            &limits,
+            fixed,
+        )
+        .routes
     } else {
-        split(tour, customers, distances, vehicle.capacity()).routes
+        split(tour, customers, distances, vehicle.capacity(), fixed).routes
     };
 
     let evaluator = RouteEvaluator::new(customers, distances, vehicle);
@@ -114,13 +123,13 @@ mod tests {
         let vehicle = route_vehicle(4, &RouteLimits::NONE);
         let tour: Vec<usize> = (1..=8).collect();
         let limits = RouteLimits::NONE;
-        let before = split_tw(&tour, &customers, &dm, 4, &limits).total_distance;
+        let before = split_tw(&tour, &customers, &dm, 4, &limits, 0.0).total_distance;
 
         let educated = educate(&tour, &customers, &dm, &vehicle);
         let mut sorted = educated.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, (1..=8).collect::<Vec<_>>());
-        let after = split_tw(&educated, &customers, &dm, 4, &limits).total_distance;
+        let after = split_tw(&educated, &customers, &dm, 4, &limits, 0.0).total_distance;
         assert!(after < before - 1e-9, "{after} !< {before}");
     }
 }

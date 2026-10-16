@@ -108,7 +108,7 @@ public sealed class RoutingClient : IDisposable
     /// reads it: every customer served once or reported unassigned, each route within its
     /// vehicle's capacity, time windows, <see cref="Vehicle.MaxDistance"/> and
     /// <see cref="Vehicle.MaxDuration"/>, <see cref="VrpConfig.MaxVehicles"/> and (for
-    /// nearest neighbour) one route per vehicle, and the reported total distance. A plan that
+    /// nearest neighbour) one route per vehicle, and the reported total distance and cost. A plan that
     /// breaks the problem is a result, not an exception.
     /// </summary>
     /// <exception cref="RoutingException">The engine refused the problem, or the plan's
@@ -127,6 +127,8 @@ public sealed class RoutingClient : IDisposable
             solution["route_vehicles"] = new JsonArray(vehicles.Select(v => (JsonNode)JsonValue.Create(v)).ToArray());
         if (plan.TotalDistance is { } total)
             solution["total_distance"] = Num("solution.total_distance", total);
+        if (plan.TotalCost is { } cost)
+            solution["total_cost"] = Num("solution.total_cost", cost);
         var json = new JsonObject { ["problem"] = Body(request), ["solution"] = solution }.ToJsonString();
         RequestObserver?.Invoke(nameof(NativeInterop.urouting_check_solution), json);
         var body = Invoke(NativeInterop.urouting_check_solution, json);
@@ -164,6 +166,8 @@ public sealed class RoutingClient : IDisposable
             Put(vehicle, "capacity", v.Capacity, $"{at}.capacity");
             Put(vehicle, "max_distance", v.MaxDistance, $"{at}.max_distance");
             Put(vehicle, "max_duration", v.MaxDuration, $"{at}.max_duration");
+            Put(vehicle, "fixed_cost", v.FixedCost, $"{at}.fixed_cost");
+            Put(vehicle, "cost_per_distance", v.CostPerDistance, $"{at}.cost_per_distance");
             vehicles.Add((JsonNode)vehicle);
         }
 

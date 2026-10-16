@@ -124,8 +124,7 @@ pub fn sweep(customers: &[Customer], distances: &DistanceMatrix, vehicle: &Vehic
         solution.add_route(route);
     }
 
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|_| vehicle);
     solution
 }
 

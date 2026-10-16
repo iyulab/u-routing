@@ -82,6 +82,8 @@ pub struct RoutingGaProblem {
     time_windows: bool,
     /// The vehicle's distance and duration limits on each route.
     limits: RouteLimits,
+    /// Cost of each route in distance units (see [`Self::with_route_cost`]).
+    route_cost: f64,
     /// Added per unserved customer: more than any complete solution costs,
     /// which is at most a separate round trip to the farthest pair per customer.
     unserved_penalty: f64,
@@ -110,8 +112,19 @@ impl RoutingGaProblem {
             apply_local_search: true,
             time_windows,
             limits: RouteLimits::NONE,
+            route_cost: 0.0,
             unserved_penalty: 2.0 * farthest * n as f64 + 1.0,
         }
+    }
+
+    /// Adds `route_cost` (distance units — a vehicle's
+    /// [`fixed_cost_in_distance`](crate::models::Vehicle::fixed_cost_in_distance))
+    /// for every route: the fitness is total distance plus this per route, so
+    /// a positive value trades distance for fewer routes. 0 by default.
+    pub fn with_route_cost(mut self, route_cost: f64) -> Self {
+        self.route_cost = route_cost;
+        self.vehicle = self.vehicle.with_fixed_cost(route_cost);
+        self
     }
 
     /// Plans every route within these distance and duration limits (none by
@@ -119,7 +132,7 @@ impl RoutingGaProblem {
     /// takes moves that keep them.
     pub fn with_limits(mut self, limits: RouteLimits) -> Self {
         self.limits = limits;
-        self.vehicle = route_vehicle(self.capacity, &limits);
+        self.vehicle = route_vehicle(self.capacity, &limits).with_fixed_cost(self.route_cost);
         self
     }
 
@@ -195,6 +208,7 @@ impl GaProblem for RoutingGaProblem {
                 &self.distances,
                 self.capacity,
                 &self.limits,
+                self.route_cost,
             )
         } else {
             split(
@@ -202,16 +216,18 @@ impl GaProblem for RoutingGaProblem {
                 &self.customers,
                 &self.distances,
                 self.capacity,
+                self.route_cost,
             )
         };
+        let routes_cost = self.route_cost * result.routes.len() as f64;
 
         let served: usize = result.routes.iter().map(Vec::len).sum();
         let unserved = self.num_customers().saturating_sub(served);
         if unserved > 0 {
-            return result.total_distance + self.unserved_penalty * unserved as f64;
+            return result.total_distance + routes_cost + self.unserved_penalty * unserved as f64;
         }
         if !self.apply_local_search {
-            return result.total_distance;
+            return result.total_distance + routes_cost;
         }
 
         // Apply 2-opt to each route. With time windows, 2-opt only takes
@@ -222,7 +238,7 @@ impl GaProblem for RoutingGaProblem {
                 two_opt_improve(route, 0, &self.distances, &self.customers, &self.limits);
             total += dist;
         }
-        total
+        total + routes_cost
     }
 
     fn crossover<R: Rng>(

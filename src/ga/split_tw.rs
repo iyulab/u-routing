@@ -61,7 +61,7 @@ use super::split::SplitResult;
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
-/// let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE);
+/// let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
 /// assert_eq!(result.routes.len(), 1);
 /// ```
 pub fn split_tw(
@@ -70,6 +70,7 @@ pub fn split_tw(
     distances: &DistanceMatrix,
     capacity: i32,
     limits: &RouteLimits,
+    route_cost: f64,
 ) -> SplitResult {
     let n = tour.len();
 
@@ -83,6 +84,7 @@ pub fn split_tw(
     let depot = 0;
 
     let mut cost = vec![f64::INFINITY; n + 1];
+    let mut dist = vec![0.0; n + 1];
     let mut pred = vec![0usize; n + 1];
     cost[0] = 0.0;
 
@@ -134,10 +136,11 @@ pub fn split_tw(
             if !limits.allow(total_route, time + back) {
                 continue;
             }
-            let new_cost = cost[i] + total_route;
+            let new_cost = cost[i] + route_cost + total_route;
 
             if new_cost < cost[j + 1] {
                 cost[j + 1] = new_cost;
+                dist[j + 1] = dist[i] + total_route;
                 pred[j + 1] = i;
             }
         }
@@ -164,7 +167,7 @@ pub fn split_tw(
         }
         routes.reverse();
 
-        let total = if last > 0 { cost[last] } else { 0.0 };
+        let total = dist[last];
         return SplitResult {
             routes,
             total_distance: total,
@@ -203,7 +206,7 @@ mod tests {
                 .with_time_window(TimeWindow::new(0.0, 100.0).expect("valid")),
         ];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
         assert_eq!(result.routes.len(), 1);
     }
 
@@ -219,7 +222,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         // Tour [1, 2]: after visiting 1 (arrive=5, service=5, depart=10), travel to 2 takes 10, arrive=20 > due=6
-        let result = split_tw(&[1, 2], &customers, &dm, 100, &RouteLimits::NONE);
+        let result = split_tw(&[1, 2], &customers, &dm, 100, &RouteLimits::NONE, 0.0);
         assert_eq!(result.routes.len(), 2);
     }
 
@@ -233,7 +236,7 @@ mod tests {
             Customer::new(3, 3.0, 0.0, 10, 0.0),
         ];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
         assert_eq!(result.routes.len(), 1);
         assert!((result.total_distance - 6.0).abs() < 1e-10);
     }
@@ -251,7 +254,7 @@ mod tests {
         let dm = DistanceMatrix::from_customers(&customers);
         // Cust 1: arrive=1, wait to 10, service=2, depart=12
         // Cust 2: arrive=12+1=13, wait to 14, service=2, depart=16
-        let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE);
+        let result = split_tw(&[1, 2], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
         assert_eq!(result.routes.len(), 1);
     }
 
@@ -259,7 +262,7 @@ mod tests {
     fn test_split_tw_empty() {
         let customers = vec![Customer::depot(0.0, 0.0)];
         let dm = DistanceMatrix::from_customers(&customers);
-        let result = split_tw(&[], &customers, &dm, 30, &RouteLimits::NONE);
+        let result = split_tw(&[], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
         assert!(result.routes.is_empty());
         assert_eq!(result.total_distance, 0.0);
     }
@@ -278,7 +281,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         // Capacity 25: can hold at most 1 customer each (15+15=30>25)
-        let result = split_tw(&[1, 2, 3], &customers, &dm, 25, &RouteLimits::NONE);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 25, &RouteLimits::NONE, 0.0);
         assert!(result.routes.len() >= 2);
     }
 }

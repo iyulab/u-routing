@@ -15,7 +15,8 @@
 //! distance); the gap columns are against it. `methods` is a comma list of
 //! `nn,savings,ga,alns` (default all), each run once with seed 1. `settings`
 //! (optional) is a JSON object merged into `config` for `ga` and `alns`, e.g.
-//! `{"max_generations":1000}`.
+//! `{"max_generations":1000}`; its `fixed_cost`, if any, goes on every vehicle
+//! instead (`{"fixed_cost":1000}` ranks fewer routes first, as the BKS do).
 //!
 //! Mapping: the depot's due date is every vehicle's `max_duration` (return by
 //! it), the fleet is the instance's vehicle count at its capacity
@@ -112,10 +113,11 @@ fn main() {
         .split(',')
         .map(String::from)
         .collect();
-    let settings: serde_json::Map<String, Value> = args
+    let mut settings: serde_json::Map<String, Value> = args
         .next()
         .map(|s| serde_json::from_str(&s).expect("settings: a JSON object"))
         .unwrap_or_default();
+    let fixed_cost = settings.remove("fixed_cost").unwrap_or(json!(0));
 
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .expect("instance directory")
@@ -137,7 +139,13 @@ fn main() {
             continue;
         };
         let vehicles: Vec<Value> = (0..inst.vehicles)
-            .map(|_| json!({ "capacity": inst.capacity, "max_duration": inst.horizon }))
+            .map(|_| {
+                json!({
+                    "capacity": inst.capacity,
+                    "max_duration": inst.horizon,
+                    "fixed_cost": fixed_cost,
+                })
+            })
             .collect();
         for method in &methods {
             // Only the settings the method reads: any other is refused
@@ -167,12 +175,13 @@ fn main() {
             }
             let (_, check) = call(
                 urouting_check_solution,
-                // The checker takes the plan's four keys, not the whole answer.
+                // The checker takes the plan's keys, not the whole answer.
                 &json!({ "problem": request, "solution": {
                     "routes": solution["routes"],
                     "route_vehicles": solution["route_vehicles"],
                     "unassigned": solution["unassigned"],
                     "total_distance": solution["total_distance"],
+                    "total_cost": solution["total_cost"],
                 } }),
             );
             let violations = check["violations"].as_array().map_or(usize::MAX, Vec::len);

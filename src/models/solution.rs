@@ -192,6 +192,18 @@ impl Solution {
         self.total_cost = cost;
     }
 
+    /// Sets the total cost to the sum of [`Vehicle::route_cost`] over the
+    /// routes, each priced with the vehicle `vehicle_of` gives it.
+    ///
+    /// [`Vehicle::route_cost`]: crate::models::Vehicle::route_cost
+    pub fn price<'v>(&mut self, vehicle_of: impl Fn(&Route) -> &'v crate::models::Vehicle) {
+        self.total_cost = self
+            .routes
+            .iter()
+            .map(|r| vehicle_of(r).route_cost(r.total_distance()))
+            .sum();
+    }
+
     /// Total distance across all routes.
     pub fn total_distance(&self) -> f64 {
         self.routes.iter().map(|r| r.total_distance()).sum()

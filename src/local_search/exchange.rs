@@ -223,8 +223,7 @@ fn rebuild_solution(
         solution.add_unassigned(uid);
     }
 
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|_| vehicle);
     solution
 }
 

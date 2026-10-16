@@ -36,6 +36,8 @@
               "items": {
                 "properties": {
                   "capacity": {},
+                  "cost_per_distance": {},
+                  "fixed_cost": {},
                   "max_distance": {},
                   "max_duration": {}
                 }
@@ -47,6 +49,7 @@
           "properties": {
             "route_vehicles": {},
             "routes": {},
+            "total_cost": {},
             "total_distance": {},
             "unassigned": {}
           }
@@ -93,6 +96,8 @@
           "items": {
             "properties": {
               "capacity": {},
+              "cost_per_distance": {},
+              "fixed_cost": {},
               "max_distance": {},
               "max_duration": {}
             }

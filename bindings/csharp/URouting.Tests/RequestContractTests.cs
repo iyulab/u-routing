@@ -18,6 +18,9 @@ public class RequestContractTests
     /// <summary>Places of a request the client does not write, each with why.</summary>
     private static readonly Dictionary<string, string> NotWritten = [];
 
+    private static Vehicle Vehicle() =>
+        new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000, FixedCost: 50, CostPerDistance: 2);
+
     private static VrpRequest Full(RoutingMethod method) => new(0, 0,
         [
             new Customer(1, 10, 5, Demand: 10, ServiceTime: 1, TimeWindow: new(0, 500)),
@@ -27,8 +30,8 @@ public class RequestContractTests
         ])
     {
         Vehicles = method == RoutingMethod.NearestNeighbor
-            ? [new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000), new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000)]
-            : [new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000)],
+            ? [Vehicle(), Vehicle()]
+            : [Vehicle()],
         Method = method,
         // Every setting the method reads -- one it does not read is refused, so the
         // settings are spread over the methods and every one is written by some run.

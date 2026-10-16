@@ -155,7 +155,7 @@ proptest! {
             tour.swap(i, (state % (i as u64 + 1)) as usize);
         }
 
-        let result = split(&tour, &customers, &dm, capacity);
+        let result = split(&tour, &customers, &dm, capacity, 0.0);
 
         // The routes, concatenated, are the tour: each customer once, in order.
         let concatenated: Vec<usize> = result.routes.iter().flatten().copied().collect();
@@ -183,7 +183,7 @@ proptest! {
         let dm = DistanceMatrix::from_customers(&customers);
         let capacity = capacity_for(&customers, slack);
         let tour = all_customer_ids(&customers);
-        let result = split(&tour, &customers, &dm, capacity);
+        let result = split(&tour, &customers, &dm, capacity, 0.0);
         // Singleton routes are always feasible here, so the optimum is bounded
         // by them; a split that costs more has not found the optimum.
         let singletons: f64 = tour.iter().map(|&c| route_distance(&[c], 0, &dm)).sum();

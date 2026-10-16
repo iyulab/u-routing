@@ -8,6 +8,24 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- Vehicle costs: `fixed_cost` (default 0) and `cost_per_distance` (default 1)
+  on each vehicle — a route costs `fixed_cost + cost_per_distance × distance`.
+  `"savings"`, `"ga"` and `"alns"` minimize the total (the savings gain a
+  route's fixed cost, the split and the GA fitness add it per route, ALNS
+  counts it per route that serves a customer, relocate saves it when a move
+  empties a route); with the default costs the objective is total distance as
+  before. A large fixed cost approximates the routes-first ranking of the
+  Solomon benchmarks. The solution reports `total_cost`, and
+  `check_vrp_solution` compares a reported `total_cost` (`cost_mismatch`).
+  Rust: `Vehicle::route_cost`, `Vehicle::fixed_cost_in_distance`,
+  `Solution::price`, `RoutingGaProblem::with_route_cost`,
+  `RoutingAlnsProblem::with_route_cost`. .NET: `Vehicle.FixedCost`,
+  `Vehicle.CostPerDistance`, `VrpSolution.TotalCost`, `VrpPlan.TotalCost`,
+  `PlanViolation.CostMismatch`.
+
+
 ### Changed
 
 - `"alns"` adapts among the operators of Ropke & Pisinger (2006) — random,
@@ -20,6 +38,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   as one type each for `AlnsRunner`.
 - The README's *Benchmarks* section measures all 56 Solomon instances with
   three seeds, summarised by class.
+- **Breaking** `split` and `split_tw` take a `route_cost` (0 for the old
+  behaviour). `Vehicle::fixed_cost` and `cost_per_distance` were stored but
+  read by nothing; `Solution::total_cost` was the total distance. Every
+  constructor and improver now prices its solution with its vehicles.
+- `mixed_fleet` also names `fixed_cost` and `cost_per_distance`.
+
 
 ## [0.19.0] - 2026-10-16
 

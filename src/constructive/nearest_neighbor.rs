@@ -14,7 +14,16 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{RouteEvaluator, RouteLimits};
-use crate::models::{Customer, Solution, Vehicle};
+use crate::models::{Customer, Route, Solution, Vehicle};
+
+/// The vehicle of `route` in `vehicles` (by id; the first when the id is not
+/// in the list).
+pub(crate) fn fleet_vehicle<'v>(vehicles: &'v [Vehicle], route: &Route) -> &'v Vehicle {
+    vehicles
+        .iter()
+        .find(|v| v.id() == route.vehicle_id())
+        .unwrap_or(&vehicles[0])
+}
 
 /// Constructs a VRP solution using the nearest-neighbor heuristic.
 ///
@@ -137,9 +146,7 @@ pub fn nearest_neighbor(
         }
     }
 
-    // Compute total cost
-    let total_dist = solution.total_distance();
-    solution.set_total_cost(total_dist);
+    solution.price(|r| fleet_vehicle(vehicles, r));
 
     solution
 }

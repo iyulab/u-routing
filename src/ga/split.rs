@@ -43,6 +43,12 @@ pub struct SplitResult {
 /// * `customers` — All locations (index 0 = depot)
 /// * `distances` — Distance matrix
 /// * `capacity` — Vehicle capacity
+/// * `route_cost` — Cost added for every route, in distance units (a
+///   vehicle's [`fixed_cost_in_distance`](crate::models::Vehicle::fixed_cost_in_distance));
+///   0 minimizes distance alone
+///
+/// The split minimizes total distance plus `route_cost` per route;
+/// [`SplitResult::total_distance`] is the distance of the routes it chose.
 ///
 /// # Examples
 ///
@@ -60,7 +66,7 @@ pub struct SplitResult {
 /// let dm = DistanceMatrix::from_customers(&customers);
 ///
 /// // Giant tour: [1, 2, 3] — customers in order
-/// let result = split(&[1, 2, 3], &customers, &dm, 30);
+/// let result = split(&[1, 2, 3], &customers, &dm, 30, 0.0);
 /// assert_eq!(result.routes.len(), 1); // all fit in one route
 /// assert!((result.total_distance - 6.0).abs() < 1e-10);
 /// ```
@@ -69,6 +75,7 @@ pub fn split(
     customers: &[Customer],
     distances: &DistanceMatrix,
     capacity: i32,
+    route_cost: f64,
 ) -> SplitResult {
     let n = tour.len();
 
@@ -84,6 +91,7 @@ pub fn split(
     // cost[i] = minimum total distance to serve tour[0..i]
     // pred[i] = predecessor index (start of the last route ending at i)
     let mut cost = vec![f64::INFINITY; n + 1];
+    let mut dist = vec![0.0; n + 1];
     let mut pred = vec![0usize; n + 1];
     cost[0] = 0.0;
 
@@ -114,10 +122,11 @@ pub fn split(
 
             // Complete route: ... → cid → depot
             let total_route = route_dist + distances.get(cid, depot);
-            let new_cost = cost[i] + total_route;
+            let new_cost = cost[i] + route_cost + total_route;
 
             if new_cost < cost[j + 1] {
                 cost[j + 1] = new_cost;
+                dist[j + 1] = dist[i] + total_route;
                 pred[j + 1] = i;
             }
         }
@@ -135,7 +144,7 @@ pub fn split(
 
     SplitResult {
         routes,
-        total_distance: cost[n],
+        total_distance: dist[n],
     }
 }
 
@@ -157,7 +166,7 @@ mod tests {
     #[test]
     fn test_split_single_route() {
         let (cust, dm) = line_customers();
-        let result = split(&[1, 2, 3], &cust, &dm, 30);
+        let result = split(&[1, 2, 3], &cust, &dm, 30, 0.0);
         assert_eq!(result.routes.len(), 1);
         assert_eq!(result.routes[0], vec![1, 2, 3]);
         // 0→1→2→3→0 = 1+1+1+3 = 6
@@ -168,7 +177,7 @@ mod tests {
     fn test_split_forced_two_routes() {
         let (cust, dm) = line_customers();
         // Capacity 20 can hold 2 customers (demand 10 each)
-        let result = split(&[1, 2, 3], &cust, &dm, 20);
+        let result = split(&[1, 2, 3], &cust, &dm, 20, 0.0);
         assert_eq!(result.routes.len(), 2);
         // Optimal split: [1]+[2,3] = (0→1→0)+(0→2→3→0) = 2+6 = 8
         assert_eq!(result.routes[0], vec![1]);
@@ -180,7 +189,7 @@ mod tests {
     fn test_split_each_alone() {
         let (cust, dm) = line_customers();
         // Capacity 10 — each customer alone
-        let result = split(&[1, 2, 3], &cust, &dm, 10);
+        let result = split(&[1, 2, 3], &cust, &dm, 10, 0.0);
         assert_eq!(result.routes.len(), 3);
         // (0→1→0)+(0→2→0)+(0→3→0) = 2+4+6 = 12
         assert!((result.total_distance - 12.0).abs() < 1e-10);
@@ -189,7 +198,7 @@ mod tests {
     #[test]
     fn test_split_empty() {
         let (cust, dm) = line_customers();
-        let result = split(&[], &cust, &dm, 30);
+        let result = split(&[], &cust, &dm, 30, 0.0);
         assert!(result.routes.is_empty());
         assert_eq!(result.total_distance, 0.0);
     }
@@ -197,7 +206,7 @@ mod tests {
     #[test]
     fn test_split_single_customer() {
         let (cust, dm) = line_customers();
-        let result = split(&[2], &cust, &dm, 30);
+        let result = split(&[2], &cust, &dm, 30, 0.0);
         assert_eq!(result.routes.len(), 1);
         assert_eq!(result.routes[0], vec![2]);
         // 0→2→0 = 4
@@ -208,7 +217,7 @@ mod tests {
     fn test_split_reversed_order() {
         let (cust, dm) = line_customers();
         // Tour [3,2,1] — reversed
-        let result = split(&[3, 2, 1], &cust, &dm, 30);
+        let result = split(&[3, 2, 1], &cust, &dm, 30, 0.0);
         assert_eq!(result.routes.len(), 1);
         // 0→3→2→1→0 = 3+1+1+1 = 6
         assert!((result.total_distance - 6.0).abs() < 1e-10);
@@ -226,7 +235,7 @@ mod tests {
         ];
         let dm = DistanceMatrix::from_customers(&customers);
         // Tour: [1,2,3,4], capacity 20 → split into [1,2] + [3,4]
-        let result = split(&[1, 2, 3, 4], &customers, &dm, 20);
+        let result = split(&[1, 2, 3, 4], &customers, &dm, 20, 0.0);
         assert_eq!(result.routes.len(), 2);
         assert_eq!(result.routes[0], vec![1, 2]);
         assert_eq!(result.routes[1], vec![3, 4]);
