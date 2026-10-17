@@ -10,6 +10,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
+- `solve_vrp` returns `route_summaries`: for each route, in the order of
+  `routes`, its `distance`, `load`, `cost` and `duration` (back at the depot,
+  counting waiting and service times). `total_distance` and `total_cost` are
+  their sums, so a plan view no longer re-adds loads from the customers or
+  rebuilds the distance metric to show a route's length or cost. .NET:
+  `VrpSolution.RouteSummaries` (`RouteSummary`).
 - `"alns"` removes whole routes (`RouteRemoval`, Pisinger & Ropke 2007) beside
   random, worst and Shaw removal, and its greedy and regret insertions price a
   new route — the vehicle's fixed cost plus the round trip — against every
@@ -22,6 +28,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- **Breaking** `VrpSolution` (.NET) has a `RouteSummaries` constructor
+  parameter.
 - **Breaking** `alns::Destroy` has a `Route` variant (a `match` over it must
   handle it).
 

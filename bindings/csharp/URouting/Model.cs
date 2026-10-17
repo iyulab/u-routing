@@ -141,7 +141,9 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 /// A plan. <see cref="Routes"/> lists customer ids per route (the depot is implied at both
 /// ends) and <see cref="RouteVehicles"/> the vehicle that drives each — its index in
 /// <see cref="VrpRequest.Vehicles"/> (<c>0</c> for the single vehicle type of the methods
-/// other than nearest neighbour, and when the request lists none); <see cref="Unassigned"/>
+/// other than nearest neighbour, and when the request lists none); <see cref="RouteSummaries"/>
+/// the distance, load, cost and return time of each route, whose sums are
+/// <see cref="TotalDistance"/> and <see cref="TotalCost"/>; <see cref="Unassigned"/>
 /// lists the customers no route serves, so a partial plan does not read as a complete one.
 /// <see cref="StopReason"/> says why the method stopped. <see cref="TotalCost"/> sums, over the
 /// routes, the route's vehicle's <see cref="Vehicle.FixedCost"/> plus
@@ -150,6 +152,7 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 public sealed record VrpSolution(
     IReadOnlyList<IReadOnlyList<long>> Routes,
     IReadOnlyList<int> RouteVehicles,
+    IReadOnlyList<RouteSummary> RouteSummaries,
     double TotalDistance,
     double TotalCost,
     int NumVehicles,
@@ -157,6 +160,17 @@ public sealed record VrpSolution(
     double ComputationTimeMs,
     IReadOnlyList<long> Unassigned,
     StopReason StopReason);
+
+/// <summary>One route's figures, as the engine evaluates the route with its vehicle.</summary>
+/// <param name="Distance">The route's length, depot to depot.</param>
+/// <param name="Load">The demand the route carries.</param>
+/// <param name="Cost">The vehicle's fixed cost plus its cost per distance × <paramref name="Distance"/>.</param>
+/// <param name="Duration">
+/// When the route is back at the depot, leaving it at time 0: travel (one unit of distance is
+/// one unit of time), waiting for time windows to open and service times. Equal to
+/// <paramref name="Distance"/> for a route with neither.
+/// </param>
+public sealed record RouteSummary(double Distance, long Load, double Cost, double Duration);
 
 /// <summary>
 /// Why the method stopped — the run's own account of the plan it returned.

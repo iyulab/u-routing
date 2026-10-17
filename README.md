@@ -420,6 +420,10 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
 {
   "routes": [[1, 3, 5], [2, 4]],
   "route_vehicles": [0, 0],
+  "route_summaries": [
+    { "distance": 25.5, "load": 14, "cost": 25.5, "duration": 25.5 },
+    { "distance": 17.0, "load": 9, "cost": 17.0, "duration": 17.0 }
+  ],
   "total_distance": 42.5,
   "total_cost": 42.5,
   "num_vehicles": 2,
@@ -444,6 +448,13 @@ its index in `vehicles` — `"nn"` gives each route its own vehicle from the lis
 `0` (also `0` when the request lists no vehicles). `total_cost` prices each
 route with its vehicle's `fixed_cost` and `cost_per_distance` (equal to
 `total_distance` with the defaults).
+
+`route_summaries` has one entry per route, in the order of `routes`: its `distance`
+(depot to depot), the `load` it carries, its `cost` (the vehicle's `fixed_cost` plus
+`cost_per_distance` × `distance`) and its `duration` — when it is back at the depot,
+leaving at time 0, with one unit of distance one unit of time, plus waiting for time
+windows to open and service times (equal to `distance` for a route with neither).
+`total_distance` is the sum of the `distance`s and `total_cost` of the `cost`s.
 
 #### `check_vrp_solution(problem, solution) -> CheckOutput`
 

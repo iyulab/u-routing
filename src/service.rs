@@ -18,7 +18,7 @@ use crate::alns::repair::{GreedyInsertion, RegretInsertion};
 use crate::alns::{Destroy, Repair, RoutingAlnsProblem};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, route_checks_needed, RouteLimits};
+use crate::evaluation::{has_time_windows, route_checks_needed, RouteEvaluator, RouteLimits};
 use crate::fleet::limit_routes;
 use crate::ga::RoutingGaProblem;
 use crate::ga::{split, split_tw};
@@ -588,6 +588,23 @@ pub(crate) fn default_method() -> String {
     Method::NearestNeighbor.name().to_string()
 }
 
+/// One route's figures, as the evaluator reads the route: the depot at both
+/// ends, the route's vehicle, the customers' service times and time windows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+pub(crate) struct RouteSummary {
+    /// The route's length, depot to depot.
+    pub(crate) distance: f64,
+    /// The demand the route carries: the sum of its customers' demands.
+    pub(crate) load: i64,
+    /// The route's vehicle's `fixed_cost` plus `cost_per_distance` × `distance`.
+    pub(crate) cost: f64,
+    /// When the route is back at the depot, leaving it at time 0: travel
+    /// (one unit of distance is one unit of time), waiting for time windows to
+    /// open and service times. Equal to `distance` for a route with neither.
+    pub(crate) duration: f64,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 pub(crate) struct VrpOutput {
@@ -598,6 +615,10 @@ pub(crate) struct VrpOutput {
     /// route with the request's single vehicle type, `0`. A request with no
     /// `vehicles` is solved with one vehicle of unlimited capacity, also `0`.
     pub(crate) route_vehicles: Vec<usize>,
+    /// What each route comes to, in the order of `routes` -- the figures the
+    /// plan's totals are sums of: `total_distance` is the sum of their
+    /// `distance` and `total_cost` of their `cost`.
+    pub(crate) route_summaries: Vec<RouteSummary>,
     pub(crate) total_distance: f64,
     /// What the plan costs: over its routes, the route's vehicle's
     /// `fixed_cost` plus `cost_per_distance` × the route's distance. Equal to
@@ -863,6 +884,7 @@ pub(crate) fn solve(
         return Ok(VrpOutput {
             routes: vec![],
             route_vehicles: vec![],
+            route_summaries: vec![],
             total_distance: 0.0,
             total_cost: 0.0,
             num_vehicles: 0,
@@ -891,24 +913,33 @@ pub(crate) fn solve(
                 .iter()
                 .map(|&v| RouteLimits::of(&vehicles[v]))
                 .collect();
-            let (routes, total_distance) =
-                apply_local_search(&limited.routes, &limits, &dm, &customers);
+            let (routes, _) = apply_local_search(&limited.routes, &limits, &dm, &customers);
             Plan {
                 routes,
                 vehicles: limited.vehicles,
-                total_distance,
                 method,
                 stop_reason: plan.stop_reason,
             }
         }
         _ => plan,
     };
-    let total_cost = plan
+    let route_summaries: Vec<RouteSummary> = plan
         .routes
         .iter()
         .zip(&plan.vehicles)
-        .map(|(route, &v)| vehicles[v].route_cost(route_distance(route, &dm)))
-        .sum();
+        .map(|(route, &v)| {
+            let (built, _) = RouteEvaluator::new(&customers, &dm, &vehicles[v]).build_route(route);
+            let distance = route_distance(route, &dm);
+            RouteSummary {
+                distance,
+                load: built.total_load().into(),
+                cost: vehicles[v].route_cost(distance),
+                duration: built.total_duration(),
+            }
+        })
+        .collect();
+    let total_cost = route_summaries.iter().map(|r| r.cost).sum();
+    let total_distance = route_summaries.iter().map(|r| r.distance).sum();
     let routes = map_routes(&plan.routes, id_map.as_slice());
     // Derived from the routes rather than from each solver's own bookkeeping,
     // so it holds for every method alike.
@@ -920,10 +951,11 @@ pub(crate) fn solve(
         .collect();
     Ok(VrpOutput {
         num_vehicles: routes.len(),
-        total_distance: plan.total_distance,
+        total_distance,
         total_cost,
         routes,
         route_vehicles: plan.vehicles,
+        route_summaries,
         method_used: plan.method.name().to_string(),
         computation_time_ms: 0.0,
         unassigned,
@@ -1319,7 +1351,6 @@ struct Plan {
     /// The vehicle of each route -- its index in the request's fleet -- in the
     /// same order. Capacity and limits come from the vehicle.
     vehicles: Vec<usize>,
-    total_distance: f64,
     method: Method,
     /// Why the method stopped.
     stop_reason: StopReason,
@@ -1338,10 +1369,8 @@ struct BuiltCustomers {
     all_ids: Vec<usize>,
 }
 
-/// Builds the internal customer list and ID mapping from input.
-///
-/// Returns `(customers, id_map)` where `customers[0]` is the depot and
-/// `id_map[i]` is the original customer ID for internal index `i+1`.
+/// Builds the internal customer list and ID mapping from input, leaving out
+/// (but still validating) every customer asking for more than `largest_load`.
 ///
 /// A time window the model cannot represent is an error. It used to be
 /// dropped, which solved the problem without the constraint the caller had
@@ -1714,7 +1743,6 @@ fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicle]) -
         routes: solution.routes().iter().map(|r| r.customer_ids()).collect(),
         // Nearest neighbour drives each route with its own vehicle.
         vehicles: solution.routes().iter().map(|r| r.vehicle_id()).collect(),
-        total_distance: solution.total_distance(),
         method: Method::NearestNeighbor,
         stop_reason: StopReason::Completed,
     }
@@ -1727,7 +1755,6 @@ fn solve_savings(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicl
     Plan {
         vehicles: vec![0; routes.len()],
         routes,
-        total_distance: solution.total_distance(),
         method: Method::Savings,
         stop_reason: StopReason::Completed,
     }
@@ -1823,11 +1850,10 @@ fn solve_ga(
         split(tour, customers, dm, capacity, route_cost).routes
     };
     let route_limits = vec![limits; routes.len()];
-    let (routes, total_distance) = apply_local_search(&routes, &route_limits, dm, customers);
+    let (routes, _) = apply_local_search(&routes, &route_limits, dm, customers);
     Ok(Plan {
         vehicles: vec![0; routes.len()],
         routes,
-        total_distance,
         method: Method::Genetic,
         stop_reason: ga_result.stop_reason,
     })
@@ -1896,11 +1922,10 @@ fn solve_alns(
     // Apply local search to improve ALNS result
     let alns_routes: Vec<Vec<usize>> = result.best.routes().to_vec();
     let route_limits = vec![limits; alns_routes.len()];
-    let (routes, total_distance) = apply_local_search(&alns_routes, &route_limits, dm, customers);
+    let (routes, _) = apply_local_search(&alns_routes, &route_limits, dm, customers);
     Ok(Plan {
         vehicles: vec![0; routes.len()],
         routes,
-        total_distance,
         method: Method::Alns,
         stop_reason: result.stop_reason,
     })
@@ -2440,6 +2465,52 @@ mod tests {
                 assert!(route.len() * 10 <= 20, "{method}: over capacity {route:?}");
             }
         }
+    }
+
+    /// Each route comes with its own figures, and the plan's totals are their
+    /// sums -- for every method, with a fixed cost and a per-distance cost.
+    #[test]
+    fn route_summaries_are_what_the_totals_sum() {
+        let customers = six_of_ten();
+        let truck = vec![vehicle(serde_json::json!({
+            "capacity": 20.0, "cost_per_distance": 2.0, "fixed_cost": 5.0
+        }))];
+        for method in ["nn", "savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &truck, method, &quick(method)).expect(method);
+            assert_eq!(out.route_summaries.len(), out.routes.len(), "{method}");
+            let distance: f64 = out.route_summaries.iter().map(|r| r.distance).sum();
+            let cost: f64 = out.route_summaries.iter().map(|r| r.cost).sum();
+            assert!((distance - out.total_distance).abs() < 1e-9, "{method}");
+            assert!((cost - out.total_cost).abs() < 1e-9, "{method}");
+            for (route, summary) in out.routes.iter().zip(&out.route_summaries) {
+                // Every customer asks for 10 units.
+                assert_eq!(summary.load, 10 * route.len() as i64, "{method}");
+                assert!(
+                    (summary.cost - (5.0 + 2.0 * summary.distance)).abs() < 1e-9,
+                    "{method}"
+                );
+                // No service times or windows: the route takes as long as it is.
+                assert!(
+                    (summary.duration - summary.distance).abs() < 1e-9,
+                    "{method}"
+                );
+            }
+        }
+    }
+
+    /// With service times and a window that opens late, a route is back at the
+    /// depot later than its length.
+    #[test]
+    fn a_route_summary_counts_service_and_waiting_in_its_duration() {
+        let customers = vec![customer(serde_json::json!({
+            "id": 1, "x": 3.0, "y": 4.0, "demand": 1.0,
+            "service_time": 2.0, "time_window": [10.0, 50.0]
+        }))];
+        let out = solve((0.0, 0.0), &customers, &fleet(&[10.0]), "nn", &quick("nn")).expect("nn");
+        let summary = &out.route_summaries[0];
+        assert!((summary.distance - 10.0).abs() < 1e-9);
+        // Arrives at 5, waits until 10, serves for 2 (leaves at 12), 5 back.
+        assert!((summary.duration - 17.0).abs() < 1e-9, "{summary:?}");
     }
 
     /// A customer whose demand exceeds every vehicle's capacity rides on no
@@ -3423,7 +3494,14 @@ mod tests {
         let output = result.unwrap();
         assert_eq!(output.method, Method::Genetic);
         assert!(!output.routes.is_empty());
-        assert!(output.total_distance > 0.0);
+        assert!(
+            output
+                .routes
+                .iter()
+                .map(|r| route_distance(r, &dm))
+                .sum::<f64>()
+                > 0.0
+        );
     }
 
     // ---- GA: population_size too small ----
@@ -3641,7 +3719,14 @@ mod tests {
         );
         let output = result.unwrap();
         assert!(!output.routes.is_empty());
-        assert!(output.total_distance > 0.0);
+        assert!(
+            output
+                .routes
+                .iter()
+                .map(|r| route_distance(r, &dm))
+                .sum::<f64>()
+                > 0.0
+        );
     }
 
     // ---- GA: tight capacity forces many routes ----

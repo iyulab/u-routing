@@ -103,6 +103,10 @@ public class RoutingClientTests
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(raw!), written), $"engine: {raw}\nrecord: {written}");
         var served = solution.Routes.SelectMany(r => r).Concat(solution.Unassigned).Order();
         Assert.Equal(Customers.Select(c => c.Id).Order(), served);
+        // One summary per route, and the totals are their sums.
+        Assert.Equal(solution.Routes.Count, solution.RouteSummaries.Count);
+        Assert.Equal(solution.TotalDistance, solution.RouteSummaries.Sum(r => r.Distance), 6);
+        Assert.Equal(solution.TotalCost, solution.RouteSummaries.Sum(r => r.Cost), 6);
     }
 
     [Fact]
