@@ -1903,8 +1903,14 @@ fn solve_alns(
         })?,
         None => 500,
     };
-    let mut alns_config = AlnsConfig::default().with_max_iterations(max_iterations);
-
+    // Temperatures are multiples of the typical worsening of a candidate, so the
+    // distance unit of the instance does not matter; the run starts where that
+    // is accepted one time in three and cools geometrically to a hundredth of the
+    // start exactly when the iteration budget ends -- a schedule that never
+    // cools leaves the search a random walk to the last iteration.
+    let mut alns_config = AlnsConfig::default()
+        .with_max_iterations(max_iterations)
+        .with_relative_temperature(1.0, alns_cooling_rate(max_iterations, 0.01), 0.01, 20);
     if let Some(seed) = seed(method, cfg)? {
         alns_config = alns_config.with_seed(seed);
     }
@@ -1935,8 +1941,30 @@ fn solve_alns(
 // Tests (native — exercise the solver functions directly)
 // ============================================================================
 
+/// The geometric cooling rate that takes a temperature to `floor` times its
+/// start over `iterations` iterations.
+fn alns_cooling_rate(iterations: usize, floor: f64) -> f64 {
+    floor.powf(1.0 / iterations.max(1) as f64)
+}
+
 #[cfg(test)]
 mod tests {
+    /// The cooling reaches the floor exactly when the budget ends, and is a
+    /// rate the settings check accepts for any budget.
+    #[test]
+    fn alns_cooling_reaches_its_floor_at_the_end_of_the_budget() {
+        for iterations in [1usize, 2, 500, 10_000, 1_000_000_000] {
+            let rate = alns_cooling_rate(iterations, 0.01);
+            assert!(rate > 0.0 && rate < 1.0, "{iterations}: {rate}");
+            let reached = rate.powf(iterations as f64);
+            assert!((reached - 0.01).abs() < 1e-6, "{iterations}: {reached}");
+            assert!(AlnsConfig::default()
+                .with_relative_temperature(1.0, rate, 0.01, 20)
+                .validate()
+                .is_ok());
+        }
+    }
+
     use super::*;
 
     /// The published vocabulary is what the solver answers with: every

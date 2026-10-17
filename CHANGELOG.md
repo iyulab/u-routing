@@ -8,6 +8,20 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+Depends on u-metaheur 0.14.
+
+### Changed
+
+- The `"alns"` method cools to the end of its iteration budget. Its acceptance
+  temperature was an absolute 100 falling by 0.05 % an iteration, which a 500-iteration
+  run never cooled: the search accepted nearly every candidate to the last iteration and
+  kept only the best layout seen. The temperatures are now multiples of the typical
+  worsening of a candidate, measured on a few before the run, so the unit of the
+  instance's distances does not matter; the start accepts a typical worsening one time
+  in three and the schedule reaches a hundredth of that at the last iteration. On
+  Solomon's 56 instances the mean distance over three seeds falls from 1025.1 to 1015.7
+  (every seed below every seed before), with no violation and nothing unassigned.
+
 ## [0.21.0] - 2026-10-17
 
 Depends on u-numflow 0.14 and u-metaheur 0.13. The .NET client is `URouting` 0.18.0.
