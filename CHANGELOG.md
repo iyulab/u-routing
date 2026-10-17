@@ -8,7 +8,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
-Depends on u-metaheur 0.14.
+## [0.22.0] - 2026-10-18
+
+Depends on u-numflow 0.14 and u-metaheur 0.14. The .NET client is `URouting` 0.19.0.
 
 ### Changed
 
