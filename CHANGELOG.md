@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-17
+
+Depends on u-numflow 0.14 and u-metaheur 0.13. The .NET client is `URouting` 0.18.0.
+
 ### Added
 
 - `solve_vrp` returns `route_summaries`: for each route, in the order of
