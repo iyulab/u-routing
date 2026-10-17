@@ -836,8 +836,21 @@ pub(crate) fn solve(
             })
         })
         .transpose()?;
-    let (customers, id_map) = build_customers(depot, input_customers)?;
     let vehicles = build_vehicles(input_vehicles)?;
+    // The largest load any vehicle takes: a customer asking for more rides on
+    // no route at all, whatever the method -- reported unassigned up front
+    // rather than left for each method to notice (savings and ALNS opened a
+    // route per customer and never looked; GA's split folded the tour into one).
+    let largest_load = vehicles
+        .iter()
+        .map(Vehicle::capacity)
+        .max()
+        .expect("build_vehicles returns at least one vehicle");
+    let BuiltCustomers {
+        customers,
+        id_map,
+        all_ids,
+    } = build_customers(depot, input_customers, largest_load)?;
     // Only nearest neighbour assigns routes to particular vehicles. The other
     // methods plan every route with one vehicle -- one capacity and one set of
     // limits -- so a fleet that differs in either is not a problem they can
@@ -855,7 +868,7 @@ pub(crate) fn solve(
             num_vehicles: 0,
             method_used: method.name().to_string(),
             computation_time_ms: 0.0,
-            unassigned: Vec::new(),
+            unassigned: all_ids,
             stop_reason: StopReason::Completed,
         });
     }
@@ -900,7 +913,7 @@ pub(crate) fn solve(
     // Derived from the routes rather than from each solver's own bookkeeping,
     // so it holds for every method alike.
     let served: std::collections::HashSet<usize> = routes.iter().flatten().copied().collect();
-    let unassigned = id_map
+    let unassigned = all_ids
         .iter()
         .copied()
         .filter(|id| !served.contains(id))
@@ -1098,7 +1111,9 @@ pub(crate) fn check(
         .max_vehicles
         .map(|n| whole_in::<usize>("config.max_vehicles", n, 1, usize::MAX as i128))
         .transpose()?;
-    let (customers, id_map) = build_customers(depot, input_customers)?;
+    let BuiltCustomers {
+        customers, id_map, ..
+    } = build_customers(depot, input_customers, i32::MAX)?;
     let vehicles = build_vehicles(input_vehicles)?;
     if method != Method::NearestNeighbor {
         refuse_mixed_fleet(method, &vehicles)?;
@@ -1313,6 +1328,15 @@ struct Plan {
 // ============================================================================
 // Internal helpers
 // ============================================================================
+/// The customers as the solvers see them, and the ids that name them.
+struct BuiltCustomers {
+    /// Depot first, then every customer a vehicle can carry.
+    customers: Vec<Customer>,
+    /// The caller's id of `customers[i + 1]`.
+    id_map: Vec<usize>,
+    /// Every customer's id, in the order given -- what `unassigned` is read from.
+    all_ids: Vec<usize>,
+}
 
 /// Builds the internal customer list and ID mapping from input.
 ///
@@ -1329,11 +1353,15 @@ struct Plan {
 fn build_customers(
     depot: (f64, f64),
     input_customers: &[InputCustomer],
-) -> Result<(Vec<Customer>, Vec<usize>), ServiceError> {
+    largest_load: i32,
+) -> Result<BuiltCustomers, ServiceError> {
     let mut customers: Vec<Customer> = Vec::with_capacity(input_customers.len() + 1);
     customers.push(Customer::depot(depot.0, depot.1));
 
+    // `id_map` names the customers a solver sees (every one a vehicle can
+    // carry); `all_ids` names all of them, in the order given.
     let mut id_map: Vec<usize> = Vec::with_capacity(input_customers.len());
+    let mut all_ids: Vec<usize> = Vec::with_capacity(input_customers.len());
     let mut first_at: std::collections::HashMap<usize, usize> =
         std::collections::HashMap::with_capacity(input_customers.len());
 
@@ -1360,8 +1388,8 @@ fn build_customers(
         let demand = whole_units(ic.demand, "demand", position, Some(id), || {
             format!("customer {id}: demand")
         })?;
+        all_ids.push(id);
         let idx = customers.len();
-        id_map.push(id);
         let mut c = Customer::new(idx, ic.x, ic.y, demand, ic.service_time);
         if let Some([ready, due]) = ic.time_window {
             let tw = TimeWindow::new(ready, due).ok_or_else(|| {
@@ -1376,10 +1404,17 @@ fn build_customers(
             })?;
             c = c.with_time_window(tw);
         }
-        customers.push(c);
+        if demand <= largest_load {
+            id_map.push(id);
+            customers.push(c);
+        }
     }
 
-    Ok((customers, id_map))
+    Ok(BuiltCustomers {
+        customers,
+        id_map,
+        all_ids,
+    })
 }
 
 /// Solver settings the method's runner refused (a population of 1, zero
@@ -2258,7 +2293,9 @@ mod tests {
                 .extend(extra.as_object().unwrap().clone());
             vec![vehicle(v.clone()), vehicle(v)]
         };
-        let (internal, _) = build_customers((0.0, 0.0), &customers).expect("valid");
+        let internal = build_customers((0.0, 0.0), &customers, i32::MAX)
+            .expect("valid")
+            .customers;
         let dm = DistanceMatrix::from_customers(&internal);
         for (limit, fleet) in [
             (
@@ -2405,6 +2442,51 @@ mod tests {
         }
     }
 
+    /// A customer whose demand exceeds every vehicle's capacity rides on no
+    /// route -- it comes back in `unassigned` for every method, and the
+    /// customers a vehicle can carry are still served (GA used to fold them all
+    /// into one overloaded route, savings and ALNS gave the oversized customer
+    /// a route of its own).
+    #[test]
+    fn a_customer_no_vehicle_can_carry_is_unassigned_by_every_method() {
+        let customers = vec![
+            customer(serde_json::json!({ "id": 1, "x": 1.0, "y": 1.0, "demand": 5.0 })),
+            customer(serde_json::json!({ "id": 2, "x": 4.0, "y": 2.0, "demand": 3.0 })),
+            customer(serde_json::json!({ "id": 3, "x": -2.0, "y": 3.0, "demand": 2.0 })),
+        ];
+        let vehicles = fleet(&[4.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let config = InputConfig {
+                max_vehicles: Some(3),
+                ..quick(method)
+            };
+            let out = solve((0.0, 0.0), &customers, &vehicles, method, &config).expect(method);
+            let served: Vec<usize> = out.routes.iter().flatten().copied().collect();
+            if method == "nn" {
+                // One vehicle is one route for nearest neighbour, whatever
+                // `max_vehicles` allows: it can leave a carryable customer out.
+                assert!(out.unassigned.contains(&1), "{method}: {:?}", out.routes);
+            } else {
+                assert_eq!(out.unassigned, vec![1], "{method}: {:?}", out.routes);
+                assert!(
+                    served.contains(&2) && served.contains(&3),
+                    "{method}: {served:?}"
+                );
+            }
+            for route in &out.routes {
+                let load: f64 = route.iter().map(|id| [5.0, 3.0, 2.0][id - 1]).sum();
+                assert!(load <= 4.0, "{method}: load {load} on {route:?}");
+            }
+        }
+        // Capacity 0: nothing with a demand fits; every customer is unassigned.
+        let none = fleet(&[0.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let out = solve((0.0, 0.0), &customers, &none, method, &quick(method)).expect(method);
+            assert_eq!(out.unassigned, vec![1, 2, 3], "{method}");
+            assert!(out.routes.is_empty(), "{method}: {:?}", out.routes);
+        }
+    }
+
     /// Unlimited, the same request still needs a third route -- so the test
     /// above measures the limit, not a problem that happened to fit.
     #[test]
@@ -2493,7 +2575,9 @@ mod tests {
             )
             .expect(method);
             assert!(out.num_vehicles <= 2, "{method}");
-            let (internal, _) = build_customers((0.0, 0.0), &customers).expect("valid");
+            let internal = build_customers((0.0, 0.0), &customers, i32::MAX)
+                .expect("valid")
+                .customers;
             let dm = DistanceMatrix::from_customers(&internal);
             for route in &out.routes {
                 // ids are 1..=6 and equal the internal indices here

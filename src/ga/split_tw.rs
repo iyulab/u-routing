@@ -33,9 +33,9 @@ use super::split::SplitResult;
 /// Each sub-route starts and ends at the depot, and all time window constraints
 /// are satisfied (arrival ≤ due for each customer).
 ///
-/// If time windows make it impossible to serve all customers in any partition,
-/// the algorithm will skip infeasible sub-routes (some customers may remain
-/// unserved, indicated by infinite cost at unreachable positions).
+/// A customer that cannot be served even alone (too heavy for the vehicle, a
+/// time window out of reach, a limit it breaks by itself) is left out of the
+/// routes; the customers around it are still split.
 ///
 /// # Arguments
 ///
@@ -146,32 +146,18 @@ pub fn split_tw(
         }
     }
 
-    // Backtrack to find routes
-    if cost[n] == f64::INFINITY {
-        // Try to recover as many customers as possible
-        // Find the last reachable position
-        let mut last = 0;
-        for j in (0..=n).rev() {
-            if cost[j] < f64::INFINITY {
-                last = j;
-                break;
-            }
-        }
-
-        let mut routes = Vec::new();
-        let mut j = last;
-        while j > 0 {
-            let i = pred[j];
-            routes.push(tour[i..j].to_vec());
-            j = i;
-        }
-        routes.reverse();
-
-        let total = dist[last];
-        return SplitResult {
-            routes,
-            total_distance: total,
-        };
+    // The first position no segment reaches is a customer that cannot even ride
+    // alone (too heavy, window out of reach, limits it breaks by itself). Leave
+    // it out and split the rest -- the backtrack from an unreachable end would
+    // otherwise cut the tour there and drop every customer after it as well.
+    if let Some(stuck) = (1..=n).find(|&j| cost[j] == f64::INFINITY) {
+        let rest: Vec<usize> = tour
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| k != stuck - 1)
+            .map(|(_, &c)| c)
+            .collect();
+        return split_tw(&rest, customers, distances, capacity, limits, route_cost);
     }
 
     let mut routes = Vec::new();
@@ -265,6 +251,22 @@ mod tests {
         let result = split_tw(&[], &customers, &dm, 30, &RouteLimits::NONE, 0.0);
         assert!(result.routes.is_empty());
         assert_eq!(result.total_distance, 0.0);
+    }
+
+    #[test]
+    fn test_split_tw_unservable_customer_does_not_drop_the_tour_after_it() {
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 10, 0.0),
+            Customer::new(2, 2.0, 0.0, 99, 0.0), // heavier than the vehicle
+            Customer::new(3, 3.0, 0.0, 10, 0.0),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        let result = split_tw(&[1, 2, 3], &customers, &dm, 20, &RouteLimits::NONE, 0.0);
+        let served: Vec<usize> = result.routes.iter().flatten().copied().collect();
+        assert_eq!(served, vec![1, 3], "{:?}", result.routes);
+        // 0 -> 1 -> 3 -> 0
+        assert!((result.total_distance - 6.0).abs() < 1e-9);
     }
 
     #[test]

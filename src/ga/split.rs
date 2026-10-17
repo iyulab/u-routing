@@ -77,6 +77,21 @@ pub fn split(
     capacity: i32,
     route_cost: f64,
 ) -> SplitResult {
+    // A customer asking for more than a vehicle holds fits on no route. Left in
+    // the tour it makes every position after it unreachable, and the backtrack
+    // then folds the whole tour into one overloaded route -- so it is left out,
+    // and the tour's other customers are split as if it were not there.
+    let carryable: Vec<usize>;
+    let tour = if tour.iter().any(|&c| customers[c].demand() > capacity) {
+        carryable = tour
+            .iter()
+            .copied()
+            .filter(|&c| customers[c].demand() <= capacity)
+            .collect();
+        &carryable[..]
+    } else {
+        tour
+    };
     let n = tour.len();
 
     if n == 0 {
@@ -193,6 +208,25 @@ mod tests {
         assert_eq!(result.routes.len(), 3);
         // (0→1→0)+(0→2→0)+(0→3→0) = 2+4+6 = 12
         assert!((result.total_distance - 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_split_leaves_out_a_customer_no_vehicle_can_carry() {
+        let (cust, dm) = line_customers();
+        // Capacity 5: no customer (demand 10) fits -- no route, not one big one.
+        let none = split(&[1, 2, 3], &cust, &dm, 5, 0.0);
+        assert!(none.routes.is_empty(), "{:?}", none.routes);
+        assert_eq!(none.total_distance, 0.0);
+
+        let mut mixed = cust.clone();
+        mixed[2] = Customer::new(2, 2.0, 0.0, 99, 0.0);
+        let result = split(&[1, 2, 3], &mixed, &dm, 20, 0.0);
+        let served: Vec<usize> = result.routes.iter().flatten().copied().collect();
+        assert_eq!(served, vec![1, 3]);
+        for route in &result.routes {
+            let load: i32 = route.iter().map(|&c| mixed[c].demand()).sum();
+            assert!(load <= 20, "{route:?}");
+        }
     }
 
     #[test]

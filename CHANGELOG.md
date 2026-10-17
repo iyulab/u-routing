@@ -25,6 +25,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 - **Breaking** `alns::Destroy` has a `Route` variant (a `match` over it must
   handle it).
 
+### Fixed
+
+- `config.time_limit_ms` bounds `"ga"` within a generation, not only between
+  generations (u-metaheur's GA runner now counts its first population and its
+  breeding against the budget): a 1.5 s limit on 300 customers ended near 2.7 s
+  and now ends near 1.6 s; 500 ms ended near 1.1 s and now near 0.6 s.
+- A customer whose demand exceeds every vehicle's capacity is reported in
+  `unassigned` by every method. `"savings"` and `"alns"` used to give it a route
+  of its own, and `"ga"` folded the whole tour into one overloaded route, so
+  `check_vrp_solution` flagged `capacity_exceeded` on the solver's own plan.
+- `ga::split` leaves a customer no vehicle can carry out of the routes instead
+  of returning one route holding the whole tour, and `ga::split_tw` leaves out a
+  customer that cannot be served even alone instead of dropping every customer
+  after it in the tour. Rust callers of either function get the same behaviour.
+
 ## [0.20.0] - 2026-10-16
 
 Depends on u-numflow 0.14. The .NET client is `URouting` 0.17.0.

@@ -426,12 +426,17 @@ mod time_window_tests {
     }
 
     #[test]
-    fn a_tour_that_serves_more_customers_ranks_ahead() {
+    fn a_customer_out_of_reach_costs_the_same_wherever_it_sits_in_the_tour() {
         let p = problem(true);
-        // [1, 2, 3] serves 1 and 2 before failing on 3; [3, 1, 2] fails at
-        // once and serves nobody -- its partial cost is 0.
-        let serves_two = p.evaluate(&GiantTour::new(vec![1, 2, 3]));
-        let serves_none = p.evaluate(&GiantTour::new(vec![3, 1, 2]));
-        assert!(serves_two < serves_none, "{serves_two} vs {serves_none}");
+        // Customer 3 cannot be served from anywhere in the tour. It used to cut
+        // the tour where it stood -- [3, 1, 2] served nobody while [1, 2, 3]
+        // served two, so the search ranked tours by where an unreachable
+        // customer happened to fall instead of by what they serve.
+        let last = p.evaluate(&GiantTour::new(vec![1, 2, 3]));
+        let first = p.evaluate(&GiantTour::new(vec![3, 1, 2]));
+        assert!((last - first).abs() < 1e-9, "{last} vs {first}");
+        // ... and it still costs more than the plan that serves everyone.
+        let reachable = problem(false).evaluate(&GiantTour::new(vec![1, 2]));
+        assert!(last > reachable, "{last} vs {reachable}");
     }
 }
