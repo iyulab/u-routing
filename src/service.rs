@@ -455,6 +455,7 @@ fn seed(method: Method, cfg: &InputConfig) -> Result<Option<u64>, ServiceError> 
 
 #[derive(Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputCustomer {
     /// A whole number from 0, the caller's own label; routes and
@@ -480,6 +481,7 @@ pub(crate) struct InputCustomer {
 
 #[derive(Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputVehicle {
     #[serde(default = "default_capacity")]
@@ -524,6 +526,7 @@ fn default_cost_per_distance() -> f64 {
 /// respect whichever method runs -- `max_vehicles` is one.
 #[derive(Deserialize, Default)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputConfig {
     // --- GA parameters ---
@@ -592,6 +595,7 @@ pub(crate) fn default_method() -> String {
 /// ends, the route's vehicle, the customers' service times and time windows.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 pub(crate) struct RouteSummary {
     /// The route's length, depot to depot.
     pub(crate) distance: f64,
@@ -607,6 +611,7 @@ pub(crate) struct RouteSummary {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 pub(crate) struct VrpOutput {
     pub(crate) routes: Vec<Vec<usize>>,
     /// The vehicle that drives each route: its index in the request's
@@ -643,6 +648,10 @@ pub(crate) struct VrpOutput {
             type = "\"completed\" | \"optimal\" | \"target_reached\" | \"iteration_limit\" | \"no_improvement\" | \"time_limit\" | \"cancelled\""
         )
     )]
+    #[cfg_attr(
+        all(test, feature = "wasm"),
+        schemars(schema_with = "schema::stop_reason")
+    )]
     pub(crate) stop_reason: StopReason,
 }
 
@@ -667,6 +676,7 @@ pub(crate) const SETTINGS: [&str; 8] = [
 /// A refusal reason: the `code` and the fields that can stand beside it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCode {
     pub(crate) code: String,
@@ -677,11 +687,16 @@ pub(crate) struct RefusalCode {
 /// functions that report it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ViolationCode {
     pub(crate) code: String,
     pub(crate) fields: Vec<String>,
     #[cfg_attr(feature = "wasm", tsify(type = "\"check_vrp_solution\"[]"))]
+    #[cfg_attr(
+        all(test, feature = "wasm"),
+        schemars(schema_with = "schema::checkers")
+    )]
     pub(crate) checkers: Vec<String>,
 }
 
@@ -689,6 +704,7 @@ pub(crate) struct ViolationCode {
 /// and every checker violation `code`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Codes {
     pub(crate) refusals: Vec<RefusalCode>,
@@ -725,6 +741,7 @@ pub(crate) fn codes() -> Codes {
 /// setting with this method is refused (`invalid_option`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MethodInfo {
     /// The method, as a request's `method` names it.
@@ -732,6 +749,7 @@ pub(crate) struct MethodInfo {
         feature = "wasm",
         tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")
     )]
+    #[cfg_attr(all(test, feature = "wasm"), schemars(schema_with = "schema::method"))]
     pub(crate) name: String,
     /// The settings it reads, in [`SETTINGS`] order.
     #[cfg_attr(
@@ -739,6 +757,10 @@ pub(crate) struct MethodInfo {
         tsify(
             type = "(\"population_size\" | \"max_generations\" | \"mutation_rate\" | \"elite_ratio\" | \"max_iterations\" | \"seed\" | \"time_limit_ms\" | \"max_vehicles\")[]"
         )
+    )]
+    #[cfg_attr(
+        all(test, feature = "wasm"),
+        schemars(schema_with = "schema::settings")
     )]
     pub(crate) reads: Vec<String>,
 }
@@ -972,6 +994,7 @@ pub(crate) fn solve(
 /// customers reported unassigned and, optionally, the total distance reported.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputSolution {
     /// Customer ids per route, as `solve` reports them.
@@ -1001,6 +1024,7 @@ pub(crate) struct InputSolution {
 /// `routes`; `customer` and `vehicle` are as the request and plan name them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PlanViolation {
     /// The route carries more than its vehicle's capacity.
@@ -1113,6 +1137,7 @@ impl PlanViolation {
 /// Whether a plan keeps every rule of its problem, and each rule it breaks.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 pub(crate) struct CheckOutput {
     /// No violations.
     pub(crate) feasible: bool,
@@ -2323,6 +2348,29 @@ mod tests {
                 ..InputConfig::default()
             },
             _ => InputConfig::default(),
+        }
+    }
+
+    /// The plan is a function of the request: `"nn"` and `"savings"` draw no
+    /// random numbers, and `"ga"` and `"alns"` given a seed and no time limit
+    /// make the same run again. (`computation_time_ms` measures the call.)
+    #[test]
+    fn the_same_request_gives_the_same_plan() {
+        let customers = ring(12);
+        let vehicles = [vehicle(serde_json::json!({ "capacity": 20.0 }))];
+        for method in ["nn", "savings", "ga", "alns"] {
+            let run = || {
+                let out = solve((0.0, 0.0), &customers, &vehicles, method, &quick(method))
+                    .unwrap_or_else(|e| panic!("{method}: {}", e.message));
+                (
+                    out.routes,
+                    out.route_vehicles,
+                    out.total_distance.to_bits(),
+                    out.unassigned,
+                    out.stop_reason,
+                )
+            };
+            assert_eq!(run(), run(), "{method}");
         }
     }
 
@@ -3819,5 +3867,35 @@ mod dto_strictness_tests {
         assert_rejects_unknown::<super::InputConfig>(json!({
             "population_size": 60, "generations": 100
         }));
+    }
+}
+
+/// The closed string vocabularies of the wire types, as JSON Schema built from
+/// the tables the binding parses and prints them from (the engine card's
+/// schemas; tests only).
+#[cfg(all(test, feature = "wasm"))]
+pub(crate) mod schema {
+    use schemars::{Schema, SchemaGenerator};
+
+    use crate::engine_card::string_enum;
+
+    pub(crate) fn stop_reason(_: &mut SchemaGenerator) -> Schema {
+        string_enum(super::StopReason::ALL.iter().map(|r| r.name()))
+    }
+
+    pub(crate) fn method(_: &mut SchemaGenerator) -> Schema {
+        string_enum(super::Method::ALL.iter().map(|m| m.name()))
+    }
+
+    pub(crate) fn settings(_: &mut SchemaGenerator) -> Schema {
+        let item = string_enum(super::SETTINGS).to_value();
+        Schema::try_from(serde_json::json!({ "type": "array", "items": item }))
+            .expect("an object is a schema")
+    }
+
+    pub(crate) fn checkers(_: &mut SchemaGenerator) -> Schema {
+        let item = string_enum(["check_vrp_solution"]).to_value();
+        Schema::try_from(serde_json::json!({ "type": "array", "items": item }))
+            .expect("an object is a schema")
     }
 }

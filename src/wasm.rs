@@ -193,6 +193,7 @@ fn from_json<T: serde::de::DeserializeOwned>(
 // `service`. Only the top level is this binding's own: the depot is an object.
 
 #[derive(Deserialize, tsify::Tsify)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct InputDepot {
     x: f64,
@@ -200,6 +201,7 @@ struct InputDepot {
 }
 
 #[derive(Deserialize, tsify::Tsify)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct VrpInput {
     customers: Vec<InputCustomer>,
@@ -210,6 +212,7 @@ struct VrpInput {
     #[serde(default = "service::default_method")]
     #[tsify(optional)]
     #[tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")]
+    #[cfg_attr(test, schemars(schema_with = "crate::service::schema::method"))]
     method: String,
     #[serde(default)]
     #[tsify(optional)]
@@ -334,8 +337,8 @@ pub fn solve_vrp(
 // Timing utilities (WASM-compatible)
 // ============================================================================
 
-/// Returns a timestamp in milliseconds (uses `performance.now()` in WASM,
-/// falls back to `Instant` on native).
+/// Returns a timestamp in milliseconds: `Date.now()` in WASM; native test
+/// builds read no clock and report 0.
 #[cfg(target_arch = "wasm32")]
 fn web_time() -> f64 {
     js_sys::Date::now()
@@ -480,5 +483,60 @@ mod path_tests {
         })))
         .expect("whole numbers");
         assert_eq!(out.method_used, "ga");
+    }
+}
+
+#[cfg(test)]
+mod engine_card_tests {
+    //! The engine card's operations are this binding's exports, and the
+    //! schemas it points at are generated from the types they read and return.
+
+    use super::VrpInput;
+    use crate::engine_card::{arg, Schemas};
+    use crate::service::{CheckOutput, InputSolution, MethodInfo, VrpOutput};
+
+    fn schemas() -> Schemas {
+        let s = Schemas::new();
+        s.op(
+            "solve_vrp",
+            vec![arg("problem", s.of::<VrpInput>())],
+            s.of::<VrpOutput>(),
+        );
+        s.op(
+            "check_vrp_solution",
+            vec![
+                arg("problem", s.of::<VrpInput>()),
+                arg("solution", s.of::<InputSolution>()),
+            ],
+            s.of::<CheckOutput>(),
+        );
+        s.op("available_methods", vec![], s.of::<Vec<MethodInfo>>());
+        s
+    }
+
+    #[test]
+    fn the_schemas_are_generated_from_the_binding_types() {
+        schemas().check("u-routing WebAssembly operations");
+    }
+
+    #[test]
+    fn every_export_is_a_card_operation_with_its_arguments() {
+        let s = schemas();
+        s.check_exports(include_str!("wasm.rs"));
+        s.check_card();
+    }
+
+    /// The only clocks the crate reads measure a call for
+    /// `computation_time_ms`; the searches' deadline and their unseeded draw
+    /// are in u-metaheur's runners, which the card declares for "ga" and
+    /// "alns".
+    #[test]
+    fn the_clocks_only_time_the_call() {
+        let expected: Vec<(String, &str)> =
+            [("src/ffi.rs", "Instant::now"), ("src/wasm.rs", "Date::now")]
+                .iter()
+                .map(|(f, c)| (f.to_string(), *c))
+                .collect();
+        assert_eq!(crate::engine_card::clock_and_entropy_uses(), expected);
     }
 }

@@ -29,6 +29,9 @@ mod service;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(all(test, feature = "wasm"))]
+mod engine_card;
+
 #[cfg(feature = "ffi")]
 pub mod ffi;
 

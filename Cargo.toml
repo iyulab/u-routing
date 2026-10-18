@@ -57,6 +57,8 @@ name = "solomon"
 required-features = ["ffi"]
 
 [dev-dependencies]
+# Generates the JSON Schemas the engine card points at (tests only).
+schemars = "1"
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 proptest = "1.4"
 

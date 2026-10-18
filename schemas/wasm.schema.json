@@ -1,0 +1,867 @@
+{
+  "$defs": {
+    "CheckOutput": {
+      "description": "Whether a plan keeps every rule of its problem, and each rule it breaks.",
+      "properties": {
+        "feasible": {
+          "description": "No violations.",
+          "type": "boolean"
+        },
+        "violations": {
+          "description": "Every rule the plan breaks; empty when `feasible`.",
+          "items": {
+            "$ref": "#/$defs/PlanViolation"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "feasible",
+        "violations"
+      ],
+      "type": "object"
+    },
+    "InputConfig": {
+      "additionalProperties": false,
+      "description": "Optional solver configuration.\n\nFields are shared across methods; each method uses only the relevant ones.\nCounts and the seed are whole numbers read signed, so a negative one is\nrefused by the range check like a too-small one ([`Whole`]).\nBesides the per-method parameters, it carries limits the solver has to\nrespect whichever method runs -- `max_vehicles` is one.",
+      "properties": {
+        "elite_ratio": {
+          "default": null,
+          "description": "Elite ratio for GA in (0, 1] (default: 0.1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_generations": {
+          "default": null,
+          "description": "Maximum generations for GA (default: 200).",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "default": null,
+          "description": "Maximum iterations for ALNS (default: 500).",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_vehicles": {
+          "default": null,
+          "description": "The number of routes the plan may use at most -- the fixed fleet.\n\nThe length of `vehicles` is not this number: it says which capacities\nexist, and for `\"savings\"`, `\"ga\"` and `\"alns\"` a single-entry list is\nhow a caller states one capacity for an unbounded fleet. A caller with\na fixed fleet says so here, and every method keeps to it: a plan that\nwould need more routes has its lightest routes emptied into the others\nwhere capacity and time windows allow, and the customers that fit\nnowhere are reported in `unassigned`.",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mutation_rate": {
+          "default": null,
+          "description": "Mutation rate for GA in (0, 1] (default: 0.1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "population_size": {
+          "default": null,
+          "description": "Population size for GA (default: 50).",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seed": {
+          "default": null,
+          "description": "Random seed for reproducibility: a whole number from 0 to 2^64 - 1.",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "time_limit_ms": {
+          "default": null,
+          "description": "Wall-clock budget in milliseconds for GA and ALNS: a whole number, at\nleast 1. A run that spends it returns the best plan found by then,\n`stop_reason: \"time_limit\"`. Unset, a run ends on its own budget.",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "InputCustomer": {
+      "additionalProperties": false,
+      "properties": {
+        "demand": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "description": "A whole number from 0, the caller's own label; routes and\n`unassigned` name the customer by it. Read signed so a negative id is\na range refusal: [`Whole`].",
+          "format": "int128",
+          "type": "integer"
+        },
+        "service_time": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "time_window": {
+          "default": null,
+          "description": "Optional time window as `[ready, due]`.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "InputDepot": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "InputSolution": {
+      "additionalProperties": false,
+      "description": "A plan to check, in the shape `solve` returns one: customer ids per route\n(the depot implied at both ends), the vehicle of each route, the\ncustomers reported unassigned and, optionally, the total distance reported.",
+      "properties": {
+        "route_vehicles": {
+          "default": null,
+          "description": "The vehicle of each route: its index in the request's `vehicles`.\nAbsent: `0` for every route.",
+          "items": {
+            "format": "int128",
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "routes": {
+          "description": "Customer ids per route, as `solve` reports them.",
+          "items": {
+            "items": {
+              "format": "int128",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "total_cost": {
+          "default": null,
+          "description": "The plan's total cost as reported (see `solve`'s `total_cost`).\nAbsent: not checked.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_distance": {
+          "default": null,
+          "description": "The plan's total distance as reported. Absent: not checked.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unassigned": {
+          "default": [],
+          "description": "Customers reported as served by no route.",
+          "items": {
+            "format": "int128",
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "routes"
+      ],
+      "type": "object"
+    },
+    "InputVehicle": {
+      "additionalProperties": false,
+      "properties": {
+        "capacity": {
+          "default": 1000000000.0,
+          "format": "double",
+          "type": "number"
+        },
+        "cost_per_distance": {
+          "default": 1.0,
+          "description": "Cost per unit of distance this vehicle travels (`> 0`, default 1).",
+          "format": "double",
+          "type": "number"
+        },
+        "fixed_cost": {
+          "default": 0.0,
+          "description": "Cost of using this vehicle for a route, whatever its length (`>= 0`,\ndefault 0). Every method minimizes the plan's `total_cost`, so a fixed\ncost trades distance for fewer routes.",
+          "format": "double",
+          "type": "number"
+        },
+        "max_distance": {
+          "default": null,
+          "description": "Longest total distance one route of this vehicle may travel, depot to\ndepot. Absent or `null`: no limit.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_duration": {
+          "default": null,
+          "description": "Latest return to the depot, on the clock that starts at 0 (travel time\nequals distance, plus waiting and service). Absent or `null`: no limit.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MethodInfo": {
+      "additionalProperties": false,
+      "description": "One method and the `config` settings it reads; a request giving any other\nsetting with this method is refused (`invalid_option`).",
+      "properties": {
+        "name": {
+          "description": "The method, as a request's `method` names it.",
+          "enum": [
+            "nn",
+            "savings",
+            "ga",
+            "alns"
+          ],
+          "type": "string"
+        },
+        "reads": {
+          "description": "The settings it reads, in [`SETTINGS`] order.",
+          "items": {
+            "enum": [
+              "population_size",
+              "max_generations",
+              "mutation_rate",
+              "elite_ratio",
+              "max_iterations",
+              "seed",
+              "time_limit_ms",
+              "max_vehicles"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "reads"
+      ],
+      "type": "object"
+    },
+    "PlanViolation": {
+      "description": "One way a plan breaks its problem. `route` is an index into the plan's\n`routes`; `customer` and `vehicle` are as the request and plan name them.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The route carries more than its vehicle's capacity.",
+          "properties": {
+            "capacity": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "code": {
+              "const": "capacity_exceeded",
+              "type": "string"
+            },
+            "load": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "load",
+            "capacity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route reaches `customer` after its window closes.",
+          "properties": {
+            "arrival": {
+              "format": "double",
+              "type": "number"
+            },
+            "code": {
+              "const": "time_window_violated",
+              "type": "string"
+            },
+            "customer": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "due": {
+              "format": "double",
+              "type": "number"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "customer",
+            "arrival",
+            "due"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route is longer than its vehicle's `max_distance`.",
+          "properties": {
+            "code": {
+              "const": "max_distance_exceeded",
+              "type": "string"
+            },
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "max_distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "distance",
+            "max_distance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route returns later than its vehicle's `max_duration`.",
+          "properties": {
+            "code": {
+              "const": "max_duration_exceeded",
+              "type": "string"
+            },
+            "duration": {
+              "format": "double",
+              "type": "number"
+            },
+            "max_duration": {
+              "format": "double",
+              "type": "number"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "duration",
+            "max_duration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route visits an id that is no customer of the request.",
+          "properties": {
+            "code": {
+              "const": "unknown_customer",
+              "type": "string"
+            },
+            "customer": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "customer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`customer` is visited a second time, on `route`.",
+          "properties": {
+            "code": {
+              "const": "customer_visited_twice",
+              "type": "string"
+            },
+            "customer": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "customer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`customer` is on no route and not in `unassigned`.",
+          "properties": {
+            "code": {
+              "const": "customer_missing",
+              "type": "string"
+            },
+            "customer": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "customer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`customer` is in `unassigned` but a route serves it, it is listed\ntwice, or it is no customer of the request.",
+          "properties": {
+            "code": {
+              "const": "wrongly_unassigned",
+              "type": "string"
+            },
+            "customer": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "customer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route's vehicle is not in the request's `vehicles`.",
+          "properties": {
+            "code": {
+              "const": "unknown_vehicle",
+              "type": "string"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "vehicle": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "vehicle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`\"nn\"` drives each vehicle once; this route uses one a second time.",
+          "properties": {
+            "code": {
+              "const": "vehicle_reused",
+              "type": "string"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "vehicle": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "vehicle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "More routes than `config.max_vehicles`.",
+          "properties": {
+            "code": {
+              "const": "too_many_routes",
+              "type": "string"
+            },
+            "max_routes": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "routes": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "routes",
+            "max_routes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reported `total_distance` differs from the routes' own.",
+          "properties": {
+            "actual": {
+              "format": "double",
+              "type": "number"
+            },
+            "code": {
+              "const": "distance_mismatch",
+              "type": "string"
+            },
+            "reported": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "code",
+            "reported",
+            "actual"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reported `total_cost` differs from what the routes cost with\ntheir vehicles.",
+          "properties": {
+            "actual": {
+              "format": "double",
+              "type": "number"
+            },
+            "code": {
+              "const": "cost_mismatch",
+              "type": "string"
+            },
+            "reported": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "code",
+            "reported",
+            "actual"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RouteSummary": {
+      "description": "One route's figures, as the evaluator reads the route: the depot at both\nends, the route's vehicle, the customers' service times and time windows.",
+      "properties": {
+        "cost": {
+          "description": "The route's vehicle's `fixed_cost` plus `cost_per_distance` × `distance`.",
+          "format": "double",
+          "type": "number"
+        },
+        "distance": {
+          "description": "The route's length, depot to depot.",
+          "format": "double",
+          "type": "number"
+        },
+        "duration": {
+          "description": "When the route is back at the depot, leaving it at time 0: travel\n(one unit of distance is one unit of time), waiting for time windows to\nopen and service times. Equal to `distance` for a route with neither.",
+          "format": "double",
+          "type": "number"
+        },
+        "load": {
+          "description": "The demand the route carries: the sum of its customers' demands.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "distance",
+        "load",
+        "cost",
+        "duration"
+      ],
+      "type": "object"
+    },
+    "VrpInput": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "customers": {
+          "items": {
+            "$ref": "#/$defs/InputCustomer"
+          },
+          "type": "array"
+        },
+        "depot": {
+          "$ref": "#/$defs/InputDepot"
+        },
+        "method": {
+          "default": "nn",
+          "enum": [
+            "nn",
+            "savings",
+            "ga",
+            "alns"
+          ],
+          "type": "string"
+        },
+        "vehicles": {
+          "items": {
+            "$ref": "#/$defs/InputVehicle"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "customers",
+        "depot"
+      ],
+      "type": "object"
+    },
+    "VrpOutput": {
+      "properties": {
+        "computation_time_ms": {
+          "description": "Filled in by the binding: how to read a clock differs by target.",
+          "format": "double",
+          "type": "number"
+        },
+        "method_used": {
+          "type": "string"
+        },
+        "num_vehicles": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "route_summaries": {
+          "description": "What each route comes to, in the order of `routes` -- the figures the\nplan's totals are sums of: `total_distance` is the sum of their\n`distance` and `total_cost` of their `cost`.",
+          "items": {
+            "$ref": "#/$defs/RouteSummary"
+          },
+          "type": "array"
+        },
+        "route_vehicles": {
+          "description": "The vehicle that drives each route: its index in the request's\n`vehicles`, in the order of `routes`. `\"nn\"` gives each route its own\nvehicle from the list; `\"savings\"`, `\"ga\"` and `\"alns\"` drive every\nroute with the request's single vehicle type, `0`. A request with no\n`vehicles` is solved with one vehicle of unlimited capacity, also `0`.",
+          "items": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "routes": {
+          "items": {
+            "items": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "stop_reason": {
+          "description": "Why the method stopped: `\"completed\"` for `\"nn\"` and `\"savings\"`, which\nbuild the plan in one pass; `\"iteration_limit\"` when `\"ga\"` or `\"alns\"`\nspent its generation or iteration budget; `\"no_improvement\"` when\n`\"ga\"` went its stall budget without a better plan; `\"time_limit\"`\nwhen `config.time_limit_ms` ran out first.",
+          "enum": [
+            "completed",
+            "optimal",
+            "target_reached",
+            "iteration_limit",
+            "no_improvement",
+            "time_limit",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "total_cost": {
+          "description": "What the plan costs: over its routes, the route's vehicle's\n`fixed_cost` plus `cost_per_distance` × the route's distance. Equal to\n`total_distance` with the default costs.",
+          "format": "double",
+          "type": "number"
+        },
+        "total_distance": {
+          "format": "double",
+          "type": "number"
+        },
+        "unassigned": {
+          "description": "Customers (by input id) that no route serves -- for example when the\nfleet cannot carry the total demand. They would otherwise simply be\nmissing from `routes`, and a partial plan would read as a complete one.",
+          "items": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "routes",
+        "route_vehicles",
+        "route_summaries",
+        "total_distance",
+        "total_cost",
+        "num_vehicles",
+        "method_used",
+        "computation_time_ms",
+        "unassigned",
+        "stop_reason"
+      ],
+      "type": "object"
+    },
+    "available_methods.input": {
+      "additionalProperties": false,
+      "description": "The arguments of available_methods(), by name; the WebAssembly function takes them in that order.",
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "available_methods.output": {
+      "items": {
+        "$ref": "#/$defs/MethodInfo"
+      },
+      "type": "array"
+    },
+    "check_vrp_solution.input": {
+      "additionalProperties": false,
+      "description": "The arguments of check_vrp_solution(problem, solution), by name; the WebAssembly function takes them in that order.",
+      "properties": {
+        "problem": {
+          "$ref": "#/$defs/VrpInput"
+        },
+        "solution": {
+          "$ref": "#/$defs/InputSolution"
+        }
+      },
+      "required": [
+        "problem",
+        "solution"
+      ],
+      "type": "object"
+    },
+    "check_vrp_solution.output": {
+      "$ref": "#/$defs/CheckOutput"
+    },
+    "solve_vrp.input": {
+      "additionalProperties": false,
+      "description": "The arguments of solve_vrp(problem), by name; the WebAssembly function takes them in that order.",
+      "properties": {
+        "problem": {
+          "$ref": "#/$defs/VrpInput"
+        }
+      },
+      "required": [
+        "problem"
+      ],
+      "type": "object"
+    },
+    "solve_vrp.output": {
+      "$ref": "#/$defs/VrpOutput"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "u-routing WebAssembly operations"
+}

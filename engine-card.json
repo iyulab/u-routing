@@ -1,0 +1,193 @@
+{
+  "$schema": "scripts/engine-card/engine-card.schema.json",
+  "card_version": 1,
+  "engine": {
+    "id": "u-routing",
+    "summary": "Vehicle routing: plans routes from a depot that serve every customer within vehicle capacity, time windows and route limits (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
+    "version": "0.22.0",
+    "license": "MIT",
+    "repository": "https://github.com/iyulab/u-routing"
+  },
+  "surfaces": [
+    {
+      "kind": "crate",
+      "name": "u-routing",
+      "package_version": "0.22.0",
+      "engine_version": "0.22.0",
+      "note": "The crate also exposes the constructive heuristics, local-search moves and evaluator one by one; the WebAssembly operations are its request-level service.",
+      "error_shape": "Err(...) from a method given settings it cannot run; infeasible customers come back in the plan's unassigned list."
+    },
+    {
+      "kind": "npm",
+      "name": "@iyulab/u-routing",
+      "package_version": "0.22.0",
+      "engine_version": "0.22.0",
+      "wasm": true,
+      "note": "Objects in and out, typed in the .d.ts (VrpInput, VrpOutput, InputSolution, CheckOutput). Bundler and Node targets; no bundler-less browser build.",
+      "error_shape": "A thrown Error whose code property is the code, with the fields (parameter, index, min, max, got, expected, ...) as its other properties."
+    },
+    {
+      "kind": "nuget",
+      "name": "URouting",
+      "package_version": "0.19.0",
+      "engine_version": "0.22.0",
+      "note": "C ABI wrapper over the same service layer; versioned on its own axis.",
+      "error_shape": "A RoutingException whose ErrorCode is the code, Parameter and Index the fields of those names, and Details the rest."
+    }
+  ],
+  "errors": {
+    "shape": "A refusal carries a stable snake_case 'code' and the fields listed for that code; a checker reports violations in the same vocabulary as data, not as an error.",
+    "source": {
+      "catalog": "codes() in src/service.rs, built from the Code table refusals are made from and one example of every PlanViolation; published as codes() in WebAssembly, the C ABI's codes export and Codes on .NET. What each code means is tabled in README.md, which a test holds equal to the catalog.",
+      "test": "src/service.rs::tests::the_readme_documents_every_code_and_no_other"
+    }
+  },
+  "operations": [
+    {
+      "id": "solve_vrp",
+      "summary": "Routes from a depot that serve the customers within each vehicle's capacity, time windows, max_distance and max_duration, minimizing total cost, by the chosen method (nn, savings, ga or alns), optionally with at most max_vehicles routes; customers no route can take come back as unassigned, and the plan says per route its distance, load, cost and duration and why the method stopped.",
+      "input": {
+        "schema": "schemas/wasm.schema.json#/$defs/solve_vrp.input",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "output": {
+        "schema": "schemas/wasm.schema.json#/$defs/solve_vrp.output",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "contract_test": "src/wasm.rs::engine_card_tests::every_export_is_a_card_operation_with_its_arguments",
+      "hints": {
+        "read_only": true,
+        "destructive": false,
+        "idempotent": false,
+        "open_world": false
+      },
+      "effects": {
+        "filesystem": "none",
+        "network": "none",
+        "clock": "deadline",
+        "randomness": "unseeded",
+        "note": "ga and alns draw from config.seed when it is given and from fresh entropy when it is not, and stop at config.time_limit_ms; computation_time_ms in the result measures the call on every method."
+      },
+      "determinism": {
+        "kind": "nondeterministic",
+        "note": "The worst case, ga or alns without config.seed. Every case except computation_time_ms, which measures the call.",
+        "cases": [
+          {
+            "when": "method nn or savings",
+            "kind": "deterministic",
+            "randomness": "none",
+            "clock": "none",
+            "test": "src/service.rs::tests::the_same_request_gives_the_same_plan",
+            "note": "Apart from computation_time_ms."
+          },
+          {
+            "when": "method ga or alns with config.seed and no config.time_limit_ms",
+            "kind": "seeded",
+            "randomness": "seeded",
+            "clock": "none",
+            "test": "src/service.rs::tests::the_same_request_gives_the_same_plan",
+            "note": "Apart from computation_time_ms."
+          },
+          {
+            "when": "method ga or alns with config.seed and config.time_limit_ms",
+            "kind": "time_bounded",
+            "randomness": "seeded",
+            "clock": "deadline",
+            "note": "How far the search gets before the deadline depends on machine speed; with the same seed it visits the same candidates in the same order."
+          }
+        ]
+      },
+      "output_provenance": {
+        "fields": [
+          "stop_reason",
+          "method_used",
+          "unassigned"
+        ],
+        "note": "Whether the plan is a one-pass construction or the best a search found before its budget or deadline, and which customers it could not serve."
+      },
+      "validation": {
+        "status": "none",
+        "limits": [
+          "Plan quality has not been compared against best-known solutions of standard instances (Solomon, CVRPLIB).",
+          "Feasibility of every returned plan is checkable with check_vrp_solution."
+        ]
+      },
+      "performance": {
+        "status": "none",
+        "complexity": "nn and savings build the plan in one pass over the O(n^2) customer pairs, then improve it by local search; ga and alns run their generation or iteration budget, re-evaluating routes at each step."
+      }
+    },
+    {
+      "id": "check_vrp_solution",
+      "summary": "Whether a plan keeps every rule of its problem, read as solve_vrp reads it: each customer served exactly once or reported unassigned, the vehicle of each route, the fleet size, capacity, time windows, route limits and the reported distance and cost; lists every rule broken.",
+      "input": {
+        "schema": "schemas/wasm.schema.json#/$defs/check_vrp_solution.input",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "output": {
+        "schema": "schemas/wasm.schema.json#/$defs/check_vrp_solution.output",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "contract_test": "src/wasm.rs::engine_card_tests::every_export_is_a_card_operation_with_its_arguments",
+      "hints": {
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "effects": {
+        "filesystem": "none",
+        "network": "none",
+        "clock": "none",
+        "randomness": "none"
+      },
+      "determinism": {
+        "kind": "deterministic",
+        "test": "src/wasm.rs::engine_card_tests::the_clocks_only_time_the_call"
+      },
+      "validation": {
+        "status": "none"
+      },
+      "performance": {
+        "status": "none",
+        "complexity": "O(n) in the customers and routes of the plan."
+      }
+    },
+    {
+      "id": "available_methods",
+      "summary": "The routing methods solve_vrp takes and, for each, the config settings it reads; a request giving any other setting with that method is refused.",
+      "input": {
+        "schema": "schemas/wasm.schema.json#/$defs/available_methods.input",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "output": {
+        "schema": "schemas/wasm.schema.json#/$defs/available_methods.output",
+        "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
+      },
+      "contract_test": "src/wasm.rs::engine_card_tests::every_export_is_a_card_operation_with_its_arguments",
+      "hints": {
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "effects": {
+        "filesystem": "none",
+        "network": "none",
+        "clock": "none",
+        "randomness": "none"
+      },
+      "determinism": {
+        "kind": "deterministic",
+        "test": "src/wasm.rs::engine_card_tests::the_clocks_only_time_the_call"
+      },
+      "validation": {
+        "status": "none"
+      },
+      "performance": {
+        "status": "none",
+        "complexity": "O(1)."
+      }
+    }
+  ]
+}
