@@ -106,10 +106,27 @@
         "note": "Whether the plan is a one-pass construction or the best a search found before its budget or deadline, and which customers it could not serve."
       },
       "validation": {
-        "status": "none",
+        "status": "partial",
+        "checks": [
+          {
+            "claim": "Every method returns a plan that serves each customer exactly once (on a route or in unassigned), keeps every route within capacity, and reports route and total distances equal to the Euclidean lengths of its routes.",
+            "reference_kind": "literature",
+            "reference": "the definition of a capacitated vehicle-routing plan (Toth & Vigo, The Vehicle Routing Problem, 2002, ch. 1)",
+            "method": "solves four seeded nine-customer maps with every method and recomputes loads and lengths",
+            "tolerance": "1e-9 (absolute)",
+            "test": "src/service.rs::oracle_tests::every_method_returns_a_complete_feasible_plan_with_true_distances"
+          },
+          {
+            "claim": "On seven customers and one uncapacitated vehicle, no method returns a tour shorter than the best of the 5,040 enumerated tours, and the genetic and ALNS searches return a tour within 0.1 % of it.",
+            "reference_kind": "literature",
+            "reference": "brute-force enumeration of all tours (the optimum by definition)",
+            "method": "three seeded seven-customer maps",
+            "tolerance": "1e-9 (lower bound); 0.1 % (searches)",
+            "test": "src/service.rs::oracle_tests::on_a_map_small_enough_to_enumerate_no_method_beats_the_best_tour_and_the_searches_find_it"
+          }
+        ],
         "limits": [
-          "Plan quality has not been compared against best-known solutions of standard instances (Solomon, CVRPLIB).",
-          "Feasibility of every returned plan is checkable with check_vrp_solution."
+          "Optimality is only checked where it can be enumerated; for larger instances the benchmark results are in the repository's benchmark documents."
         ]
       },
       "performance": {
@@ -146,7 +163,20 @@
         "test": "src/wasm.rs::engine_card_tests::the_clocks_only_time_the_call"
       },
       "validation": {
-        "status": "none"
+        "status": "partial",
+        "checks": [
+          {
+            "claim": "A plan the solver returns is feasible; a customer dropped, served twice, a route over capacity and a reported distance that is not the routes' each produce the matching violation.",
+            "reference_kind": "literature",
+            "reference": "the definition of a feasible plan (each customer once, capacity, reported figures true)",
+            "method": "perturbs one solver plan five ways and reads the violations",
+            "tolerance": "exact (violation kinds); distance mismatch beyond 1e-6",
+            "test": "src/service.rs::oracle_tests::the_checker_accepts_the_solvers_plans_and_names_each_defect"
+          }
+        ],
+        "limits": [
+          "Time-window, distance and duration limits, vehicle reuse and route-count violations are covered by unit tests."
+        ]
       },
       "performance": {
         "status": "none",
@@ -182,7 +212,20 @@
         "test": "src/wasm.rs::engine_card_tests::the_clocks_only_time_the_call"
       },
       "validation": {
-        "status": "none"
+        "status": "partial",
+        "checks": [
+          {
+            "claim": "The catalogue lists the methods nn, savings, ga and alns, and each method accepts exactly the settings listed as read and refuses every other.",
+            "reference_kind": "literature",
+            "reference": "the catalogue is its own contract: every listed setting is read, every other refused",
+            "method": "calls solve with each setting alone for each method",
+            "tolerance": "exact",
+            "test": "src/service.rs::oracle_tests::the_method_catalogue_lists_exactly_the_settings_each_method_reads"
+          }
+        ],
+        "limits": [
+          "The settings' values are not compared with the method's behaviour (a setting that is read has an effect that unit tests cover)."
+        ]
       },
       "performance": {
         "status": "none",

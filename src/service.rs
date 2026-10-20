@@ -3899,3 +3899,271 @@ pub(crate) mod schema {
             .expect("an object is a schema")
     }
 }
+
+/// `solve_vrp` against an oracle built from the definitions: the plan is
+/// complete, within capacity, and its reported distances are the distances of
+/// its routes; on a map small enough to enumerate, no method beats the best
+/// tour and the searches find it.
+#[cfg(test)]
+mod oracle_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn customers(count: usize, seed: u64) -> Vec<(f64, f64, f64)> {
+        let mut state = seed;
+        let mut next = |m: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) % m) as f64
+        };
+        (0..count)
+            .map(|_| (next(100) / 2.0, next(100) / 2.0, 1.0 + next(4)))
+            .collect()
+    }
+
+    fn input(list: &[(f64, f64, f64)]) -> Vec<InputCustomer> {
+        list.iter()
+            .enumerate()
+            .map(|(i, &(x, y, demand))| {
+                serde_json::from_value(json!({ "id": i + 1, "x": x, "y": y, "demand": demand }))
+                    .expect("a customer")
+            })
+            .collect()
+    }
+
+    fn vehicles(count: usize, capacity: f64) -> Vec<InputVehicle> {
+        (0..count)
+            .map(|_| serde_json::from_value(json!({ "capacity": capacity })).expect("a vehicle"))
+            .collect()
+    }
+
+    fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+        ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+    }
+
+    fn route_length(depot: (f64, f64), list: &[(f64, f64, f64)], route: &[usize]) -> f64 {
+        let mut at = depot;
+        let mut total = 0.0;
+        for &id in route {
+            let p = (list[id - 1].0, list[id - 1].1);
+            total += dist(at, p);
+            at = p;
+        }
+        total + dist(at, depot)
+    }
+
+    fn config() -> InputConfig {
+        serde_json::from_value(json!({})).expect("defaults")
+    }
+
+    #[test]
+    fn every_method_returns_a_complete_feasible_plan_with_true_distances() {
+        let depot = (25.0, 25.0);
+        for seed in 1..=4u64 {
+            let list = customers(9, seed);
+            let capacity = 7.0;
+            for method in methods() {
+                let out = solve(
+                    depot,
+                    &input(&list),
+                    &vehicles(6, capacity),
+                    &method.name,
+                    &config(),
+                )
+                .unwrap_or_else(|e| panic!("{} seed {seed}: {e:?}", method.name));
+                let mut seen = vec![0u32; list.len() + 1];
+                let mut total = 0.0;
+                for (route, summary) in out.routes.iter().zip(&out.route_summaries) {
+                    let load: f64 = route.iter().map(|&id| list[id - 1].2).sum();
+                    assert!(load <= capacity + 1e-9, "{} load {load}", method.name);
+                    assert_eq!(summary.load as f64, load, "{} route load", method.name);
+                    let length = route_length(depot, &list, route);
+                    assert!((summary.distance - length).abs() < 1e-9, "{}", method.name);
+                    total += length;
+                    for &id in route {
+                        seen[id] += 1;
+                    }
+                }
+                for &id in &out.unassigned {
+                    seen[id] += 1;
+                }
+                assert!(
+                    seen[1..].iter().all(|&c| c == 1),
+                    "{} seed {seed}: every customer exactly once, got {seen:?}",
+                    method.name
+                );
+                assert!((out.total_distance - total).abs() < 1e-9, "{}", method.name);
+            }
+        }
+    }
+
+    fn best_tour(depot: (f64, f64), list: &[(f64, f64, f64)]) -> f64 {
+        fn permute(
+            k: usize,
+            order: &mut Vec<usize>,
+            best: &mut f64,
+            depot: (f64, f64),
+            list: &[(f64, f64, f64)],
+        ) {
+            if k == order.len() {
+                *best = best.min(route_length(depot, list, order));
+                return;
+            }
+            for i in k..order.len() {
+                order.swap(k, i);
+                permute(k + 1, order, best, depot, list);
+                order.swap(k, i);
+            }
+        }
+        let mut order: Vec<usize> = (1..=list.len()).collect();
+        let mut best = f64::INFINITY;
+        permute(0, &mut order, &mut best, depot, list);
+        best
+    }
+
+    #[test]
+    fn on_a_map_small_enough_to_enumerate_no_method_beats_the_best_tour_and_the_searches_find_it() {
+        let depot = (25.0, 25.0);
+        for seed in 11..=13u64 {
+            let list = customers(7, seed);
+            let optimum = best_tour(depot, &list);
+            for method in methods() {
+                let out = solve(
+                    depot,
+                    &input(&list),
+                    &vehicles(1, 1e9),
+                    &method.name,
+                    &config(),
+                )
+                .unwrap_or_else(|e| panic!("{}: {e:?}", method.name));
+                assert!(
+                    out.total_distance >= optimum - 1e-9,
+                    "{} seed {seed}: {} beats the optimum {optimum}",
+                    method.name,
+                    out.total_distance
+                );
+                if method.name == "ga" || method.name == "alns" {
+                    assert!(
+                        out.total_distance <= optimum * 1.001,
+                        "{} seed {seed}: {} against the optimum {optimum}",
+                        method.name,
+                        out.total_distance
+                    );
+                }
+            }
+        }
+    }
+    fn plan(routes: serde_json::Value, extra: serde_json::Value) -> InputSolution {
+        let mut v = json!({ "routes": routes });
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, x) in e {
+                o.insert(k.clone(), x.clone());
+            }
+        }
+        serde_json::from_value(v).expect("a plan")
+    }
+
+    /// `check_vrp_solution` accepts what `solve_vrp` returns and names each
+    /// way a plan can be wrong -- a customer served twice or not at all, a
+    /// route over capacity, a reported distance that is not the routes'.
+    #[test]
+    fn the_checker_accepts_the_solvers_plans_and_names_each_defect() {
+        let depot = (25.0, 25.0);
+        let list = customers(8, 5);
+        let capacity = 7.0;
+        let cfg = config();
+        let out = solve(depot, &input(&list), &vehicles(6, capacity), "ga", &cfg).expect("solved");
+        let routes = json!(out.routes);
+        let good = plan(
+            routes.clone(),
+            json!({ "unassigned": out.unassigned, "total_distance": out.total_distance }),
+        );
+        let check_of = |p: &InputSolution| {
+            check(depot, &input(&list), &vehicles(6, capacity), "ga", &cfg, p)
+                .expect("a checkable plan")
+        };
+        let ok = check_of(&good);
+        assert!(ok.feasible, "{:?}", ok.violations);
+
+        // a customer dropped from its route, and not listed as unassigned
+        let mut dropped = out.routes.clone();
+        let removed = dropped[0].remove(0);
+        let r = check_of(&plan(json!(dropped), json!({})));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| matches!(v, PlanViolation::CustomerMissing { customer } if *customer == removed as i64)),
+            "{:?}",
+            r.violations
+        );
+
+        // a customer served by two routes
+        let mut twice = out.routes.clone();
+        let extra = twice[0][0];
+        twice.push(vec![extra]);
+        let r = check_of(&plan(json!(twice), json!({})));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| matches!(v, PlanViolation::CustomerVisitedTwice { customer, .. } if *customer == extra as i64)),
+            "{:?}",
+            r.violations
+        );
+
+        // every customer on one route: over the capacity
+        let all: Vec<usize> = (1..=list.len()).collect();
+        let r = check_of(&plan(json!([all]), json!({})));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| matches!(v, PlanViolation::CapacityExceeded { .. })),
+            "{:?}",
+            r.violations
+        );
+
+        // a reported distance that is not the routes' distance
+        let r = check_of(&plan(
+            routes,
+            json!({ "unassigned": out.unassigned, "total_distance": out.total_distance + 5.0 }),
+        ));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| matches!(v, PlanViolation::DistanceMismatch { .. })),
+            "{:?}",
+            r.violations
+        );
+    }
+    /// `available_methods` tells the truth about settings: a method accepts
+    /// each setting it lists as read and refuses every other.
+    #[test]
+    fn the_method_catalogue_lists_exactly_the_settings_each_method_reads() {
+        let names: Vec<String> = methods().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["nn", "savings", "ga", "alns"]);
+        let value = |setting: &str| match setting {
+            "population_size" | "max_generations" | "max_iterations" => json!(20),
+            "mutation_rate" | "elite_ratio" => json!(0.1),
+            "seed" | "time_limit_ms" => json!(1000),
+            "max_vehicles" => json!(5),
+            other => panic!("unknown setting {other}"),
+        };
+        let depot = (25.0, 25.0);
+        let list = customers(6, 3);
+        for method in methods() {
+            for setting in SETTINGS {
+                let cfg: InputConfig =
+                    serde_json::from_value(json!({ setting: value(setting) })).expect("a config");
+                let result = solve(depot, &input(&list), &vehicles(4, 8.0), &method.name, &cfg);
+                let reads = method.reads.iter().any(|r| r == setting);
+                assert_eq!(
+                    result.is_ok(),
+                    reads,
+                    "{} with {setting}: listed as read = {reads}, got {:?}",
+                    method.name,
+                    result.err().map(|e| e.code().to_string())
+                );
+            }
+        }
+    }
+}
