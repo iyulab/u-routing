@@ -1480,7 +1480,7 @@ fn build_customers(
         return Err(ServiceError::new(
             Code::ParameterOutOfRange,
             format!(
-                "the demands of the customers a vehicle can carry add up to {total}; the                  model counts a route's load as a whole number of units up to {}, so they                  must add up to no more -- use a larger unit (kilograms for grams, say)",
+                "the demands of the customers a vehicle can carry add up to {total}; the model counts a route's load as a whole number of units up to {}, so they must add up to no more -- use a larger unit (kilograms for grams, say)",
                 i32::MAX
             ),
             fields,
