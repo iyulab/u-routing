@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-20
+
+Depends on u-numflow 0.14 and u-metaheur 0.14. The .NET client is `URouting` 0.19.1.
+
 ### Fixed
 
 - A vehicle given no `capacity` was limited to 1,000,000,000 units while the
