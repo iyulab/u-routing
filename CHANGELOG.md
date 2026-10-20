@@ -8,6 +8,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Fixed
+
+- A vehicle given no `capacity` was limited to 1,000,000,000 units while the
+  request's "no vehicles" default, and every demand, may run to 2,147,483,647: a
+  customer asking for more than a billion units was left unassigned by a vehicle
+  documented as unlimited. A vehicle without a capacity now has the most the model
+  stores.
+- Route loads are added in 32 bits, so demands adding up past 2,147,483,647 could
+  overflow: a panic in a debug build, and in a release build a wrapped, negative
+  load that every capacity check accepts, so a plan could be reported feasible while
+  carrying more than the vehicle holds. Customers whose demands (those a vehicle can
+  carry) add up past that are refused: `parameter_out_of_range`,
+  `parameter: "total_demand"`, `min: 0`, `max: 2147483647`, `got` the sum. Use a
+  larger unit (kilograms for grams).
+
 ## [0.22.0] - 2026-10-18
 
 Depends on u-numflow 0.14 and u-metaheur 0.14. The .NET client is `URouting` 0.19.0.

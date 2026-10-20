@@ -230,7 +230,7 @@
       "additionalProperties": false,
       "properties": {
         "capacity": {
-          "default": 1000000000.0,
+          "default": 2147483647.0,
           "format": "double",
           "type": "number"
         },

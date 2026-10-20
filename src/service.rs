@@ -509,8 +509,11 @@ pub(crate) struct InputVehicle {
     cost_per_distance: f64,
 }
 
+/// No limit: the most the model stores, which is also the most one customer
+/// may ask for -- so a vehicle without a capacity takes any customer, as the
+/// vehicle of a request with no `vehicles` does.
 fn default_capacity() -> f64 {
-    1e9
+    f64::from(i32::MAX)
 }
 
 fn default_cost_per_distance() -> f64 {
@@ -1462,6 +1465,26 @@ fn build_customers(
             id_map.push(id);
             customers.push(c);
         }
+    }
+
+    // The model adds loads in `i32`. Every route's load is part of the sum of
+    // the demands of the customers a solver sees, so that sum fitting is what
+    // keeps every addition in range -- a vehicle without a capacity (the most
+    // the model stores) included. One more than that is refused here, and not
+    // left to wrap in a build without overflow checks.
+    let total: f64 = customers.iter().map(|c| f64::from(c.demand())).sum();
+    let accepted = 0.0..=f64::from(i32::MAX);
+    if !accepted.contains(&total) {
+        let mut fields = json!({ "parameter": "total_demand", "got": total });
+        Bounds::of(accepted).insert_into(&mut fields);
+        return Err(ServiceError::new(
+            Code::ParameterOutOfRange,
+            format!(
+                "the demands of the customers a vehicle can carry add up to {total}; the                  model counts a route's load as a whole number of units up to {}, so they                  must add up to no more -- use a larger unit (kilograms for grams, say)",
+                i32::MAX
+            ),
+            fields,
+        ));
     }
 
     Ok(BuiltCustomers {
@@ -4165,5 +4188,56 @@ mod oracle_tests {
                 );
             }
         }
+    }
+
+    /// A vehicle given no capacity has none: any demand a customer may have
+    /// fits it (up to the 2,147,483,647 units the model counts), as the vehicle
+    /// of a request with no `vehicles` does.
+    #[test]
+    fn a_vehicle_without_a_capacity_takes_any_demand() {
+        let list = [(10.0, 0.0, 1.5e9), (20.0, 5.0, 4.0e8), (5.0, 15.0, 2.0e8)];
+        let fleet: Vec<InputVehicle> = vec![serde_json::from_value(json!({})).expect("a vehicle")];
+        for method in methods() {
+            let out = solve((0.0, 0.0), &input(&list), &fleet, &method.name, &config())
+                .unwrap_or_else(|e| panic!("{}: {e:?}", method.name));
+            assert!(
+                out.unassigned.is_empty(),
+                "{}: left {:?} unserved by a vehicle without a limit",
+                method.name,
+                out.unassigned
+            );
+        }
+    }
+
+    /// Loads are added in 32 bits, so demands that add up past what 32 bits
+    /// hold are refused -- not summed into a wrapped, negative load that every
+    /// capacity check then accepts (or an overflow panic in a debug build).
+    #[test]
+    fn demands_that_add_up_past_the_model_are_refused() {
+        let list = [(10.0, 0.0, 1.5e9), (20.0, 5.0, 1.5e9)];
+        for capacity in [None, Some(2.0e9)] {
+            let fleet: Vec<InputVehicle> = vec![serde_json::from_value(match capacity {
+                Some(c) => json!({ "capacity": c }),
+                None => json!({}),
+            })
+            .expect("a vehicle")];
+            for method in methods() {
+                let err = solve((0.0, 0.0), &input(&list), &fleet, &method.name, &config())
+                    .expect_err(&method.name);
+                assert_eq!(
+                    err.fields["code"], "parameter_out_of_range",
+                    "{}: {err:?}",
+                    method.name
+                );
+                assert_eq!(err.fields["parameter"], "total_demand", "{}", method.name);
+                assert_eq!(err.fields["got"], 3.0e9, "{}", method.name);
+                assert_eq!(err.fields["max"], f64::from(i32::MAX), "{}", method.name);
+            }
+        }
+        // A customer no vehicle carries is not summed: it is unassigned.
+        let fleet = vehicles(1, 1000.0);
+        let list = [(10.0, 0.0, 5.0), (20.0, 5.0, 2.0e9), (5.0, 15.0, 2.0e9)];
+        let out = solve((0.0, 0.0), &input(&list), &fleet, "nn", &config()).expect("solves");
+        assert_eq!(out.unassigned.len(), 2);
     }
 }
