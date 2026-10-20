@@ -30,7 +30,7 @@ ffi = ["dep:serde_json", "dep:libc", "dep:serde_path_to_error"]
 
 [dependencies]
 u-metaheur = { version = "0.14", features = ["serde"] }
-u-numflow = "0.14"
+u-numflow = "0.15"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 # Derives the TypeScript declaration from the same struct serde reads, so the
