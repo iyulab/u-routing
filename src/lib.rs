@@ -14,6 +14,14 @@
 //! - [`alns`] — ALNS with destroy/repair operators
 //! - [`fleet`] — Bringing a plan within a fixed number of vehicles
 
+/// This crate's version, as published (`CARGO_PKG_VERSION`) — for a consumer
+/// that reports what it was built against without reading a lock file.
+///
+/// ```
+/// assert!(!u_routing::VERSION.is_empty());
+/// ```
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod alns;
 pub mod constructive;
 pub mod distance;
