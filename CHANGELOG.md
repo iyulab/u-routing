@@ -15,6 +15,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   reading a lock file -- which names the wrong version once the crate is linked
   from another package.
 
+### Changed
+
+- Depends on u-metaheur 0.15.
+
 ## [0.22.1] - 2026-10-20
 
 Depends on u-numflow 0.14 and u-metaheur 0.14. The .NET client is `URouting` 0.19.1.
