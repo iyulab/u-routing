@@ -20,14 +20,22 @@
 //! nowhere, which on tight time windows is the usual case for the last route
 //! a solution could save: the ejection makes room for it.
 //!
-//! This is the ejection-pool step of Nagata & Bräysy (2009) without its
-//! squeeze (infeasible insertion repaired by local search) and perturbation
-//! phases, and with at most two customers ejected at a time.
+//! After every ejection the routes are perturbed: random inter-route moves --
+//! exchanging two customers, or swapping the tails of two routes (2-opt*) --
+//! each taken only when both routes stay feasible. The ejection always
+//! chooses from the neighbourhood of the routes as they are; the perturbation
+//! moves the search to a different arrangement of the same customers, so the
+//! next insertion can find a place the last one could not.
+//!
+//! This is the ejection-pool step and the perturbation of Nagata & Bräysy
+//! (2009) without its squeeze (infeasible insertion repaired by local
+//! search), and with at most two customers ejected at a time.
 //!
 //! # Complexity
 //!
-//! O(I × R × L³) per route tried, I the iteration budget, R routes and L the
-//! length of a route (pairs ejected × positions × a feasibility check).
+//! O(I × (R × L³ + P × L)) per route tried, I the iteration budget, R routes,
+//! L the length of a route (pairs ejected × positions × a feasibility check)
+//! and P the perturbation moves per ejection.
 //!
 //! # Reference
 //!
@@ -35,23 +43,34 @@
 //! for the vehicle routing problem with time windows", *Operations Research
 //! Letters* 37(5), 333-338.
 
+use rand::{Rng, RngExt};
+
+use u_metaheur::Deadline;
+
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Vehicle};
 
 use super::route_distance;
 
+/// Random moves tried after each ejection (Nagata & Bräysy's I_rand).
+const PERTURBATION_MOVES: usize = 100;
+
 /// Removes routes of `routes` while the ejection pool can place their
 /// customers in the others within `max_iterations` insertions per route, and
 /// removing them lowers the cost (distance plus `vehicle`'s fixed cost per
 /// route). Every route returned keeps capacity, time windows and the route
-/// limits when the routes given do, and serves the same customers.
-pub(crate) fn minimize_routes(
+/// limits when the routes given do, and serves the same customers. `rng`
+/// drives the perturbation; once `deadline` passes, the routes reached so far
+/// are returned.
+pub(crate) fn minimize_routes<R: Rng>(
     mut routes: Vec<Vec<usize>>,
     customers: &[Customer],
     distances: &DistanceMatrix,
     vehicle: &Vehicle,
     max_iterations: usize,
+    rng: &mut R,
+    deadline: &Deadline,
 ) -> Vec<Vec<usize>> {
     let depot = vehicle.depot_id();
     let fixed = vehicle.fixed_cost_in_distance();
@@ -81,7 +100,7 @@ pub(crate) fn minimize_routes(
                 .filter(|&(k, _)| k != r)
                 .map(|(_, route)| route.clone())
                 .collect();
-            if let Some(rest) = pool.empty_into(rest, &routes[r], max_iterations) {
+            if let Some(rest) = pool.empty_into(rest, &routes[r], max_iterations, rng, deadline) {
                 if cost(&rest) < before - 1e-9 {
                     routes = rest;
                     continue 'search;
@@ -210,19 +229,71 @@ impl Pool<'_> {
         None
     }
 
+    /// Up to `moves` random feasible inter-route moves on `routes`: an
+    /// exchange of two customers or a 2-opt* (the tails of two routes
+    /// swapped), each kept only when both routes stay feasible and non-empty.
+    fn perturb<R: Rng>(&self, routes: &mut [Vec<usize>], moves: usize, rng: &mut R) {
+        let n = routes.len();
+        if n < 2 {
+            return;
+        }
+        for _ in 0..moves {
+            let a = rng.random_range(0..n as u64) as usize;
+            let mut b = rng.random_range(0..(n - 1) as u64) as usize;
+            if b >= a {
+                b += 1;
+            }
+            let (la, lb) = (routes[a].len(), routes[b].len());
+            if la == 0 || lb == 0 {
+                continue;
+            }
+            let (ra, rb) = if rng.random_bool(0.5) {
+                let i = rng.random_range(0..la as u64) as usize;
+                let j = rng.random_range(0..lb as u64) as usize;
+                let (mut ra, mut rb) = (routes[a].clone(), routes[b].clone());
+                std::mem::swap(&mut ra[i], &mut rb[j]);
+                (ra, rb)
+            } else {
+                let i = rng.random_range(0..=la as u64) as usize;
+                let j = rng.random_range(0..=lb as u64) as usize;
+                let ra: Vec<usize> = routes[a][..i]
+                    .iter()
+                    .chain(&routes[b][j..])
+                    .copied()
+                    .collect();
+                let rb: Vec<usize> = routes[b][..j]
+                    .iter()
+                    .chain(&routes[a][i..])
+                    .copied()
+                    .collect();
+                if ra.is_empty() || rb.is_empty() {
+                    continue;
+                }
+                (ra, rb)
+            };
+            if self.feasible(&ra) && self.feasible(&rb) {
+                routes[a] = ra;
+                routes[b] = rb;
+            }
+        }
+    }
+
     /// `routes` with every customer of `removed` inserted, or `None` when the
-    /// pool does not empty within `max_iterations` insertions.
-    fn empty_into(
+    /// pool does not empty within `max_iterations` insertions or before
+    /// `deadline`.
+    fn empty_into<R: Rng>(
         &self,
         mut routes: Vec<Vec<usize>>,
         removed: &[usize],
         max_iterations: usize,
+        rng: &mut R,
+        deadline: &Deadline,
     ) -> Option<Vec<Vec<usize>>> {
         let mut failures = vec![1u32; self.customers.len()];
         let mut pool: Vec<usize> = removed.to_vec();
         let mut iterations = 0;
         while let Some(c) = pool.pop() {
-            if iterations == max_iterations {
+            if iterations == max_iterations || deadline.passed() {
                 return None;
             }
             iterations += 1;
@@ -234,6 +305,7 @@ impl Pool<'_> {
             let ejection = self.eject(&routes, c, &failures)?;
             routes[ejection.route] = ejection.into;
             pool.extend(ejection.ejected);
+            self.perturb(&mut routes, PERTURBATION_MOVES, rng);
         }
         Some(routes)
     }
@@ -242,6 +314,14 @@ impl Pool<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rng() -> rand::rngs::SmallRng {
+        u_numflow::random::create_rng(7)
+    }
+
+    fn unlimited() -> Deadline {
+        Deadline::start(None)
+    }
 
     fn served(routes: &[Vec<usize>]) -> Vec<usize> {
         let mut all: Vec<usize> = routes.concat();
@@ -279,7 +359,13 @@ mod tests {
         let p = pool(&customers, &dm, &vehicle);
         assert!(p.cheapest(&[vec![4], vec![2, 3]], 1).is_none());
         let routes = p
-            .empty_into(vec![vec![4], vec![2, 3]], &[1], 100)
+            .empty_into(
+                vec![vec![4], vec![2, 3]],
+                &[1],
+                100,
+                &mut rng(),
+                &unlimited(),
+            )
             .expect("the pool empties");
         assert_eq!(routes.len(), 2);
         assert_eq!(served(&routes), vec![1, 2, 3, 4]);
@@ -299,13 +385,23 @@ mod tests {
         let (customers, dm) = four();
         let vehicle = Vehicle::new(0, 2).with_fixed_cost(100.0);
         let p = pool(&customers, &dm, &vehicle);
-        assert!(p.empty_into(vec![vec![4], vec![2, 3]], &[1], 50).is_none());
+        assert!(p
+            .empty_into(
+                vec![vec![4], vec![2, 3]],
+                &[1],
+                50,
+                &mut rng(),
+                &unlimited()
+            )
+            .is_none());
         let routes = minimize_routes(
             vec![vec![1], vec![2, 3], vec![4]],
             &customers,
             &dm,
             &vehicle,
             50,
+            &mut rng(),
+            &unlimited(),
         );
         assert_eq!(routes.len(), 3);
         assert_eq!(served(&routes), vec![1, 2, 3, 4]);
@@ -321,9 +417,29 @@ mod tests {
             &dm,
             &vehicle,
             100,
+            &mut rng(),
+            &unlimited(),
         );
         assert_eq!(routes.len(), 2);
         assert_eq!(served(&routes), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_passed_deadline_keeps_the_routes_given() {
+        // The plan above loses a route with time to search; out of time, the
+        // routes come back as they were.
+        let (customers, dm) = four();
+        let vehicle = Vehicle::new(0, 3).with_fixed_cost(100.0);
+        let routes = minimize_routes(
+            vec![vec![1], vec![4], vec![2, 3]],
+            &customers,
+            &dm,
+            &vehicle,
+            100,
+            &mut rng(),
+            &Deadline::start(Some(0)),
+        );
+        assert_eq!(routes, vec![vec![1], vec![4], vec![2, 3]]);
     }
 
     #[test]
@@ -333,7 +449,15 @@ mod tests {
         customers.push(Customer::new(2, 5.0, 0.0, 1, 0.0));
         let dm = DistanceMatrix::from_customers(&customers);
         let vehicle = Vehicle::new(0, 10);
-        let routes = minimize_routes(vec![vec![1], vec![2]], &customers, &dm, &vehicle, 100);
+        let routes = minimize_routes(
+            vec![vec![1], vec![2]],
+            &customers,
+            &dm,
+            &vehicle,
+            100,
+            &mut rng(),
+            &unlimited(),
+        );
         assert_eq!(routes.len(), 2);
     }
 }

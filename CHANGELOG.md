@@ -8,6 +8,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Fixed
+
+- `config.time_limit_ms` on `"ga"` with a vehicle `fixed_cost` now covers the route minimisation
+  of the seed solutions: it ran before the limit was looked at, so on 100 Solomon customers a
+  1,000 ms limit ended after 1.1–2.2 s. It now ends within the limit (1.01–1.02 s on the same
+  instances).
+
+### Changed
+
+- The ejection pool that removes routes from `"ga"`'s seed solutions (with a fixed cost)
+  perturbs the routes after each ejection -- random exchanges of two customers and swaps of two
+  routes' tails (2-opt*), each kept only when both routes stay feasible (the perturbation of
+  Nagata & Bräysy 2009). The next insertion then meets a different arrangement of the same
+  customers instead of the one it could not enter.
+
 ## [0.23.0] - 2026-10-28
 
 Depends on u-numflow 0.15 and u-metaheur 0.17. The .NET client is `URouting` 0.20.0.

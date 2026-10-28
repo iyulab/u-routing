@@ -20,6 +20,7 @@
 use rand::{Rng, RngExt};
 use u_metaheur::ga::operators::{invert_mutation, order_crossover, swap_mutation};
 use u_metaheur::ga::GaProblem;
+use u_metaheur::Deadline;
 
 use crate::constructive::{clarke_wright_savings, solomon_i1, sweep};
 use crate::distance::DistanceMatrix;
@@ -158,6 +159,9 @@ impl RoutingGaProblem {
 /// from a seed.
 const SEED_EJECTION_BUDGET: usize = 200;
 
+/// Seed of the random stream the ejection pool perturbs the seeds with.
+const SEED_PERTURBATION_STREAM: u64 = 0x5eed;
+
 impl GaProblem for RoutingGaProblem {
     type Individual = GiantTour;
 
@@ -177,8 +181,9 @@ impl GaProblem for RoutingGaProblem {
     /// The savings and sweep constructions -- and Solomon's I1 insertion when
     /// customers carry time windows -- each educated: the population starts
     /// from good routes as well as from random ones (Prins 2004 seeds with
-    /// constructive heuristics in the same way).
-    fn initial_individuals(&self) -> Vec<GiantTour> {
+    /// constructive heuristics in the same way). The route minimisation of a
+    /// seed stops at `deadline` with the routes it has.
+    fn initial_individuals(&self, deadline: &Deadline) -> Vec<GiantTour> {
         if self.num_customers() == 0 {
             return Vec::new();
         }
@@ -189,6 +194,9 @@ impl GaProblem for RoutingGaProblem {
         if self.time_windows {
             seeds.push(solomon_i1(&self.customers, &self.distances, &self.vehicle));
         }
+        // The ejection pool's perturbation draws from its own stream: the
+        // seeds stay the same constructions whatever the run's seed.
+        let mut rng = u_numflow::random::create_rng(SEED_PERTURBATION_STREAM);
         seeds
             .iter()
             .map(|s| {
@@ -205,6 +213,8 @@ impl GaProblem for RoutingGaProblem {
                         &self.distances,
                         &self.vehicle,
                         SEED_EJECTION_BUDGET,
+                        &mut rng,
+                        deadline,
                     );
                     tour = concatenate(&routes, self.num_customers());
                 }
