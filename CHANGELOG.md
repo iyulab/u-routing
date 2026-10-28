@@ -17,6 +17,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   CVRPLIB X-n204 / X-n303 / X-n401 one run takes 1.7 / 4.7 / 8.6 s instead of 3.9 / 11.8 /
   22.6 s; on Solomon's instances, whose routes are short, the gain is a few percent.
   `exchange_improve` returns the same solutions as before.
+- `"ga"` with a vehicle `fixed_cost` and time windows spends less time removing routes from its
+  seed solutions, with the same answers: the ejection pool checks each insertion position against
+  the latest arrival the rest of the route allows (Savelsbergh 1992) before building the route,
+  instead of building and simulating it for every position. On Solomon's instances a run takes
+  8–30 % less time.
 
 ## [0.24.0] - 2026-10-29
 

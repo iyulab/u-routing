@@ -34,8 +34,14 @@
 //! # Complexity
 //!
 //! O(I × (R × L³ + P × L)) per route tried, I the iteration budget, R routes,
-//! L the length of a route (pairs ejected × positions × a feasibility check)
-//! and P the perturbation moves per ejection.
+//! L the length of a route and P the perturbation moves per ejection: for
+//! each pair ejected, the latest arrival each remaining customer allows
+//! (Savelsbergh 1992) is O(L), and then every insertion position is checked
+//! against it in O(1); only a position that passes builds the route.
+//!
+//! Savelsbergh, M. W. P. (1992). "The vehicle routing problem with time
+//! windows: minimizing route duration", *ORSA Journal on Computing* 4(2),
+//! 146-154.
 //!
 //! # Reference
 //!
@@ -177,17 +183,66 @@ impl Pool<'_> {
         Some(start + customer.service_duration())
     }
 
-    /// Whether `c`, inserted at `pos` of a route left at `departures`, starts
-    /// within its own window -- necessary for the insertion to be feasible,
-    /// and checked without building the route.
-    fn reaches_in_time(&self, route: &[usize], departures: &[f64], pos: usize, c: usize) -> bool {
+    /// The latest arrival at each customer of `route` that still lets it and
+    /// every customer after it start within their windows (Savelsbergh 1992):
+    /// service at a customer must end in time to reach the next by the next's
+    /// latest arrival, and cannot start before the window opens -- when the
+    /// opening is already too late, no arrival works (−∞).
+    fn latest_arrivals(&self, route: &[usize]) -> Vec<f64> {
+        let depot = self.vehicle.depot_id();
+        let mut latest = vec![f64::INFINITY; route.len()];
+        // The depot has no window: the return is bounded by the route limits
+        // only, which the full check applies.
+        let mut next_latest = f64::INFINITY;
+        for i in (0..route.len()).rev() {
+            let c = route[i];
+            let customer = &self.customers[c];
+            let next = route.get(i + 1).copied().unwrap_or(depot);
+            let start_by =
+                next_latest - self.distances.travel_time(c, next) - customer.service_duration();
+            let (ready, due) = customer
+                .time_window()
+                .map_or((f64::NEG_INFINITY, f64::INFINITY), |tw| {
+                    (tw.ready(), tw.due())
+                });
+            latest[i] = if ready > start_by {
+                f64::NEG_INFINITY
+            } else {
+                due.min(start_by)
+            };
+            next_latest = latest[i];
+        }
+        latest
+    }
+
+    /// Whether `c`, inserted at `pos` of a route left at `departures` with
+    /// `latest` arrivals, can keep every window: it starts within its own,
+    /// and the customer after it is still reached by its latest arrival.
+    /// Checked in O(1) without building the route, and a necessary condition
+    /// only -- the slack absorbs rounding, so the full check decides.
+    fn may_fit(
+        &self,
+        route: &[usize],
+        departures: &[f64],
+        latest: &[f64],
+        pos: usize,
+        c: usize,
+    ) -> bool {
         let (left, prev) = if pos == 0 {
             (0.0, self.vehicle.depot_id())
         } else {
             (departures[pos - 1], route[pos - 1])
         };
-        self.served_at(left + self.distances.travel_time(prev, c), c)
-            .is_some()
+        let Some(left_c) = self.served_at(left + self.distances.travel_time(prev, c), c) else {
+            return false;
+        };
+        match route.get(pos) {
+            None => true,
+            Some(&next) => {
+                let bound = latest[pos];
+                left_c + self.distances.travel_time(c, next) <= bound + 1e-9 * bound.abs().max(1.0)
+            }
+        }
     }
 
     fn insertion_cost(&self, route: &[usize], pos: usize, c: usize) -> f64 {
@@ -204,20 +259,20 @@ impl Pool<'_> {
             if self.load(route) + self.customers[c].demand() > self.vehicle.capacity() {
                 continue;
             }
-            let departures = if self.constrained {
+            let (departures, latest) = if self.constrained {
                 match self.departures(route) {
-                    Some(d) => d,
+                    Some(d) => (d, self.latest_arrivals(route)),
                     None => continue,
                 }
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
             for pos in 0..=route.len() {
                 let cost = self.insertion_cost(route, pos, c);
                 if best.is_some_and(|(b, _, _)| cost >= b) {
                     continue;
                 }
-                if self.constrained && !self.reaches_in_time(route, &departures, pos, c) {
+                if self.constrained && !self.may_fit(route, &departures, &latest, pos, c) {
                     continue;
                 }
                 let mut trial = route.clone();
@@ -259,20 +314,20 @@ impl Pool<'_> {
                     if self.load(&kept) + self.customers[c].demand() > self.vehicle.capacity() {
                         continue;
                     }
-                    let departures = if self.constrained {
+                    let (departures, latest) = if self.constrained {
                         match self.departures(&kept) {
-                            Some(d) => d,
+                            Some(d) => (d, self.latest_arrivals(&kept)),
                             None => continue,
                         }
                     } else {
-                        Vec::new()
+                        (Vec::new(), Vec::new())
                     };
                     for pos in 0..=kept.len() {
                         let key = (penalty, self.insertion_cost(&kept, pos, c));
                         if best.as_ref().is_some_and(|b| key >= b.key) {
                             continue;
                         }
-                        if self.constrained && !self.reaches_in_time(&kept, &departures, pos, c) {
+                        if self.constrained && !self.may_fit(&kept, &departures, &latest, pos, c) {
                             continue;
                         }
                         let mut trial = kept.clone();
@@ -380,6 +435,7 @@ impl Pool<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::TimeWindow;
 
     fn rng() -> rand::rngs::SmallRng {
         u_numflow::random::create_rng(7)
@@ -403,6 +459,56 @@ mod tests {
         }
         let dm = DistanceMatrix::from_customers(&customers);
         (customers, dm)
+    }
+
+    proptest::proptest! {
+        /// On a route that keeps its windows, the O(1) check agrees with
+        /// building the route: an insertion it refuses breaks a window, and
+        /// one it allows keeps them all (no route limits, ample capacity).
+        #[test]
+        fn may_fit_agrees_with_the_full_check(
+            points in proptest::collection::vec(
+                (0u8..40, 0u8..40, 0u16..200, 0u16..120, 0u8..10),
+                2..9,
+            ),
+            c_at in (0u8..40, 0u8..40, 0u16..200, 0u16..120, 0u8..10),
+        ) {
+            let mut customers = vec![Customer::depot(20.0, 20.0)];
+            for (i, &(x, y, ready, width, service)) in
+                points.iter().chain(std::iter::once(&c_at)).enumerate()
+            {
+                let ready = f64::from(ready);
+                customers.push(
+                    Customer::new(i + 1, f64::from(x), f64::from(y), 1, f64::from(service))
+                        .with_time_window(
+                            TimeWindow::new(ready, ready + f64::from(width)).expect("valid"),
+                        ),
+                );
+            }
+            let dm = DistanceMatrix::from_customers(&customers);
+            let vehicle = Vehicle::new(0, 1000);
+            let pool = pool(&customers, &dm, &vehicle);
+            let c = customers.len() - 1;
+            // The longest prefix of the points that keeps its windows.
+            let mut route: Vec<usize> = Vec::new();
+            for k in 1..c {
+                route.push(k);
+                if pool.departures(&route).is_none() {
+                    route.pop();
+                }
+            }
+            let departures = pool.departures(&route).expect("route keeps its windows");
+            let latest = pool.latest_arrivals(&route);
+            for pos in 0..=route.len() {
+                let mut trial = route.clone();
+                trial.insert(pos, c);
+                proptest::prop_assert_eq!(
+                    pool.may_fit(&route, &departures, &latest, pos, c),
+                    pool.feasible(&trial),
+                    "pos {} of {:?}", pos, route
+                );
+            }
+        }
     }
 
     fn pool<'a>(customers: &'a [Customer], dm: &'a DistanceMatrix, v: &'a Vehicle) -> Pool<'a> {
