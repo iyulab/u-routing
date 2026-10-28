@@ -36,7 +36,7 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   -2.6 % with no fixed cost (a route goes only when the distance falls), and to 7.7 routes at
   +0.1 % with `fixed_cost` 1000 (R1 12.9 and RC1 12.8 routes against best known 11.9 and 11.5).
   Answers are as feasible as before; a run takes up to a fifth longer.
-- Depends on u-metaheur 0.16.
+- Depends on u-metaheur 0.17.
 
 ## [0.22.1] - 2026-10-20
 

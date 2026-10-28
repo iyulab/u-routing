@@ -29,7 +29,7 @@ wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:serde_json", "dep:js-
 ffi = ["dep:serde_json", "dep:libc", "dep:serde_path_to_error"]
 
 [dependencies]
-u-metaheur = { version = "0.16", features = ["serde"] }
+u-metaheur = { version = "0.17", features = ["serde"] }
 u-numflow = "0.15"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
