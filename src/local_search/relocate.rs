@@ -8,7 +8,9 @@
 //!
 //! # Complexity
 //!
-//! O(n² × R) per pass where n = customers per route, R = number of routes.
+//! O(R² × L²) for the first scan and O(R × L²) per move taken, R routes of
+//! up to L customers: a move changes two routes, and only the pairs of routes
+//! with one of them in it are searched again.
 //!
 //! # Reference
 //!
@@ -74,95 +76,161 @@ pub fn relocate_improve(
 
     // Extract route customer sequences
     let mut routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
+    let mut search = Relocations::new(&routes, customers, distances, vehicle);
 
-    let mut improved = true;
-    while improved {
-        improved = false;
-        let best_move = find_best_relocate(&routes, customers, distances, vehicle);
-
-        if let Some(mv) = best_move {
-            if mv.delta < -1e-10 {
-                let customer_id = routes[mv.from_route][mv.from_pos];
-                routes[mv.from_route].remove(mv.from_pos);
-                routes[mv.to_route].insert(mv.to_pos, customer_id);
-                improved = true;
-            }
-        }
+    // Best improvement: the best move of every pair of routes is kept, and a
+    // move changes two routes, so only the pairs with one of them in it are
+    // searched again. The move taken is the one a full scan would take.
+    while let Some(mv) = search.best() {
+        let customer_id = routes[mv.from_route][mv.from_pos];
+        routes[mv.from_route].remove(mv.from_pos);
+        routes[mv.to_route].insert(mv.to_pos, customer_id);
+        search.moved(&routes, mv.from_route, mv.to_route);
     }
 
     // Rebuild solution
     rebuild_solution(&routes, solution, distances, customers, vehicle)
 }
 
-/// Finds the best single relocate move across all route pairs.
-fn find_best_relocate(
-    routes: &[Vec<usize>],
-    customers: &[Customer],
-    distances: &DistanceMatrix,
-    vehicle: &Vehicle,
-) -> Option<RelocateMove> {
-    let depot = vehicle.depot_id();
-    let limits = &RouteLimits::of(vehicle);
-    let constrained = route_checks_needed(customers, limits);
-    // A route's fixed cost, in distance units: saved when a move empties it,
-    // paid when one fills an empty route.
-    let fixed = vehicle.fixed_cost_in_distance();
-    let mut best: Option<RelocateMove> = None;
+/// The best improving relocation between every ordered pair of routes.
+struct Relocations<'a> {
+    customers: &'a [Customer],
+    distances: &'a DistanceMatrix,
+    vehicle: &'a Vehicle,
+    limits: RouteLimits,
+    constrained: bool,
+    loads: Vec<i32>,
+    /// `pairs[from * n + to]`: the best move from route `from` into `to`.
+    pairs: Vec<Option<RelocateMove>>,
+}
 
-    for from_r in 0..routes.len() {
+impl<'a> Relocations<'a> {
+    fn new(
+        routes: &[Vec<usize>],
+        customers: &'a [Customer],
+        distances: &'a DistanceMatrix,
+        vehicle: &'a Vehicle,
+    ) -> Self {
+        let limits = RouteLimits::of(vehicle);
+        let n = routes.len();
+        let mut search = Self {
+            customers,
+            distances,
+            vehicle,
+            constrained: route_checks_needed(customers, &limits),
+            limits,
+            loads: routes.iter().map(|r| Self::load(customers, r)).collect(),
+            pairs: vec![None; n * n],
+        };
+        for from in 0..n {
+            for to in 0..n {
+                search.pairs[from * n + to] = search.best_between(routes, from, to);
+            }
+        }
+        search
+    }
+
+    fn load(customers: &[Customer], route: &[usize]) -> i32 {
+        route.iter().map(|&c| customers[c].demand()).sum()
+    }
+
+    /// The improving move a full scan in the order (from route, from
+    /// position, to route, to position) would take first.
+    fn best(&self) -> Option<RelocateMove> {
+        self.pairs
+            .iter()
+            .flatten()
+            .min_by(|a, b| {
+                a.delta.total_cmp(&b.delta).then(
+                    (a.from_route, a.from_pos, a.to_route, a.to_pos).cmp(&(
+                        b.from_route,
+                        b.from_pos,
+                        b.to_route,
+                        b.to_pos,
+                    )),
+                )
+            })
+            .cloned()
+    }
+
+    /// Searches again every pair with route `a` or `b` in it.
+    fn moved(&mut self, routes: &[Vec<usize>], a: usize, b: usize) {
+        let n = routes.len();
+        for r in [a, b] {
+            self.loads[r] = Self::load(self.customers, &routes[r]);
+        }
+        for other in 0..n {
+            for r in [a, b] {
+                self.pairs[r * n + other] = self.best_between(routes, r, other);
+                self.pairs[other * n + r] = self.best_between(routes, other, r);
+            }
+        }
+    }
+
+    /// The best improving, feasible move of a customer of `from_r` into
+    /// `to_r` (the first in position order among equals).
+    fn best_between(
+        &self,
+        routes: &[Vec<usize>],
+        from_r: usize,
+        to_r: usize,
+    ) -> Option<RelocateMove> {
+        if from_r == to_r {
+            return None;
+        }
+        let depot = self.vehicle.depot_id();
+        let distances = self.distances;
+        // A route's fixed cost, in distance units: saved when a move empties
+        // it, paid when one fills an empty route.
+        let fixed = self.vehicle.fixed_cost_in_distance();
+        let to_route = &routes[to_r];
+        // Improving moves, cheapest first: the first feasible one is the best
+        // (the first in position order among equals).
+        let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
         for from_pos in 0..routes[from_r].len() {
             let cid = routes[from_r][from_pos];
+            if self.loads[to_r] + self.customers[cid].demand() > self.vehicle.capacity() {
+                continue;
+            }
             let removal_delta = removal_cost(&routes[from_r], from_pos, depot, distances)
                 - if routes[from_r].len() == 1 {
                     fixed
                 } else {
                     0.0
                 };
-
-            for (to_r, to_route) in routes.iter().enumerate() {
-                if to_r == from_r {
-                    continue;
-                }
-
-                // Check capacity
-                let to_load: i32 = to_route.iter().map(|&c| customers[c].demand()).sum();
-                if to_load + customers[cid].demand() > vehicle.capacity() {
-                    continue;
-                }
-
-                // Try all insertion positions
-                for to_pos in 0..=to_route.len() {
-                    let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
-                        + if to_route.is_empty() { fixed } else { 0.0 };
-                    let delta = removal_delta + insertion_delta;
-
-                    if delta < -1e-10 {
-                        let is_better = best.as_ref().is_none_or(|b| delta < b.delta);
-                        // Only the receiving route's timing changes; the
-                        // giving route only gets shorter.
-                        if is_better && constrained {
-                            let mut candidate = to_route.clone();
-                            candidate.insert(to_pos, cid);
-                            if !route_feasible(&candidate, depot, distances, customers, limits) {
-                                continue;
-                            }
-                        }
-                        if is_better {
-                            best = Some(RelocateMove {
-                                from_route: from_r,
-                                from_pos,
-                                to_route: to_r,
-                                to_pos,
-                                delta,
-                            });
-                        }
-                    }
+            for to_pos in 0..=to_route.len() {
+                let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
+                    + if to_route.is_empty() { fixed } else { 0.0 };
+                let delta = removal_delta + insertion_delta;
+                if delta < -1e-10 {
+                    candidates.push((delta, from_pos, to_pos));
                 }
             }
         }
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut best: Option<RelocateMove> = None;
+        for (delta, from_pos, to_pos) in candidates {
+            let cid = routes[from_r][from_pos];
+            // Only the receiving route's timing changes; the giving route
+            // only gets shorter.
+            if self.constrained {
+                let mut candidate = to_route.clone();
+                candidate.insert(to_pos, cid);
+                if !route_feasible(&candidate, depot, distances, self.customers, &self.limits) {
+                    continue;
+                }
+            }
+            best = Some(RelocateMove {
+                from_route: from_r,
+                from_pos,
+                to_route: to_r,
+                to_pos,
+                delta,
+            });
+            break;
+        }
+        best
     }
-
-    best
 }
 
 /// Cost of removing customer at `pos` from route.

@@ -308,10 +308,6 @@ impl GaProblem for RoutingGaProblem {
     }
 }
 
-// RoutingGaProblem contains only owned data, safe to share across threads
-unsafe impl Send for RoutingGaProblem {}
-unsafe impl Sync for RoutingGaProblem {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

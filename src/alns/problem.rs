@@ -123,10 +123,6 @@ impl AlnsProblem for RoutingAlnsProblem {
     }
 }
 
-// RoutingAlnsProblem contains only owned data
-unsafe impl Send for RoutingAlnsProblem {}
-unsafe impl Sync for RoutingAlnsProblem {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

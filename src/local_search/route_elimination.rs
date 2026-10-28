@@ -68,7 +68,10 @@ pub(crate) fn eliminate_routes(
             let mut added = 0.0;
             let mut placed_all = true;
             for c in moving {
-                let mut best: Option<(f64, usize, usize)> = None;
+                // Positions cheapest first, so the first feasible one is the
+                // cheapest (the first in route order among equals), and the
+                // search stops where no cheaper position could still pay.
+                let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
                 for (k, route) in rest.iter().enumerate() {
                     if loads[k] + customers[c].demand() > vehicle.capacity() {
                         continue;
@@ -78,18 +81,24 @@ pub(crate) fn eliminate_routes(
                         let next = route.get(pos).copied().unwrap_or(depot);
                         let cost = distances.get(prev, c) + distances.get(c, next)
                             - distances.get(prev, next);
-                        if best.is_some_and(|(b, _, _)| cost >= b) {
+                        candidates.push((cost, k, pos));
+                    }
+                }
+                candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut best: Option<(f64, usize, usize)> = None;
+                for (cost, k, pos) in candidates {
+                    if added + cost >= saved {
+                        break;
+                    }
+                    if constrained {
+                        let mut trial = rest[k].clone();
+                        trial.insert(pos, c);
+                        if !route_feasible(&trial, depot, distances, customers, &limits) {
                             continue;
                         }
-                        if constrained {
-                            let mut trial = route.clone();
-                            trial.insert(pos, c);
-                            if !route_feasible(&trial, depot, distances, customers, &limits) {
-                                continue;
-                            }
-                        }
-                        best = Some((cost, k, pos));
                     }
+                    best = Some((cost, k, pos));
+                    break;
                 }
                 match best {
                     Some((cost, k, pos)) => {

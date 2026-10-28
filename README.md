@@ -143,7 +143,8 @@ known solution, by Solomon's classes; every answer checked feasible:
 does. A negative gap comes with more routes than the best known solution —
 the methods minimise distance, the benchmark ranks routes first. `ga` was at
 least as good as `savings` (unassigned, then routes, then distance) on all 168
-runs; it took 3.6–5.7 s per instance on average, `alns` 1.3 s (0.7–2.4 s).
+runs; it took 1.7–3.1 s per instance on average by class (seed 1), `alns` 1.3 s
+(0.7–2.4 s).
 
 A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 `{"fixed_cost":1000}` as the harness's `settings`. `alns` over all 56 instances
@@ -153,7 +154,7 @@ A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 route against every insertion, so the fixed cost decides how many routes it
 keeps. `ga` (seeds 1–3) goes from 8.9 routes at −2.9 % to 7.45 routes at
 +1.1 %: R1 13.8 → 12.4 (11.9), R2 5.5 → 3.0, RC1 13.4 → 11.9 (11.5), RC2 6.3
-→ 3.25 (3.25), every answer feasible, 5.5 s per instance on average. Its local
+→ 3.25 (3.25), every answer feasible, 3.7 s per instance on average. Its local
 search removes a whole route when the other routes take its customers for less
 than the route costs, distance plus fixed cost — without a fixed cost, only
 when the distance falls. With a fixed cost its seed solutions also go through

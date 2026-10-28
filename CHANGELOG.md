@@ -17,6 +17,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- `"ga"` runs in about half the time with the same answers: the relocation step of its local
+  search keeps the best move between every two routes and searches again only the pairs a move
+  changed (a move changes two routes), and both it and the route elimination check feasibility
+  cheapest candidate first, stopping where no cheaper one could still pay. On Solomon's 56
+  instances (seed 1) the mean time per instance falls from 4.6 s to 2.6 s, and from 5.4 s to
+  3.7 s with a vehicle fixed cost; every route returned is the same.
 - The ejection pool that removes routes from `"ga"`'s seed solutions (with a fixed cost)
   perturbs the routes after each ejection -- random exchanges of two customers and swaps of two
   routes' tails (2-opt*), each kept only when both routes stay feasible (the perturbation of
