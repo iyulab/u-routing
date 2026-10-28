@@ -11,8 +11,9 @@
 //! cargo run --release --example cvrplib -- <dir> [generations] [seeds]
 //! ```
 //!
-//! `generations` defaults to 200 (the service's default), `seeds` to `1`
-//! (a comma list runs each). Every answer is checked: each customer served
+//! The search is the service's: population 50, `generations` (default 200)
+//! with its stagnation limit, offspring kept apart in cost; `seeds` defaults
+//! to `1` (a comma list runs each). Every answer is checked: each customer served
 //! once, no route over capacity.
 
 use std::time::Instant;
@@ -89,7 +90,7 @@ fn main() {
         .collect();
     names.sort();
 
-    println!("instance,seed,routes,cost,best,gap_pct,ms");
+    println!("instance,seed,routes,cost,best,gap_pct,generations,ms");
     let mut gaps = Vec::new();
     for path in &names {
         let name = path.file_stem().and_then(|n| n.to_str()).expect("a name");
@@ -119,6 +120,7 @@ fn main() {
                 .with_population_size(50)
                 .with_max_generations(generations)
                 .with_parallel(false)
+                .with_distinct_fitness(true)
                 .with_seed(seed);
             let found = GaRunner::run(&problem, &config).expect("valid settings");
             let routes: Vec<Vec<usize>> =
@@ -148,10 +150,11 @@ fn main() {
                 gaps.push(g);
             }
             println!(
-                "{name},{seed},{},{cost},{},{},{ms}",
+                "{name},{seed},{},{cost},{},{},{},{ms}",
                 routes.len(),
                 best.map_or(String::new(), |b| b.to_string()),
                 gap.map_or(String::new(), |g| format!("{g:.2}")),
+                found.generations,
             );
         }
     }

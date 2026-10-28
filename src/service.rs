@@ -1837,9 +1837,12 @@ fn solve_ga(
         })?,
         None => 200,
     };
+    // Offspring are kept apart in cost (Prins 2004's spacing rule): clones
+    // otherwise fill the population and end the search at its stagnation limit.
     let mut ga_config = GaConfig::default()
         .with_population_size(population_size)
         .with_max_generations(max_generations)
+        .with_distinct_fitness(true)
         .with_parallel(false);
 
     // Rates, refused rather than clamped: a mutation rate in (0, 1]; an elite

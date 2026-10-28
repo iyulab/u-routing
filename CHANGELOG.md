@@ -20,6 +20,14 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- `ga` keeps each generation's offspring apart in cost (u-metaheur's `distinct_fitness`, Prins
+  2004's spacing rule): an offspring that costs the same as one already in the generation is
+  mutated -- and so educated -- once more. Clones of the best used to fill the population and
+  end the search at its stagnation limit early, so more generations bought nothing (CVRPLIB
+  X-n101 … X-n143: 2.09 % at 200 generations, 1.95 % at 1000). Now the mean gap there drops
+  from 2.2 % to 1.7 % (seeds 1-3), and on Solomon's 56 instances from 9.0 routes at -2.6 % to
+  8.9 routes at -2.9 %. **A run takes about 3.5 times as long** at the default 200 generations
+  (Solomon 1.2 s to 4.5 s on average) -- set `config.time_limit_ms` to cap it.
 - `ga`'s local search removes whole routes: a route goes when the other routes take its
   customers (the largest demand first, each at its cheapest feasible position) for less than
   the route costs -- its distance plus the vehicle's fixed cost. Relocating one customer at a
