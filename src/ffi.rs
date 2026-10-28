@@ -46,6 +46,10 @@ struct VrpInput {
     vehicles: Vec<InputVehicle>,
     depot_x: f64,
     depot_y: f64,
+    /// Distance (and travel time) between every two points, the depot first,
+    /// then the customers in the order given. Absent: Euclidean.
+    #[serde(default)]
+    distances: Option<Vec<Vec<f64>>>,
     #[serde(default = "service::default_method")]
     method: String,
     #[serde(default)]
@@ -154,6 +158,7 @@ pub unsafe extern "C" fn urouting_solve_vrp(
             (input.depot_x, input.depot_y),
             &input.customers,
             &input.vehicles,
+            input.distances.as_deref(),
             &input.method,
             &config,
         ) {
@@ -195,6 +200,7 @@ pub unsafe extern "C" fn urouting_check_solution(
             (problem.depot_x, problem.depot_y),
             &problem.customers,
             &problem.vehicles,
+            problem.distances.as_deref(),
             &problem.method,
             &config,
             &input.solution,

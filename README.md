@@ -271,6 +271,24 @@ all of which keep time windows (see below).
 }
 ```
 
+**Distances: `distances`.** By default every length is the Euclidean distance between
+the points' `x`/`y`. A road network, rounded benchmark distances or any other metric
+goes in `distances`: one row per point, the depot first and then the customers in
+the order given (`distances[0][1]` is the depot to `customers[0]`), each row as long.
+It replaces the coordinates for every length -- routes, `max_distance`, the travel
+time behind time windows and `max_duration`, the totals -- and `check_vrp_solution`
+reads it the same way. It must be symmetric: the methods' moves take a route to be
+as long in both directions (`asymmetric_distances` otherwise). The coordinates
+still order the customers for `"ga"`'s sweep seed only.
+
+```javascript
+solve_vrp({
+  customers: [{ id: 1, x: 0, y: 0, demand: 1 }, { id: 2, x: 0, y: 0, demand: 1 }],
+  depot: { x: 0, y: 0 },
+  distances: [[0, 4, 6], [4, 0, 3], [6, 3, 0]],
+});
+```
+
 **GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
 **ALNS config** uses `max_iterations`. Both accept `seed` and `time_limit_ms`; every method reads
 `max_vehicles`. A setting the request's `method` does not read is refused
@@ -420,11 +438,12 @@ try {
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity with a fractional part. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
 | `mixed_fleet` | `method`, `parameter` (`"capacity"`, `"fixed_cost"`, `"cost_per_distance"`, `"max_distance"` or `"max_duration"`), `values`, `capacities`, `index` | Vehicles that differ in capacity, cost or limits with `"savings"`, `"ga"` or `"alns"`, which plan every route with one vehicle; `index` is the first vehicle that differs from the first |
-| `parameter_out_of_range` | `parameter`, `index` (vehicles and customers), `id` (customers, for a demand), `method` (method settings), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` / `cost_per_distance` of 0 or less (no route could keep it), a negative `fixed_cost` (`min: 0`), a whole demand or capacity outside 0 to 2147483647 (`min: 0`, `max: 2147483647`), customers whose demands (those a vehicle can carry) add up past 2147483647 (`parameter: "total_demand"`, `min: 0`, `max: 2147483647` — a route's load is counted in 32 bits), a GA `mutation_rate` outside (0, 1] or `elite_ratio` outside (0, 1), a `config.max_vehicles` below 1, a negative `config.seed`, a customer `id` below 0 (with `index`), or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` below 1, … — with `method`; a negative count is refused here like a too-small one). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
+| `parameter_out_of_range` | `parameter`, `index` (vehicles and customers), `id` (customers, for a demand), `method` (method settings), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` / `cost_per_distance` of 0 or less (no route could keep it), a negative `fixed_cost` (`min: 0`), a whole demand or capacity outside 0 to 2147483647 (`min: 0`, `max: 2147483647`), customers whose demands (those a vehicle can carry) add up past 2147483647 (`parameter: "total_demand"`, `min: 0`, `max: 2147483647` — a route's load is counted in 32 bits), a GA `mutation_rate` outside (0, 1] or `elite_ratio` outside (0, 1), a `config.max_vehicles` below 1, a negative `config.seed`, a customer `id` below 0 (with `index`), a negative entry of `distances` (`parameter: "distances[i]"`, `index: j`, `min: 0`), or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` below 1, … — with `method`; a negative count is refused here like a too-small one). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
 | `invalid_option` | `parameter`, `method` | A setting the method does not read (`config.max_iterations` with `"ga"`), or settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter`, `index` (inside an array) | An argument of the wrong shape or type (a missing or unknown key), a count, seed or `id` that is not a whole number (`config.population_size: 2.5` — `parameter` is the field), or a JSON string. The C ABI names the field the same way (`customers[1].id`); text that is not JSON at all is `request` |
-| `dimension_mismatch` | `parameter`, `expected`, `got` | `check_vrp_solution` only: a `solution.route_vehicles` without one entry per route |
+| `dimension_mismatch` | `parameter`, `expected`, `got` | `distances` without one row per point (`parameter: "distances"`) or a row of another length (`"distances[2]"`), or (`check_vrp_solution`) a `solution.route_vehicles` without one entry per route |
+| `asymmetric_distances` | `parameter`, `index`, `got`, `expected` | `distances[i][j]` (`parameter: "distances[i]"`, `index: j`, `got`) differs from `distances[j][i]` (`expected`) |
 | `internal` | — | A fault in this package rather than in the request — please report it |
 
 The C library and the .NET package report the same `code` and fields: the C

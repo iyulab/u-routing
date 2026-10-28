@@ -179,6 +179,16 @@ public sealed class RoutingClient : IDisposable
             ["vehicles"] = vehicles,
             ["method"] = JsonSerializer.SerializeToNode(request.Method, RoutingJson.Default.RoutingMethod),
         };
+        if (request.Distances is { } distances)
+        {
+            var rows = new JsonArray();
+            for (var i = 0; i < distances.Count; i++)
+            {
+                var at = $"distances[{i}]";
+                rows.Add((JsonNode)new JsonArray(distances[i].Select((d, j) => Num(at, d, j)).ToArray()));
+            }
+            body["distances"] = rows;
+        }
         if (request.Config is { } c2)
         {
             var config = new JsonObject();

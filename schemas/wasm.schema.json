@@ -701,6 +701,21 @@
         "depot": {
           "$ref": "#/$defs/InputDepot"
         },
+        "distances": {
+          "default": null,
+          "description": "Distance (and travel time) between every two points, the depot first\nand then the customers in the order given -- `distances[0][1]` is the\ndepot to `customers[0]`. Square and symmetric, entries finite and not\nnegative. Absent or `null`: the Euclidean distance between `x`/`y`.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "method": {
           "default": "nn",
           "enum": [

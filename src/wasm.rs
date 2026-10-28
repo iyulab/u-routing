@@ -209,6 +209,13 @@ struct VrpInput {
     #[tsify(optional)]
     vehicles: Vec<InputVehicle>,
     depot: InputDepot,
+    /// Distance (and travel time) between every two points, the depot first
+    /// and then the customers in the order given -- `distances[0][1]` is the
+    /// depot to `customers[0]`. Square and symmetric, entries finite and not
+    /// negative. Absent or `null`: the Euclidean distance between `x`/`y`.
+    #[serde(default)]
+    #[tsify(optional, type = "number[][] | null")]
+    distances: Option<Vec<Vec<f64>>>,
     #[serde(default = "service::default_method")]
     #[tsify(optional)]
     #[tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")]
@@ -249,6 +256,7 @@ pub fn check_vrp_solution(
         (input.depot.x, input.depot.y),
         &input.customers,
         &input.vehicles,
+        input.distances.as_deref(),
         &input.method,
         &config,
         &solution,
@@ -323,6 +331,7 @@ pub fn solve_vrp(
         (input.depot.x, input.depot.y),
         &input.customers,
         &input.vehicles,
+        input.distances.as_deref(),
         &input.method,
         &config,
     )
@@ -443,6 +452,7 @@ mod path_tests {
             (input.depot.x, input.depot.y),
             &input.customers,
             &input.vehicles,
+            input.distances.as_deref(),
             &input.method,
             &input.config.unwrap_or_default(),
         )

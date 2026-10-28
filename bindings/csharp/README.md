@@ -53,6 +53,11 @@ if (solution.Unassigned.Count > 0)
 customers no route serves within capacities, time windows, each vehicle's `MaxDistance` /
 `MaxDuration` and `VrpConfig.MaxVehicles`.
 
+Lengths are the Euclidean distance between the coordinates unless `VrpRequest.Distances` gives
+them: one row per point, the depot first and then `Customers` in order — a road network's
+distances, for instance. It replaces the coordinates for every length and travel time, and must
+be symmetric (`asymmetric_distances` otherwise).
+
 Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
 `MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` by all — and a setting the
 method does not read is refused (`invalid_option`). `GetMethods()` returns that table,

@@ -10,6 +10,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
+- `distances` on a request (WebAssembly `solve_vrp` / `check_vrp_solution`, the C entry points,
+  .NET `VrpRequest.Distances`): the distance and travel time between every two points, the
+  depot first and then the customers in the order given, in place of the Euclidean distance
+  between the coordinates -- road distances, rounded benchmark distances. Every method and the
+  checker read it. A matrix without one row per point or with a row of another length is
+  refused as `dimension_mismatch` (`parameter` `"distances"` or `"distances[i]"`), a negative
+  entry as `parameter_out_of_range`, a non-finite one as `value_not_finite`, and an asymmetric
+  one as the new `asymmetric_distances` (`parameter`, `index`, `got`, `expected`): the methods'
+  moves take a route to be as long both ways.
+
 - `examples/cvrplib.rs`: measures `ga` on CVRPLIB instances (`.vrp` with rounded Euclidean
   distances, best known costs from `.sol`), checking every answer serves each customer once
   within capacity.

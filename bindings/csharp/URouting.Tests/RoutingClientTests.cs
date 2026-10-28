@@ -184,6 +184,32 @@ public class RoutingClientTests
     }
 
     [Fact]
+    public void Given_distances_replace_the_coordinates()
+    {
+        // Two customers on the depot: by coordinates every length is 0, by the matrix the
+        // round trip is 4 + 3 + 6.
+        var request = new VrpRequest(0, 0, [new(1, 0, 0, Demand: 1), new(2, 0, 0, Demand: 1)])
+        {
+            Distances = [[0, 4, 6], [4, 0, 3], [6, 3, 0]],
+        };
+        var solution = _client.SolveVrp(request);
+        Assert.Equal(13.0, solution.TotalDistance, 9);
+        Assert.True(_client.CheckSolution(request, VrpPlan.Of(solution)).Feasible);
+
+        var oneWay = Assert.Throws<RoutingException>(() =>
+            _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, 3], [6, 5, 0]] }));
+        Assert.Equal("asymmetric_distances", oneWay.ErrorCode);
+        Assert.Equal("distances[1]", oneWay.Parameter);
+        Assert.Equal(2, oneWay.Index);
+
+        var nan = Assert.Throws<RoutingException>(() =>
+            _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, double.NaN], [6, 3, 0]] }));
+        Assert.Equal("value_not_finite", nan.ErrorCode);
+        Assert.Equal("distances[1]", nan.Parameter);
+        Assert.Equal(2, nan.Index);
+    }
+
+    [Fact]
     public void The_engine_still_names_what_it_refuses()
     {
         var e = Assert.Throws<RoutingException>(() =>

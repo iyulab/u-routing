@@ -33,6 +33,9 @@ public class RequestContractTests
             ? [Vehicle(), Vehicle()]
             : [Vehicle()],
         Method = method,
+        // One method plans with an explicit matrix (the coordinates' distances, rounded up), so
+        // the key is written; the others read the coordinates.
+        Distances = method == RoutingMethod.Savings ? Matrix([(0, 0), (10, 5), (-4, 8), (6, -9), (-7, -6)]) : null,
         // Every setting the method reads -- one it does not read is refused, so the
         // settings are spread over the methods and every one is written by some run.
         Config = method switch
@@ -50,6 +53,9 @@ public class RequestContractTests
             _ => new VrpConfig { MaxVehicles = 3 },
         },
     };
+
+    private static double[][] Matrix((double X, double Y)[] points) =>
+        [.. points.Select(a => points.Select(b => Math.Ceiling(Math.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y))))).ToArray())];
 
     public static TheoryData<RoutingMethod> Methods() => [.. Enum.GetValues<RoutingMethod>()];
 
