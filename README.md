@@ -152,9 +152,9 @@ A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 7.2): R2 4.4 → 3.3 routes (best known 2.7), RC2 5.5 → 3.9 (3.2), C2 3.2 → 3.0
 (3.0), every answer feasible. Its search removes whole routes and prices a new
 route against every insertion, so the fixed cost decides how many routes it
-keeps. `ga` (seeds 1–3) goes from 8.9 routes at −2.9 % to 7.45 routes at
-+1.1 %: R1 13.8 → 12.4 (11.9), R2 5.5 → 3.0, RC1 13.4 → 11.9 (11.5), RC2 6.3
-→ 3.25 (3.25), every answer feasible, 3.7 s per instance on average. Its local
+keeps. `ga` (seeds 1–3) goes from 8.9 routes at −2.9 % to 7.36 routes at
++1.9 %: R1 13.8 → 12.25 (11.9), R2 5.5 → 2.9 (2.7), RC1 13.4 → 11.6 (11.5),
+RC2 6.3 → 3.25 (3.25), every answer feasible, 4.1 s per instance on average. Its local
 search removes a whole route when the other routes take its customers for less
 than the route costs, distance plus fixed cost — without a fixed cost, only
 when the distance falls. With a fixed cost its seed solutions also go through

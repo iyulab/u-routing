@@ -157,7 +157,7 @@ impl RoutingGaProblem {
 
 /// Insertions the ejection pool may spend on each route it tries to remove
 /// from a seed.
-const SEED_EJECTION_BUDGET: usize = 200;
+const SEED_EJECTION_BUDGET: usize = 500;
 
 /// Seed of the random stream the ejection pool perturbs the seeds with.
 const SEED_PERTURBATION_STREAM: u64 = 0x5eed;

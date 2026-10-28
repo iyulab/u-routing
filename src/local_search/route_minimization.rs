@@ -146,6 +146,50 @@ impl Pool<'_> {
                 ))
     }
 
+    /// The time each customer of `route` is left (after its service), in
+    /// order, or `None` when one of them is reached after its window closes.
+    ///
+    /// The clock only moves forward -- service starts at the arrival or the
+    /// window's opening, whichever is later -- so inserting a customer can
+    /// only delay the ones after it: a route already late stays late
+    /// wherever a customer goes in.
+    fn departures(&self, route: &[usize]) -> Option<Vec<f64>> {
+        let mut time = 0.0;
+        let mut prev = self.vehicle.depot_id();
+        let mut out = Vec::with_capacity(route.len());
+        for &cid in route {
+            time = self.served_at(time + self.distances.travel_time(prev, cid), cid)?;
+            out.push(time);
+            prev = cid;
+        }
+        Some(out)
+    }
+
+    /// When the service of `c` ends after arriving at `arrival`, or `None`
+    /// when its window has closed.
+    fn served_at(&self, arrival: f64, c: usize) -> Option<f64> {
+        let customer = &self.customers[c];
+        let start = match customer.time_window() {
+            Some(tw) if tw.is_violated(arrival) => return None,
+            Some(tw) => arrival + tw.waiting_time(arrival),
+            None => arrival,
+        };
+        Some(start + customer.service_duration())
+    }
+
+    /// Whether `c`, inserted at `pos` of a route left at `departures`, starts
+    /// within its own window -- necessary for the insertion to be feasible,
+    /// and checked without building the route.
+    fn reaches_in_time(&self, route: &[usize], departures: &[f64], pos: usize, c: usize) -> bool {
+        let (left, prev) = if pos == 0 {
+            (0.0, self.vehicle.depot_id())
+        } else {
+            (departures[pos - 1], route[pos - 1])
+        };
+        self.served_at(left + self.distances.travel_time(prev, c), c)
+            .is_some()
+    }
+
     fn insertion_cost(&self, route: &[usize], pos: usize, c: usize) -> f64 {
         let depot = self.vehicle.depot_id();
         let prev = if pos == 0 { depot } else { route[pos - 1] };
@@ -160,9 +204,20 @@ impl Pool<'_> {
             if self.load(route) + self.customers[c].demand() > self.vehicle.capacity() {
                 continue;
             }
+            let departures = if self.constrained {
+                match self.departures(route) {
+                    Some(d) => d,
+                    None => continue,
+                }
+            } else {
+                Vec::new()
+            };
             for pos in 0..=route.len() {
                 let cost = self.insertion_cost(route, pos, c);
                 if best.is_some_and(|(b, _, _)| cost >= b) {
+                    continue;
+                }
+                if self.constrained && !self.reaches_in_time(route, &departures, pos, c) {
                     continue;
                 }
                 let mut trial = route.clone();
@@ -204,9 +259,20 @@ impl Pool<'_> {
                     if self.load(&kept) + self.customers[c].demand() > self.vehicle.capacity() {
                         continue;
                     }
+                    let departures = if self.constrained {
+                        match self.departures(&kept) {
+                            Some(d) => d,
+                            None => continue,
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     for pos in 0..=kept.len() {
                         let key = (penalty, self.insertion_cost(&kept, pos, c));
                         if best.as_ref().is_some_and(|b| key >= b.key) {
+                            continue;
+                        }
+                        if self.constrained && !self.reaches_in_time(&kept, &departures, pos, c) {
                             continue;
                         }
                         let mut trial = kept.clone();

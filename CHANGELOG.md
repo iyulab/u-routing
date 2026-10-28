@@ -23,6 +23,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   cheapest candidate first, stopping where no cheaper one could still pay. On Solomon's 56
   instances (seed 1) the mean time per instance falls from 4.6 s to 2.6 s, and from 5.4 s to
   3.7 s with a vehicle fixed cost; every route returned is the same.
+- The ejection pool that removes routes from `"ga"`'s seed solutions (with a fixed cost) skips,
+  before building the route, every insertion whose customer would be reached after its window
+  closes (and every route already late), with the same answers in about two thirds of the
+  time; its budget rises from 200 to 500 insertions per route tried. On Solomon's 56 instances
+  with a fixed cost of 1000 (seeds 1–3) `"ga"` returns 7.36 routes per instance (7.45 before,
+  best known 7.23) in 4.1 s (5.5 s).
 - The ejection pool that removes routes from `"ga"`'s seed solutions (with a fixed cost)
   perturbs the routes after each ejection -- random exchanges of two customers and swaps of two
   routes' tails (2-opt*), each kept only when both routes stay feasible (the perturbation of
