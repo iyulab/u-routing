@@ -24,7 +24,7 @@ use u_metaheur::ga::GaProblem;
 use crate::constructive::{clarke_wright_savings, solomon_i1, sweep};
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteLimits;
-use crate::local_search::two_opt_improve;
+use crate::local_search::{minimize_routes, two_opt_improve};
 use crate::models::{Customer, Solution, Vehicle};
 
 use super::chromosome::GiantTour;
@@ -154,6 +154,10 @@ impl RoutingGaProblem {
     }
 }
 
+/// Insertions the ejection pool may spend on each route it tries to remove
+/// from a seed.
+const SEED_EJECTION_BUDGET: usize = 200;
+
 impl GaProblem for RoutingGaProblem {
     type Individual = GiantTour;
 
@@ -188,8 +192,24 @@ impl GaProblem for RoutingGaProblem {
         seeds
             .iter()
             .map(|s| {
+                let mut tour = self.tour_of(s);
+                if self.route_cost > 0.0 {
+                    // With routes priced, the seeds start from as few routes as
+                    // the ejection pool reaches: the GA's own moves only remove
+                    // a route whose customers fit elsewhere directly.
+                    let routes: Vec<Vec<usize>> =
+                        s.routes().iter().map(|r| r.customer_ids()).collect();
+                    let routes = minimize_routes(
+                        routes,
+                        &self.customers,
+                        &self.distances,
+                        &self.vehicle,
+                        SEED_EJECTION_BUDGET,
+                    );
+                    tour = concatenate(&routes, self.num_customers());
+                }
                 GiantTour::new(educate(
-                    &self.tour_of(s),
+                    &tour,
                     &self.customers,
                     &self.distances,
                     &self.vehicle,

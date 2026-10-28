@@ -36,6 +36,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   -2.6 % with no fixed cost (a route goes only when the distance falls), and to 7.7 routes at
   +0.1 % with `fixed_cost` 1000 (R1 12.9 and RC1 12.8 routes against best known 11.9 and 11.5).
   Answers are as feasible as before; a run takes up to a fifth longer.
+- With a vehicle `fixed_cost`, `ga` starts from fewer routes: its seed solutions (savings, sweep,
+  Solomon's I1) first go through an ejection pool (Nagata & Bräysy 2009) -- a route is removed
+  and its customers inserted into the others, a customer that fits nowhere going in by ejecting
+  one or two customers of a route, the ones that have failed least often, which then look for
+  a place in turn; the route is gone if the pool empties within 200 insertions and the plan
+  costs less. The local search's own route removal gave up at the first customer that fit
+  nowhere directly. On Solomon's 56 instances with `fixed_cost` 1000 (seeds 1-3) the mean goes
+  from 7.7 routes at -0.5 % distance to 7.5 routes at +0.7 % (RC1 12.8 to 12.1 against best
+  known 11.5, RC2 3.6 to 3.25 -- the best known count), every answer feasible, a run about a
+  quarter longer. Without a fixed cost nothing changes.
 - Depends on u-metaheur 0.17.
 
 ## [0.22.1] - 2026-10-20

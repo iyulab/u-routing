@@ -10,6 +10,7 @@ mod exchange;
 mod or_opt;
 mod relocate;
 mod route_elimination;
+mod route_minimization;
 mod three_opt;
 mod two_opt;
 
@@ -17,5 +18,6 @@ pub use exchange::exchange_improve;
 pub use or_opt::{or_opt_improve, route_distance};
 pub use relocate::relocate_improve;
 pub(crate) use route_elimination::eliminate_routes;
+pub(crate) use route_minimization::minimize_routes;
 pub use three_opt::three_opt_improve;
 pub use two_opt::two_opt_improve;
