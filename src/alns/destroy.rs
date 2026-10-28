@@ -194,9 +194,10 @@ impl ShawRemoval {
         }
     }
 
-    /// Relatedness: inverse distance + demand similarity.
+    /// Relatedness: inverse distance (the mean of the two ways, so it does not
+    /// depend on which customer is asked about) + demand similarity.
     fn relatedness(&self, a: usize, b: usize) -> f64 {
-        let dist = self.distances.get(a, b);
+        let dist = (self.distances.get(a, b) + self.distances.get(b, a)) / 2.0;
         let demand_diff = (self.customers[a].demand() - self.customers[b].demand()).abs() as f64;
         // Higher relatedness = more similar
         1.0 / (dist + 0.1) + 1.0 / (demand_diff + 1.0)

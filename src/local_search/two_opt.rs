@@ -124,7 +124,20 @@ fn two_opt_delta(
     let old_cost = distances.get(prev_i, route[i]) + distances.get(route[j], next_j);
     let new_cost = distances.get(prev_i, route[j]) + distances.get(route[i], next_j);
 
-    new_cost - old_cost
+    new_cost - old_cost + reversal_delta(&route[i..=j], distances)
+}
+
+/// What reversing `segment` changes in the length of its own edges: nothing
+/// when the way back is as long as the way there, else the sum over its edges
+/// of the backward length minus the forward one.
+pub(crate) fn reversal_delta(segment: &[usize], distances: &DistanceMatrix) -> f64 {
+    if distances.symmetric() {
+        return 0.0;
+    }
+    segment
+        .windows(2)
+        .map(|e| distances.get(e[1], e[0]) - distances.get(e[0], e[1]))
+        .sum()
 }
 
 /// Computes the total distance of a route: `depot → route[0] → ... → route[n-1] → depot`.
@@ -220,5 +233,60 @@ mod tests {
         let initial_dist = route_distance(&initial, 0, &dm);
         let (_, improved_dist) = two_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
+    }
+
+    /// A matrix whose way back differs from the way there, from a fixed
+    /// pseudo-random sequence.
+    fn one_way_matrix(size: usize, seed: u64) -> DistanceMatrix {
+        let mut state = seed;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            1.0 + (state >> 33) as f64 % 100.0
+        };
+        let mut data = vec![0.0; size * size];
+        for a in 0..size {
+            for b in 0..size {
+                if a != b {
+                    data[a * size + b] = next();
+                }
+            }
+        }
+        DistanceMatrix::from_data(size, data).expect("size × size")
+    }
+
+    fn forward_length(route: &[usize], dm: &DistanceMatrix) -> f64 {
+        let mut prev = 0;
+        let mut total = 0.0;
+        for &c in route {
+            total += dm.get(prev, c);
+            prev = c;
+        }
+        total + dm.get(prev, 0)
+    }
+
+    #[test]
+    fn with_an_asymmetric_matrix_no_reversal_lengthens_the_route() {
+        let customers: Vec<Customer> = (0..9)
+            .map(|i| {
+                if i == 0 {
+                    Customer::depot(0.0, 0.0)
+                } else {
+                    Customer::new(i, 0.0, 0.0, 1, 0.0)
+                }
+            })
+            .collect();
+        for seed in 0..200 {
+            let dm = one_way_matrix(9, seed);
+            assert!(!dm.symmetric());
+            let route: Vec<usize> = (1..9).collect();
+            let (improved, dist) = two_opt_improve(&route, 0, &dm, &customers, &RouteLimits::NONE);
+            assert!((dist - forward_length(&improved, &dm)).abs() < 1e-9);
+            assert!(
+                dist <= forward_length(&route, &dm) + 1e-9,
+                "seed {seed}: {dist}"
+            );
+        }
     }
 }

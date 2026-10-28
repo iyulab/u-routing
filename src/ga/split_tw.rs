@@ -171,13 +171,35 @@ pub fn split_tw(
 
     SplitResult {
         routes,
-        total_distance: cost[n],
+        total_distance: dist[n],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn total_distance_leaves_the_route_cost_out() {
+        // As `split` reports it: the routes' length, with the route cost only
+        // deciding where to cut. It used to include the cost, which the GA's
+        // fitness then added again.
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 3.0, 0.0, 1, 0.0),
+            Customer::new(2, -3.0, 0.0, 1, 0.0),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        let tw = split_tw(&[1, 2], &customers, &dm, 1, &RouteLimits::NONE, 100.0);
+        let plain = super::super::split::split(&[1, 2], &customers, &dm, 1, 100.0);
+        assert_eq!(tw.routes.len(), 2);
+        assert!(
+            (tw.total_distance - 12.0).abs() < 1e-9,
+            "{}",
+            tw.total_distance
+        );
+        assert!((tw.total_distance - plain.total_distance).abs() < 1e-9);
+    }
     use crate::models::TimeWindow;
 
     #[test]

@@ -59,12 +59,11 @@ pub(crate) enum Code {
     InvalidTimeWindow,
     NotWholeUnits,
     MixedFleet,
-    AsymmetricDistances,
     Internal,
 }
 
 impl Code {
-    pub(crate) const ALL: [Code; 12] = [
+    pub(crate) const ALL: [Code; 11] = [
         Code::MalformedInput,
         Code::ValueNotFinite,
         Code::UnknownOption,
@@ -75,7 +74,6 @@ impl Code {
         Code::InvalidTimeWindow,
         Code::NotWholeUnits,
         Code::MixedFleet,
-        Code::AsymmetricDistances,
         Code::Internal,
     ];
 
@@ -91,7 +89,6 @@ impl Code {
             Code::InvalidTimeWindow => "invalid_time_window",
             Code::NotWholeUnits => "not_whole_units",
             Code::MixedFleet => "mixed_fleet",
-            Code::AsymmetricDistances => "asymmetric_distances",
             Code::Internal => "internal",
         }
     }
@@ -118,7 +115,6 @@ impl Code {
             Code::InvalidTimeWindow => &["id", "index", "ready", "due"],
             Code::NotWholeUnits => &["parameter", "index", "id", "value"],
             Code::MixedFleet => &["method", "parameter", "values", "capacities", "index"],
-            Code::AsymmetricDistances => &["parameter", "index", "got", "expected"],
             Code::Internal => &[],
         }
     }
@@ -1515,11 +1511,10 @@ fn build_customers(
 /// coordinates. Travel time equals distance either way.
 ///
 /// `distances` is refused unless it is square with one row per point (the
-/// depot and every customer, `inputs` of them), its entries are finite and not
-/// negative, and it is symmetric: the methods' moves (2-opt's reversal, the
-/// split's route lengths read both ways) take a route's length to be the same
-/// in both directions, so an asymmetric matrix would be planned wrongly
-/// rather than refused.
+/// depot and every customer, `inputs` of them) and its entries are finite and
+/// not negative. It need not be symmetric: a one-way street is a shorter way
+/// there than back, and the moves that reverse part of a route price the
+/// reversed edges when the matrix is not.
 fn distance_matrix(
     customers: &[Customer],
     positions: &[usize],
@@ -1568,21 +1563,6 @@ fn distance_matrix(
                     Code::ParameterOutOfRange,
                     format!("{parameter}[{j}] is {d} -- a distance is at least 0"),
                     fields,
-                ));
-            }
-        }
-    }
-    for (i, row) in rows.iter().enumerate() {
-        for (j, &forward) in row.iter().enumerate().skip(i + 1) {
-            let backward = rows[j][i];
-            if (forward - backward).abs() > 1e-9 * forward.abs().max(backward.abs()).max(1.0) {
-                return Err(ServiceError::new(
-                    Code::AsymmetricDistances,
-                    format!(
-                        "distances[{i}][{j}] is {forward} but distances[{j}][{i}] is {backward} -- the methods take a route to be as long in both directions"
-                    ),
-                    json!({ "parameter": format!("distances[{i}]"), "index": j,
-                            "got": forward, "expected": backward }),
                 ));
             }
         }
@@ -2342,6 +2322,52 @@ mod tests {
     }
 
     #[test]
+    fn a_one_way_matrix_is_planned_in_the_direction_it_is_short() {
+        // Around the ring depot -> 1 -> 2 -> 3 -> depot every leg is 1; every
+        // leg the other way is 10. The best plan is that ring, length 4.
+        let customers: Vec<InputCustomer> = (1..=3)
+            .map(|id| customer(serde_json::json!({ "id": id, "x": 0.0, "y": 0.0, "demand": 1 })))
+            .collect();
+        let mut distances = vec![vec![10.0; 4]; 4];
+        for (a, row) in distances.iter_mut().enumerate() {
+            row[a] = 0.0;
+            row[(a + 1) % 4] = 1.0;
+        }
+        for method in ["nn", "savings", "ga", "alns"] {
+            let out = solve(
+                (0.0, 0.0),
+                &customers,
+                &[],
+                Some(&distances),
+                method,
+                &quick(method),
+            )
+            .expect(method);
+            let walked: f64 = out
+                .routes
+                .iter()
+                .map(|r| {
+                    let mut prev = 0;
+                    let mut d = 0.0;
+                    for &id in r {
+                        d += distances[prev][id];
+                        prev = id;
+                    }
+                    d + distances[prev][0]
+                })
+                .sum();
+            assert!((out.total_distance - walked).abs() < 1e-9, "{method}");
+            if method != "nn" {
+                assert!(
+                    (out.total_distance - 4.0).abs() < 1e-9,
+                    "{method}: {:?}",
+                    out.routes
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_customer_left_out_keeps_the_others_on_their_rows() {
         // Customer 2 asks for more than the vehicle carries and is reported
         // unassigned; 1 and 3 must still read rows 1 and 3, not 1 and 2.
@@ -2412,15 +2438,6 @@ mod tests {
             (e.fields["parameter"].clone(), e.fields["index"].clone()),
             ("distances[0]".into(), 2.into())
         );
-
-        let mut one_way = distances.clone();
-        one_way[2][3] = 4.0;
-        let e = refuse(one_way);
-        assert_eq!(e.fields["code"], "asymmetric_distances");
-        assert_eq!(e.fields["parameter"], "distances[2]");
-        assert_eq!(e.fields["index"], 3);
-        assert_eq!(e.fields["got"], 4.0);
-        assert_eq!(e.fields["expected"], 9.0);
     }
 
     #[test]

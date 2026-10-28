@@ -20,6 +20,7 @@
 //! *Bell System Technical Journal* 44(10), 2245-2269.
 
 use super::or_opt::route_distance;
+use super::two_opt::reversal_delta;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
@@ -135,6 +136,9 @@ fn try_three_opt_move(
     let seg_b = &route[i + 1..=j];
     let seg_c = &route[j + 1..=k];
     let seg_d = &route[k + 1..];
+    // What reversing B or C changes inside it (0 for a symmetric matrix).
+    let rev_b = reversal_delta(seg_b, distances);
+    let rev_c = reversal_delta(seg_c, distances);
 
     // Every improving pattern, best first; the first one the gate accepts is
     // taken, so a window-violating reconnection yields to the next best.
@@ -143,7 +147,8 @@ fn try_three_opt_move(
     // Pattern 1: A - B - C' - D (reverse C only, = 2-opt on (j, k))
     let cost1 = distances.get(a_end, b_start)
         + distances.get(b_end, c_end)
-        + distances.get(c_start, d_start);
+        + distances.get(c_start, d_start)
+        + rev_c;
     let delta1 = cost1 - old_cost;
     if delta1 < -1e-10 {
         improving.push((delta1, 1));
@@ -152,7 +157,8 @@ fn try_three_opt_move(
     // Pattern 2: A - B' - C - D (reverse B only, = 2-opt on (i, j))
     let cost2 = distances.get(a_end, b_end)
         + distances.get(b_start, c_start)
-        + distances.get(c_end, d_start);
+        + distances.get(c_end, d_start)
+        + rev_b;
     let delta2 = cost2 - old_cost;
     if delta2 < -1e-10 {
         improving.push((delta2, 2));
@@ -161,7 +167,9 @@ fn try_three_opt_move(
     // Pattern 3: A - B' - C' - D (reverse both B and C)
     let cost3 = distances.get(a_end, b_end)
         + distances.get(b_start, c_end)
-        + distances.get(c_start, d_start);
+        + distances.get(c_start, d_start)
+        + rev_b
+        + rev_c;
     let delta3 = cost3 - old_cost;
     if delta3 < -1e-10 {
         improving.push((delta3, 3));
@@ -179,7 +187,8 @@ fn try_three_opt_move(
     // Pattern 5: A - C - B' - D (swap, reverse B)
     let cost5 = distances.get(a_end, c_start)
         + distances.get(c_end, b_end)
-        + distances.get(b_start, d_start);
+        + distances.get(b_start, d_start)
+        + rev_b;
     let delta5 = cost5 - old_cost;
     if delta5 < -1e-10 {
         improving.push((delta5, 5));
@@ -188,7 +197,8 @@ fn try_three_opt_move(
     // Pattern 6: A - C' - B - D (swap, reverse C)
     let cost6 = distances.get(a_end, c_end)
         + distances.get(c_start, b_start)
-        + distances.get(b_end, d_start);
+        + distances.get(b_end, d_start)
+        + rev_c;
     let delta6 = cost6 - old_cost;
     if delta6 < -1e-10 {
         improving.push((delta6, 6));
@@ -197,7 +207,9 @@ fn try_three_opt_move(
     // Pattern 7: A - C' - B' - D (swap, reverse both)
     let cost7 = distances.get(a_end, c_end)
         + distances.get(c_start, b_end)
-        + distances.get(b_start, d_start);
+        + distances.get(b_start, d_start)
+        + rev_b
+        + rev_c;
     let delta7 = cost7 - old_cost;
     if delta7 < -1e-10 {
         improving.push((delta7, 7));
@@ -381,5 +393,60 @@ mod tests {
         let (_, improved_dist) =
             three_opt_improve(&initial, 0, &dm, &customers, &RouteLimits::NONE);
         assert!(improved_dist <= initial_dist + 1e-10);
+    }
+
+    /// A matrix whose way back differs from the way there, from a fixed
+    /// pseudo-random sequence.
+    fn one_way_matrix(size: usize, seed: u64) -> DistanceMatrix {
+        let mut state = seed;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            1.0 + (state >> 33) as f64 % 100.0
+        };
+        let mut data = vec![0.0; size * size];
+        for a in 0..size {
+            for b in 0..size {
+                if a != b {
+                    data[a * size + b] = next();
+                }
+            }
+        }
+        DistanceMatrix::from_data(size, data).expect("size × size")
+    }
+
+    fn forward_length(route: &[usize], dm: &DistanceMatrix) -> f64 {
+        let mut prev = 0;
+        let mut total = 0.0;
+        for &c in route {
+            total += dm.get(prev, c);
+            prev = c;
+        }
+        total + dm.get(prev, 0)
+    }
+
+    #[test]
+    fn with_an_asymmetric_matrix_no_reconnection_lengthens_the_route() {
+        let customers: Vec<Customer> = (0..9)
+            .map(|i| {
+                if i == 0 {
+                    Customer::depot(0.0, 0.0)
+                } else {
+                    Customer::new(i, 0.0, 0.0, 1, 0.0)
+                }
+            })
+            .collect();
+        for seed in 0..200 {
+            let dm = one_way_matrix(9, seed);
+            let route: Vec<usize> = (1..9).collect();
+            let (improved, dist) =
+                three_opt_improve(&route, 0, &dm, &customers, &RouteLimits::NONE);
+            assert!((dist - forward_length(&improved, &dm)).abs() < 1e-9);
+            assert!(
+                dist <= forward_length(&route, &dm) + 1e-9,
+                "seed {seed}: {dist}"
+            );
+        }
     }
 }

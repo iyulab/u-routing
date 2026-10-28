@@ -81,11 +81,20 @@ pub fn clarke_wright_savings(
 
     // Compute savings. Merging two routes also saves one vehicle's fixed
     // cost (in distance units), as in the fleet-cost extension of the method.
+    // With an asymmetric matrix the saving of the edge i -> j is
+    // d(i, 0) + d(0, j) - d(i, j), different from that of j -> i, so every
+    // ordered pair is a candidate and a merge only appends a route to one that
+    // ends where the edge starts -- reversing a route would change its length
+    // (the asymmetric variant of the method).
     let fixed = vehicle.fixed_cost_in_distance();
-    let mut savings = Vec::with_capacity(num_customers * (num_customers - 1) / 2);
+    let directed = !distances.symmetric();
+    let mut savings = Vec::with_capacity(num_customers * (num_customers - 1));
     for i in 1..n {
-        for j in (i + 1)..n {
-            let s = distances.get(depot, i) + distances.get(depot, j) - distances.get(i, j) + fixed;
+        for j in 1..n {
+            if j == i || (!directed && j < i) {
+                continue;
+            }
+            let s = distances.get(i, depot) + distances.get(depot, j) - distances.get(i, j) + fixed;
             if s > 0.0 {
                 savings.push(Saving { i, j, value: s });
             }
@@ -148,6 +157,8 @@ pub fn clarke_wright_savings(
 
         let (merge_from, merge_into, reverse_from, reverse_into) = if i_at_end && j_at_start {
             (rj, ri, false, false)
+        } else if directed {
+            continue;
         } else if j_at_end && i_at_start {
             (ri, rj, false, false)
         } else if i_at_end && j_at_end {
@@ -315,5 +326,21 @@ mod tests {
         assert_eq!(sol.num_routes(), 1);
         // 0→1→2→0 = 3 + 1 + 4 = 8, vs separate = 6 + 8 = 14
         assert!((sol.total_distance() - 8.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn with_an_asymmetric_matrix_the_merge_keeps_the_cheap_direction() {
+        // 0 -> 1 -> 2 -> 0 costs 3; any other order costs 10 a leg.
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 0.0, 0.0, 1, 0.0),
+            Customer::new(2, 0.0, 0.0, 1, 0.0),
+        ];
+        let dm = DistanceMatrix::from_data(3, vec![0.0, 1.0, 10.0, 10.0, 0.0, 1.0, 1.0, 10.0, 0.0])
+            .expect("3 × 3");
+        let solution = clarke_wright_savings(&customers, &dm, &Vehicle::new(0, 10));
+        assert_eq!(solution.routes().len(), 1);
+        assert_eq!(solution.routes()[0].customer_ids(), vec![1, 2]);
+        assert!((solution.total_distance() - 3.0).abs() < 1e-9);
     }
 }

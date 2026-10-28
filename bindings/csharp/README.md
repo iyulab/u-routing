@@ -55,8 +55,8 @@ customers no route serves within capacities, time windows, each vehicle's `MaxDi
 
 Lengths are the Euclidean distance between the coordinates unless `VrpRequest.Distances` gives
 them: one row per point, the depot first and then `Customers` in order — a road network's
-distances, for instance. It replaces the coordinates for every length and travel time, and must
-be symmetric (`asymmetric_distances` otherwise).
+distances, for instance. It replaces the coordinates for every length and travel time, and may differ
+by direction (a one-way street).
 
 Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
 `MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` by all — and a setting the

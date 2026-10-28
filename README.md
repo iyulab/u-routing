@@ -277,9 +277,10 @@ goes in `distances`: one row per point, the depot first and then the customers i
 the order given (`distances[0][1]` is the depot to `customers[0]`), each row as long.
 It replaces the coordinates for every length -- routes, `max_distance`, the travel
 time behind time windows and `max_duration`, the totals -- and `check_vrp_solution`
-reads it the same way. It must be symmetric: the methods' moves take a route to be
-as long in both directions (`asymmetric_distances` otherwise). The coordinates
-still order the customers for `"ga"`'s sweep seed only.
+reads it the same way. It need not be symmetric -- a one-way street makes the way
+there shorter than the way back, and the moves that reverse part of a route price
+the reversed edges. The coordinates still order the customers for `"ga"`'s sweep
+seed only.
 
 ```javascript
 solve_vrp({
@@ -443,7 +444,6 @@ try {
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter`, `index` (inside an array) | An argument of the wrong shape or type (a missing or unknown key), a count, seed or `id` that is not a whole number (`config.population_size: 2.5` — `parameter` is the field), or a JSON string. The C ABI names the field the same way (`customers[1].id`); text that is not JSON at all is `request` |
 | `dimension_mismatch` | `parameter`, `expected`, `got` | `distances` without one row per point (`parameter: "distances"`) or a row of another length (`"distances[2]"`), or (`check_vrp_solution`) a `solution.route_vehicles` without one entry per route |
-| `asymmetric_distances` | `parameter`, `index`, `got`, `expected` | `distances[i][j]` (`parameter: "distances[i]"`, `index: j`, `got`) differs from `distances[j][i]` (`expected`) |
 | `internal` | — | A fault in this package rather than in the request — please report it |
 
 The C library and the .NET package report the same `code` and fields: the C

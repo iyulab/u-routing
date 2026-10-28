@@ -1,5 +1,7 @@
 //! Dense distance matrix.
 
+use std::sync::OnceLock;
+
 use crate::models::Customer;
 
 /// A dense n×n distance matrix stored in row-major order.
@@ -26,6 +28,9 @@ use crate::models::Customer;
 pub struct DistanceMatrix {
     data: Vec<f64>,
     size: usize,
+    /// Whether every `get(a, b)` equals `get(b, a)`, worked out on first use
+    /// and forgotten by `set`.
+    symmetric: OnceLock<bool>,
 }
 
 impl DistanceMatrix {
@@ -34,6 +39,7 @@ impl DistanceMatrix {
         Self {
             data: vec![0.0; size * size],
             size,
+            symmetric: OnceLock::new(),
         }
     }
 
@@ -58,7 +64,11 @@ impl DistanceMatrix {
         if data.len() != size * size {
             return None;
         }
-        Some(Self { data, size })
+        Some(Self {
+            data,
+            size,
+            symmetric: OnceLock::new(),
+        })
     }
 
     /// Returns the distance from location `from` to location `to`.
@@ -78,6 +88,7 @@ impl DistanceMatrix {
     pub fn set(&mut self, from: usize, to: usize, distance: f64) {
         if from < self.size && to < self.size {
             self.data[from * self.size + to] = distance;
+            self.symmetric = OnceLock::new();
         }
     }
 
@@ -96,6 +107,13 @@ impl DistanceMatrix {
             }
         }
         true
+    }
+
+    /// Whether the way back is always as long as the way there: `get(a, b) ==
+    /// get(b, a)` exactly, for every pair. The moves that reverse part of a
+    /// route can skip re-pricing the reversed part when it is.
+    pub(crate) fn symmetric(&self) -> bool {
+        *self.symmetric.get_or_init(|| self.is_symmetric(0.0))
     }
 
     /// Returns the nearest neighbor of `from` among the given candidates.

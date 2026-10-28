@@ -196,11 +196,9 @@ public class RoutingClientTests
         Assert.Equal(13.0, solution.TotalDistance, 9);
         Assert.True(_client.CheckSolution(request, VrpPlan.Of(solution)).Feasible);
 
-        var oneWay = Assert.Throws<RoutingException>(() =>
-            _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, 3], [6, 5, 0]] }));
-        Assert.Equal("asymmetric_distances", oneWay.ErrorCode);
-        Assert.Equal("distances[1]", oneWay.Parameter);
-        Assert.Equal(2, oneWay.Index);
+        // One way round is 4 + 3 + 6, the other 6 + 5 + 4: the plan takes the short one.
+        var oneWay = _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, 3], [6, 5, 0]], Method = RoutingMethod.Savings });
+        Assert.Equal(13.0, oneWay.TotalDistance, 9);
 
         var nan = Assert.Throws<RoutingException>(() =>
             _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, double.NaN], [6, 3, 0]] }));

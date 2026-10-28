@@ -133,10 +133,9 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
     /// <summary>
     /// The distance (and travel time) between every two points, or <c>null</c> for the Euclidean
     /// distance between the coordinates: one row per point, the depot first and then
-    /// <see cref="Customers"/> in order, each row as long. It must be symmetric — the engine
-    /// refuses it otherwise (<c>asymmetric_distances</c>), as it does a row count or length that
-    /// does not match (<c>dimension_mismatch</c>) and a negative entry
-    /// (<c>parameter_out_of_range</c>).
+    /// <see cref="Customers"/> in order, each row as long; the way back may differ from the way
+    /// there. The engine refuses a row count or length that does not match
+    /// (<c>dimension_mismatch</c>) and a negative entry (<c>parameter_out_of_range</c>).
     /// </summary>
     public IReadOnlyList<IReadOnlyList<double>>? Distances { get; init; }
 

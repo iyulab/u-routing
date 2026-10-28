@@ -16,9 +16,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   between the coordinates -- road distances, rounded benchmark distances. Every method and the
   checker read it. A matrix without one row per point or with a row of another length is
   refused as `dimension_mismatch` (`parameter` `"distances"` or `"distances[i]"`), a negative
-  entry as `parameter_out_of_range`, a non-finite one as `value_not_finite`, and an asymmetric
-  one as the new `asymmetric_distances` (`parameter`, `index`, `got`, `expected`): the methods'
-  moves take a route to be as long both ways.
+  entry as `parameter_out_of_range`, a non-finite one as `value_not_finite`. The matrix may be
+  asymmetric (see Fixed).
 
 - `examples/cvrplib.rs`: measures `ga` on CVRPLIB instances (`.vrp` with rounded Euclidean
   distances, best known costs from `.sol`), checking every answer serves each customer once
@@ -57,6 +56,17 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   known 11.5, RC2 3.6 to 3.25 -- the best known count), every answer feasible, a run about a
   quarter longer. Without a fixed cost nothing changes.
 - Depends on u-metaheur 0.17.
+
+### Fixed
+
+- An asymmetric `DistanceMatrix` (`from_data`, `set`) is planned in the direction it is short:
+  2-opt and 3-opt price the edges of the segment they reverse (2-opt used to count only the two
+  edges at its ends, so on a matrix whose way back differs it could take moves that lengthen the
+  route and never stop), and Clarke-Wright savings rates every ordered pair `d(i,0) + d(0,j) -
+  d(i,j)` and merges only end to start, without reversing a route. A symmetric matrix plans as
+  before.
+- `split_tw`'s `total_distance` is the routes' distance, as `split`'s is; it included the route
+  cost, which the GA's fitness then added again for a tour with unserved customers.
 
 ## [0.22.1] - 2026-10-20
 
