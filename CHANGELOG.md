@@ -8,6 +8,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- `"ga"` with the same answers in less time on longer routes: the tail exchange (2-opt*) of its
+  local search summed both new routes' loads for every pair of cuts, which made the scan of two
+  routes cubic in their length; the loads now come from running sums. The relocation step no
+  longer collects and sorts every improving move when no time window or route limit applies. On
+  CVRPLIB X-n204 / X-n303 / X-n401 one run takes 1.7 / 4.7 / 8.6 s instead of 3.9 / 11.8 /
+  22.6 s; on Solomon's instances, whose routes are short, the gain is a few percent.
+  `exchange_improve` returns the same solutions as before.
+
 ## [0.24.0] - 2026-10-29
 
 Depends on u-metaheur 0.18 and u-numflow 0.16. The .NET client is `URouting` 0.21.0.

@@ -122,6 +122,13 @@ fn find_best_exchange(
     let constrained = route_checks_needed(customers, limits);
     let mut best: Option<(usize, usize, f64)> = None;
 
+    // The load of a head is a prefix sum, and of a tail the route's load less
+    // it: each candidate's two loads cost O(1) instead of a pass over both
+    // routes, which made the scan cubic in the route length.
+    let head1 = head_loads(route1, customers);
+    let head2 = head_loads(route2, customers);
+    let (load1, load2) = (head1[n1], head2[n2]);
+
     // cut1 ranges from 1..n1 (split after position cut1-1)
     // cut2 ranges from 1..n2
     for cut1 in 1..=n1 {
@@ -131,16 +138,8 @@ fn find_best_exchange(
             // R2' = route2[..cut2] + route1[cut1..]
 
             // Check capacity
-            let new_load1: i32 = route1[..cut1]
-                .iter()
-                .chain(route2[cut2..].iter())
-                .map(|&c| customers[c].demand())
-                .sum();
-            let new_load2: i32 = route2[..cut2]
-                .iter()
-                .chain(route1[cut1..].iter())
-                .map(|&c| customers[c].demand())
-                .sum();
+            let new_load1 = head1[cut1] + (load2 - head2[cut2]);
+            let new_load2 = head2[cut2] + (load1 - head1[cut1]);
 
             if new_load1 > vehicle.capacity() || new_load2 > vehicle.capacity() {
                 continue;
@@ -198,6 +197,18 @@ fn find_best_exchange(
     }
 
     best
+}
+
+/// `loads[k]`: the demand of the route's first `k` customers.
+fn head_loads(route: &[usize], customers: &[Customer]) -> Vec<i32> {
+    let mut loads = Vec::with_capacity(route.len() + 1);
+    let mut load = 0;
+    loads.push(load);
+    for &c in route {
+        load += customers[c].demand();
+        loads.push(load);
+    }
+    loads
 }
 
 /// Rebuilds a Solution from customer ID sequences.

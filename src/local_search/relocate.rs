@@ -187,6 +187,7 @@ impl<'a> Relocations<'a> {
         // Improving moves, cheapest first: the first feasible one is the best
         // (the first in position order among equals).
         let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
+        let mut cheapest: Option<(f64, usize, usize)> = None;
         for from_pos in 0..routes[from_r].len() {
             let cid = routes[from_r][from_pos];
             if self.loads[to_r] + self.customers[cid].demand() > self.vehicle.capacity() {
@@ -203,10 +204,18 @@ impl<'a> Relocations<'a> {
                     + if to_route.is_empty() { fixed } else { 0.0 };
                 let delta = removal_delta + insertion_delta;
                 if delta < -1e-10 {
-                    candidates.push((delta, from_pos, to_pos));
+                    if self.constrained {
+                        candidates.push((delta, from_pos, to_pos));
+                    } else if cheapest.is_none_or(|(d, _, _)| delta < d) {
+                        // Every move is feasible: the cheapest, the first in
+                        // position order among equals, without collecting
+                        // and sorting them all.
+                        cheapest = Some((delta, from_pos, to_pos));
+                    }
                 }
             }
         }
+        candidates.extend(cheapest);
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut best: Option<RelocateMove> = None;
         for (delta, from_pos, to_pos) in candidates {
