@@ -5,32 +5,32 @@
 //!
 //! The instances are not in this repository. Put the `.vrp` files, and the
 //! `.sol` files holding the best known solutions (a last line `Cost <n>`),
-//! into one directory:
+//! into one directory (the `X-*.vrp` / `X-*.sol` pairs of a CVRPLIB X download):
 //!
 //! ```text
-//! cargo run --release --example cvrplib -- <dir> [generations] [seeds]
+//! cargo run --release --features ffi --example cvrplib -- <dir> [generations] [seeds]
 //! ```
 //!
-//! The search is the service's: population 50, `generations` (default 200)
-//! with its stagnation limit, offspring kept apart in cost; `seeds` defaults
-//! to `1` (a comma list runs each). Every answer is checked: each customer served
-//! once, no route over capacity.
+//! Each instance goes through the C entry points a consumer calls --
+//! `urouting_solve_vrp` with method `"ga"`, the rounded distances as
+//! `distances` and as many vehicles as customers (the set fixes no fleet),
+//! then `urouting_check_solution` on the answer. `generations` sets
+//! `config.max_generations` (default: the service's); `seeds` defaults to `1`
+//! (a comma list runs each). The cost is the answer's `total_distance`.
 
+use std::ffi::{CStr, CString};
 use std::time::Instant;
 
-use u_metaheur::ga::{GaConfig, GaRunner};
-use u_routing::distance::DistanceMatrix;
-use u_routing::evaluation::RouteLimits;
-use u_routing::ga::{split, RoutingGaProblem};
-use u_routing::local_search::{or_opt_improve, route_distance, two_opt_improve};
-use u_routing::models::Customer;
+use serde_json::{json, Value};
+use u_routing::ffi::{urouting_check_solution, urouting_free_string, urouting_solve_vrp};
 
-/// An instance: the depot first, then the customers, and the capacity.
-fn read(path: &std::path::Path) -> (Vec<Customer>, i32) {
+/// An instance: the depot first, then the customers (`x`, `y`, demand), and
+/// the capacity.
+fn read(path: &std::path::Path) -> (Vec<(f64, f64, i64)>, i64) {
     let text = std::fs::read_to_string(path).expect("instance file is readable");
     let mut capacity = 0;
     let mut coords: Vec<(f64, f64)> = Vec::new();
-    let mut demands: Vec<i32> = Vec::new();
+    let mut demands: Vec<i64> = Vec::new();
     let mut section = "";
     for line in text.lines() {
         let line = line.trim();
@@ -56,19 +56,26 @@ fn read(path: &std::path::Path) -> (Vec<Customer>, i32) {
             _ => {}
         }
     }
-    let customers = coords
+    let points = coords
         .iter()
         .zip(&demands)
-        .enumerate()
-        .map(|(i, (&(x, y), &d))| {
-            if i == 0 {
-                Customer::depot(x, y)
-            } else {
-                Customer::new(i, x, y, d, 0.0)
-            }
-        })
+        .map(|(&(x, y), &d)| (x, y, d))
         .collect();
-    (customers, capacity)
+    (points, capacity)
+}
+
+fn call(
+    entry: unsafe extern "C" fn(*const std::os::raw::c_char, *mut *mut std::os::raw::c_char) -> i32,
+    request: &Value,
+) -> (i32, Value) {
+    let text = CString::new(request.to_string()).expect("JSON has no NUL");
+    let mut out = std::ptr::null_mut();
+    let status = unsafe { entry(text.as_ptr(), &mut out) };
+    let body = unsafe { CStr::from_ptr(out) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { urouting_free_string(out) };
+    (status, serde_json::from_str(&body).unwrap_or(Value::Null))
 }
 
 fn main() {
@@ -77,7 +84,10 @@ fn main() {
         args.first()
             .expect("usage: cvrplib <dir> [generations] [seeds]"),
     );
-    let generations: usize = args.get(1).map_or(200, |g| g.parse().expect("a count"));
+    let generations: Option<usize> = args
+        .get(1)
+        .filter(|g| !g.is_empty())
+        .map(|g| g.parse().expect("a count"));
     let seeds: Vec<u64> = args.get(2).map_or(vec![1], |s| {
         s.split(',').map(|v| v.parse().expect("a seed")).collect()
     });
@@ -90,23 +100,28 @@ fn main() {
         .collect();
     names.sort();
 
-    println!("instance,seed,routes,cost,best,gap_pct,generations,ms");
+    println!("instance,seed,routes,cost,best,gap_pct,violations,ms");
     let mut gaps = Vec::new();
     for path in &names {
         let name = path.file_stem().and_then(|n| n.to_str()).expect("a name");
-        let (customers, capacity) = read(path);
-        let n = customers.len();
-        let mut data = Vec::with_capacity(n * n);
-        for a in &customers {
-            for b in &customers {
-                data.push(
-                    ((a.x() - b.x()).powi(2) + (a.y() - b.y()).powi(2))
-                        .sqrt()
-                        .round(),
-                );
-            }
-        }
-        let dm = DistanceMatrix::from_data(n, data).expect("a square matrix");
+        let (points, capacity) = read(path);
+        let n = points.len();
+        let distances: Vec<Vec<f64>> = points
+            .iter()
+            .map(|a| {
+                points
+                    .iter()
+                    .map(|b| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt().round())
+                    .collect()
+            })
+            .collect();
+        let customers: Vec<Value> = points[1..]
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y, d))| json!({ "id": i + 1, "x": x, "y": y, "demand": d }))
+            .collect();
+        // No fleet limit: as many vehicles as customers.
+        let vehicles: Vec<Value> = (1..n).map(|_| json!({ "capacity": capacity })).collect();
         let best: Option<f64> = std::fs::read_to_string(path.with_extension("sol"))
             .ok()
             .and_then(|s| {
@@ -114,47 +129,40 @@ fn main() {
                     .find_map(|l| l.trim().strip_prefix("Cost")?.trim().parse().ok())
             });
         for &seed in &seeds {
-            let started = Instant::now();
-            let problem = RoutingGaProblem::new(customers.clone(), dm.clone(), capacity);
-            let config = GaConfig::default()
-                .with_population_size(50)
-                .with_max_generations(generations)
-                .with_parallel(false)
-                .with_distinct_fitness(true)
-                .with_seed(seed);
-            let found = GaRunner::run(&problem, &config).expect("valid settings");
-            let routes: Vec<Vec<usize>> =
-                split(found.best.customers(), &customers, &dm, capacity, 0.0)
-                    .routes
-                    .iter()
-                    .map(|r| {
-                        let (r, _) = two_opt_improve(r, 0, &dm, &customers, &RouteLimits::NONE);
-                        or_opt_improve(&r, 0, &dm, &customers, &RouteLimits::NONE).0
-                    })
-                    .collect();
-            let ms = started.elapsed().as_millis();
-            let mut served: Vec<usize> = routes.concat();
-            served.sort_unstable();
-            assert_eq!(
-                served,
-                (1..n).collect::<Vec<_>>(),
-                "{name}: every customer once"
-            );
-            for r in &routes {
-                let load: i32 = r.iter().map(|&c| customers[c].demand()).sum();
-                assert!(load <= capacity, "{name}: a route over capacity");
+            let mut config = json!({ "seed": seed });
+            if let Some(g) = generations {
+                config["max_generations"] = json!(g);
             }
-            let cost: f64 = routes.iter().map(|r| route_distance(r, 0, &dm)).sum();
+            let request = json!({
+                "depot_x": points[0].0, "depot_y": points[0].1,
+                "customers": customers, "vehicles": vehicles, "method": "ga",
+                "config": config, "distances": distances,
+            });
+            let started = Instant::now();
+            let (status, solution) = call(urouting_solve_vrp, &request);
+            let ms = started.elapsed().as_millis();
+            assert_eq!(status, 0, "{name}: {solution}");
+            let (_, check) = call(
+                urouting_check_solution,
+                &json!({ "problem": request, "solution": {
+                    "routes": solution["routes"],
+                    "route_vehicles": solution["route_vehicles"],
+                    "unassigned": solution["unassigned"],
+                    "total_distance": solution["total_distance"],
+                    "total_cost": solution["total_cost"],
+                } }),
+            );
+            let violations = check["violations"].as_array().map_or(usize::MAX, Vec::len);
+            let routes = solution["routes"].as_array().map_or(0, Vec::len);
+            let cost = solution["total_distance"].as_f64().unwrap_or(f64::NAN);
             let gap = best.map(|b| 100.0 * (cost - b) / b);
             if let Some(g) = gap {
                 gaps.push(g);
             }
             println!(
-                "{name},{seed},{},{cost},{},{},{},{ms}",
-                routes.len(),
+                "{name},{seed},{routes},{cost},{},{},{violations},{ms}",
                 best.map_or(String::new(), |b| b.to_string()),
                 gap.map_or(String::new(), |g| format!("{g:.2}")),
-                found.generations,
             );
         }
     }

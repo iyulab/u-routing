@@ -56,6 +56,12 @@ wasm-opt = false
 name = "solomon"
 required-features = ["ffi"]
 
+# CVRPLIB X measurement through the C entry points (instances not in the
+# repository -- see the file's header).
+[[example]]
+name = "cvrplib"
+required-features = ["ffi"]
+
 [dev-dependencies]
 # Generates the JSON Schemas the engine card points at (tests only).
 schemars = "1"

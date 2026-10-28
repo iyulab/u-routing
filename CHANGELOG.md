@@ -17,6 +17,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- `examples/cvrplib.rs` measures through the C entry points (`urouting_solve_vrp` with the
+  rounded distances as `distances`, then `urouting_check_solution`) instead of building the GA
+  itself, so it measures what a consumer gets; it now needs `--features ffi`.
 - `"ga"` runs in about half the time with the same answers: the relocation step of its local
   search keeps the best move between every two routes and searches again only the pairs a move
   changed (a move changes two routes), and both it and the route elimination check feasibility

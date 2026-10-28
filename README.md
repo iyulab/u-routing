@@ -167,14 +167,18 @@ Best known values: SINTEF TOP, 100-customer table, read without its marks
 (`rc101b`, `r205b`, `r111*`).
 
 `examples/cvrplib.rs` measures `ga` on capacitated instances in the CVRPLIB
-format with their rounded Euclidean distances, against the `.sol` files' costs:
+format through the same C entry points, the rounded Euclidean distances
+passed as `distances`, against the `.sol` files' costs:
 
 ```bash
-cargo run --release --example cvrplib -- <dir> [generations] [seeds]
+cargo run --release --features ffi --example cvrplib -- <dir> [generations] [seeds]
 ```
 
 On the first ten of Uchoa et al.'s X set (X-n101-k25 … X-n143-k7, seeds 1–3,
-default settings) the mean gap is 1.7 % (0.0–4.4 %), about two seconds each.
+default settings) the mean gap is 1.7 % (0.0–4.4 %), 1.5 s each, every answer
+feasible. Larger ones (seed 1): X-n200-k36 3.1 % in 2.7 s, X-n251-k28 2.7 %
+in 5.1 s, X-n303-k21 3.7 % in 11.8 s, X-n401-k29 2.0 % in 22 s --
+`config.time_limit_ms` bounds the time.
 
 ## Dependencies
 
