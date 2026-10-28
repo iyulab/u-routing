@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-28
+
+Depends on u-numflow 0.15 and u-metaheur 0.17. The .NET client is `URouting` 0.20.0.
+
 ### Added
 
 - `distances` on a request (WebAssembly `solve_vrp` / `check_vrp_solution`, the C entry points,
