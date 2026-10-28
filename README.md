@@ -131,19 +131,19 @@ known solution, by Solomon's classes; every answer checked feasible:
 
 | Class | Best known routes | `savings` routes / gap | `ga` routes / gap | `alns` routes / gap |
 |---|---|---|---|---|
-| C1 (9) | 10.0 | 13.4 / +25.8 % | 10.0 / +0.2 % | 10.2 / +0.9 % |
-| C2 (8) | 3.0 | 5.5 / +31.6 % | 3.2 / +1.5 % | 3.2 / +0.6 % |
-| R1 (12) | 11.9 | 18.2 / +16.8 % ¹ | 14.3 / −0.0 % | 13.9 / +2.6 % |
-| R2 (11) | 2.7 | 10.4 / +10.3 % | 6.9 / −3.7 % | 4.4 / −1.9 % |
-| RC1 (8) | 11.5 | 17.4 / +16.6 % | 14.0 / +0.9 % | 13.9 / +5.3 % |
-| RC2 (8) | 3.2 | 10.6 / +9.6 % | 7.8 / −5.7 % | 5.5 / −4.7 % |
-| all (56) | 7.2 | 12.9 / +18.0 % | 9.6 / −1.2 % | 8.7 / +0.5 % |
+| C1 (9) | 10.0 | 13.4 / +25.8 % | 10.0 / +0.0 % | 10.2 / +0.9 % |
+| C2 (8) | 3.0 | 5.5 / +31.6 % | 3.0 / +0.0 % | 3.2 / +0.6 % |
+| R1 (12) | 11.9 | 18.2 / +16.8 % ¹ | 13.8 / −0.7 % | 13.9 / +2.6 % |
+| R2 (11) | 2.7 | 10.4 / +10.3 % | 5.6 / −6.6 % | 4.4 / −1.9 % |
+| RC1 (8) | 11.5 | 17.4 / +16.6 % | 13.6 / +0.2 % | 13.9 / +5.3 % |
+| RC2 (8) | 3.2 | 10.6 / +9.6 % | 6.6 / −8.3 % | 5.5 / −4.7 % |
+| all (56) | 7.2 | 12.9 / +18.0 % | 9.0 / −2.6 % | 8.7 / +0.5 % |
 
 ¹ One `savings` run (r101) leaves a customer unassigned; no `ga` or `alns` run
 does. A negative gap comes with more routes than the best known solution —
 the methods minimise distance, the benchmark ranks routes first. `ga` was at
 least as good as `savings` (unassigned, then routes, then distance) on all 168
-runs; it took 0.9–1.9 s per instance on average, `alns` 1.3 s (0.7–2.4 s).
+runs; it took 0.7–1.6 s per instance on average, `alns` 1.3 s (0.7–2.4 s).
 
 A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 `{"fixed_cost":1000}` as the harness's `settings`. `alns` over all 56 instances
@@ -151,8 +151,11 @@ A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 7.2): R2 4.4 → 3.3 routes (best known 2.7), RC2 5.5 → 3.9 (3.2), C2 3.2 → 3.0
 (3.0), every answer feasible. Its search removes whole routes and prices a new
 route against every insertion, so the fixed cost decides how many routes it
-keeps. `ga` on the 19 R2 and RC2 instances (seed 1) goes from 7.1 routes at
-−4.7 % to 4.1 routes at +1.6 %.
+keeps. `ga` (seeds 1–3) goes from 9.0 routes at −2.6 % to 7.7 routes at
++0.1 %: R1 13.8 → 12.9 (11.9), R2 5.6 → 3.1, RC1 13.6 → 12.8 (11.5), RC2 6.6
+→ 3.6, every answer feasible. Its local search removes a whole route when the
+other routes take its customers for less than the route costs, distance plus
+fixed cost — without a fixed cost, only when the distance falls.
 
 Best known values: SINTEF TOP, 100-customer table, read without its marks
 (`rc101b`, `r205b`, `r111*`).

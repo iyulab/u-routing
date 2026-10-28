@@ -8,8 +8,9 @@
 //! carries what the search learned.
 //!
 //! [`educate`] splits the tour, improves the routes with the inter-route moves
-//! (relocate, then 2-opt* tail exchange) and the intra-route ones (2-opt,
-//! or-opt), and concatenates them back. Every move keeps capacity, time
+//! (relocate, then 2-opt* tail exchange, then removing whole routes whose
+//! customers the others take for less than the route costs) and the
+//! intra-route ones (2-opt, or-opt), and concatenates them back. Every move keeps capacity, time
 //! windows and the route limits, so the routes stay feasible; splitting the
 //! returned tour again costs at most what the improved routes cost, since
 //! their cuts are among the ones the split considers.
@@ -21,7 +22,9 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, RouteEvaluator, RouteLimits};
-use crate::local_search::{exchange_improve, or_opt_improve, relocate_improve, two_opt_improve};
+use crate::local_search::{
+    eliminate_routes, exchange_improve, or_opt_improve, relocate_improve, two_opt_improve,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 use super::split::split;
@@ -82,14 +85,18 @@ pub(crate) fn educate(
     }
     let solution = relocate_improve(&solution, customers, distances, vehicle);
     let solution = exchange_improve(&solution, customers, distances, vehicle);
+    let routes = eliminate_routes(
+        solution.routes().iter().map(|r| r.customer_ids()).collect(),
+        customers,
+        distances,
+        vehicle,
+    );
 
     let depot = vehicle.depot_id();
-    let routes: Vec<Vec<usize>> = solution
-        .routes()
+    let routes: Vec<Vec<usize>> = routes
         .iter()
         .map(|r| {
-            let (route, _) =
-                two_opt_improve(&r.customer_ids(), depot, distances, customers, &limits);
+            let (route, _) = two_opt_improve(r, depot, distances, customers, &limits);
             or_opt_improve(&route, depot, distances, customers, &limits).0
         })
         .filter(|r| !r.is_empty())

@@ -17,6 +17,14 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- `ga`'s local search removes whole routes: a route goes when the other routes take its
+  customers (the largest demand first, each at its cheapest feasible position) for less than
+  the route costs -- its distance plus the vehicle's fixed cost. Relocating one customer at a
+  time could not empty a route, since each move but the last lengthens the others. On Solomon's
+  56 instances (seeds 1-3) the mean goes from 9.6 routes at -1.2 % distance to 9.0 routes at
+  -2.6 % with no fixed cost (a route goes only when the distance falls), and to 7.7 routes at
+  +0.1 % with `fixed_cost` 1000 (R1 12.9 and RC1 12.8 routes against best known 11.9 and 11.5).
+  Answers are as feasible as before; a run takes up to a fifth longer.
 - Depends on u-metaheur 0.16.
 
 ## [0.22.1] - 2026-10-20
