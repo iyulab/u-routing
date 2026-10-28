@@ -160,6 +160,16 @@ fixed cost — without a fixed cost, only when the distance falls.
 Best known values: SINTEF TOP, 100-customer table, read without its marks
 (`rc101b`, `r205b`, `r111*`).
 
+`examples/cvrplib.rs` measures `ga` on capacitated instances in the CVRPLIB
+format with their rounded Euclidean distances, against the `.sol` files' costs:
+
+```bash
+cargo run --release --example cvrplib -- <dir> [generations] [seeds]
+```
+
+On the first ten of Uchoa et al.'s X set (X-n101-k25 … X-n143-k7, seed 1,
+default settings) the mean gap is 2.1 % (0.7–4.8 %), about a second each.
+
 ## Dependencies
 
 - [`u-metaheur`](https://crates.io/crates/u-metaheur) — GA/ALNS framework

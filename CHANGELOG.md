@@ -10,6 +10,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
+- `examples/cvrplib.rs`: measures `ga` on CVRPLIB instances (`.vrp` with rounded Euclidean
+  distances, best known costs from `.sol`), checking every answer serves each customer once
+  within capacity.
 - `VERSION`: the crate's own version (`CARGO_PKG_VERSION`) as a constant at the
   crate root, so a consumer can report what it was built against without
   reading a lock file -- which names the wrong version once the crate is linked
