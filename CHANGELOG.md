@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-29
+
+Depends on u-metaheur 0.18 and u-numflow 0.16. The .NET client is `URouting` 0.21.0.
+
 ### Fixed
 
 - `config.time_limit_ms` on `"ga"` with a vehicle `fixed_cost` now covers the route minimisation
