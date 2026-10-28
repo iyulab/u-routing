@@ -17,7 +17,7 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
-- Depends on u-metaheur 0.15.
+- Depends on u-metaheur 0.16.
 
 ## [0.22.1] - 2026-10-20
 
