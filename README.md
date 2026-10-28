@@ -152,9 +152,10 @@ A vehicle `fixed_cost` makes the methods trade distance for routes — pass
 7.2): R2 4.4 → 3.3 routes (best known 2.7), RC2 5.5 → 3.9 (3.2), C2 3.2 → 3.0
 (3.0), every answer feasible. Its search removes whole routes and prices a new
 route against every insertion, so the fixed cost decides how many routes it
-keeps. `ga` (seeds 1–3) goes from 8.9 routes at −2.9 % to 7.36 routes at
-+1.9 %: R1 13.8 → 12.25 (11.9), R2 5.5 → 2.9 (2.7), RC1 13.4 → 11.6 (11.5),
-RC2 6.3 → 3.25 (3.25), every answer feasible, 4.1 s per instance on average. Its local
+keeps. `ga` (seeds 1–3) goes from 8.9 routes at −2.9 % to 7.25 routes at
++3.0 % (best known 7.23): R1 13.8 → 12.0 (11.9), R2 5.5 → 2.73 (2.73), RC1 13.4 → 11.5
+(11.5), RC2 6.3 → 3.25 (3.25), C1 and C2 at the best known, every answer feasible,
+5.3 s per instance on average. Its local
 search removes a whole route when the other routes take its customers for less
 than the route costs, distance plus fixed cost — without a fixed cost, only
 when the distance falls. With a fixed cost its seed solutions also go through
@@ -175,9 +176,9 @@ cargo run --release --features ffi --example cvrplib -- <dir> [generations] [see
 ```
 
 On the first ten of Uchoa et al.'s X set (X-n101-k25 … X-n143-k7, seeds 1–3,
-default settings) the mean gap is 1.7 % (0.0–4.4 %), 1.5 s each, every answer
-feasible. Larger ones (seed 1): X-n200-k36 3.1 % in 2.7 s, X-n251-k28 2.7 %
-in 5.1 s, X-n303-k21 3.7 % in 11.8 s, X-n401-k29 2.0 % in 22 s --
+default settings) the mean gap is 1.7 % (0.0–4.4 %), 0.9 s each, every answer
+feasible. Larger ones (seed 1): X-n200-k36 3.1 % in 1.9 s, X-n251-k28 2.7 %
+in 2.5 s, X-n303-k21 3.7 % in 4.7 s, X-n401-k29 2.0 % in 8.6 s --
 `config.time_limit_ms` bounds the time.
 
 ## Dependencies

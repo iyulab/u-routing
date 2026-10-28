@@ -156,8 +156,10 @@ impl RoutingGaProblem {
 }
 
 /// Insertions the ejection pool may spend on each route it tries to remove
-/// from a seed.
-const SEED_EJECTION_BUDGET: usize = 500;
+/// from a seed. On Solomon's 56 instances (fixed cost 1000, seed 1) 500 /
+/// 1000 / 2000 reach 412 / 409 / 406 routes (best known: 405) in 167 / 211 /
+/// 299 s.
+const SEED_EJECTION_BUDGET: usize = 2000;
 
 /// Seed of the random stream the ejection pool perturbs the seeds with.
 const SEED_PERTURBATION_STREAM: u64 = 0x5eed;

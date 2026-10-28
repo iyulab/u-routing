@@ -22,6 +22,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   the latest arrival the rest of the route allows (Savelsbergh 1992) before building the route,
   instead of building and simulating it for every position. On Solomon's instances a run takes
   8–30 % less time.
+- Behaviour change: with that time, `"ga"` with a `fixed_cost` gives the ejection pool four times
+  the insertions per route (2,000 instead of 500), so it removes more routes from its seeds. On
+  Solomon's 56 instances with a fixed cost of 1,000 it reaches 406 routes instead of 412 (best
+  known: 405 — the R2 and RC1 classes now match it), at 58,927 instead of 58,249 in distance and
+  5.3 instead of 4.1 s per instance. `config.time_limit_ms` still bounds the whole run.
 
 ## [0.24.0] - 2026-10-29
 
