@@ -852,6 +852,19 @@ impl Method {
 // Entry point
 // ============================================================================
 
+/// The problem a request states, as [`solve`] and [`check`] read it: the
+/// depot, the customers and the fleet, and the distances and travel times
+/// between the points when the request gives them (else from the
+/// coordinates).
+#[derive(Clone, Copy)]
+pub(crate) struct ProblemInput<'a> {
+    pub(crate) depot: (f64, f64),
+    pub(crate) customers: &'a [InputCustomer],
+    pub(crate) vehicles: &'a [InputVehicle],
+    pub(crate) distances: Option<&'a [Vec<f64>]>,
+    pub(crate) durations: Option<&'a [Vec<f64>]>,
+}
+
 /// Solves a capacitated VRP, with time windows where customers carry them.
 ///
 /// `method` is checked before anything else, so a misspelt name is reported
@@ -863,13 +876,17 @@ impl Method {
 /// that is not a whole number of units in range, or solver settings the chosen
 /// method rejects. Each carries its own `code` (see [`ServiceError`]).
 pub(crate) fn solve(
-    depot: (f64, f64),
-    input_customers: &[InputCustomer],
-    input_vehicles: &[InputVehicle],
-    distances: Option<&[Vec<f64>]>,
+    problem: &ProblemInput,
     method: &str,
     config: &InputConfig,
 ) -> Result<VrpOutput, ServiceError> {
+    let ProblemInput {
+        depot,
+        customers: input_customers,
+        vehicles: input_vehicles,
+        distances,
+        durations,
+    } = *problem;
     let method = Method::parse(method)?;
     refuse_unread_settings(method, config)?;
     // At least one route, or no limit at all: 0 is a range refusal like -1.
@@ -899,7 +916,13 @@ pub(crate) fn solve(
         all_ids,
         positions,
     } = build_customers(depot, input_customers, largest_load)?;
-    let dm = distance_matrix(&customers, &positions, distances, input_customers.len())?;
+    let dm = distance_matrix(
+        &customers,
+        &positions,
+        distances,
+        durations,
+        input_customers.len(),
+    )?;
     // Only nearest neighbour assigns routes to particular vehicles. The other
     // methods plan every route with one vehicle -- one capacity and one set of
     // limits -- so a fleet that differs in either is not a problem they can
@@ -1156,14 +1179,18 @@ pub(crate) struct CheckOutput {
 /// settings change nothing here but are judged as `solve` judges them, so a
 /// request `solve` takes is a request `check` takes.
 pub(crate) fn check(
-    depot: (f64, f64),
-    input_customers: &[InputCustomer],
-    input_vehicles: &[InputVehicle],
-    distances: Option<&[Vec<f64>]>,
+    problem: &ProblemInput,
     method: &str,
     config: &InputConfig,
     solution: &InputSolution,
 ) -> Result<CheckOutput, ServiceError> {
+    let ProblemInput {
+        depot,
+        customers: input_customers,
+        vehicles: input_vehicles,
+        distances,
+        durations,
+    } = *problem;
     use crate::evaluation::{check_solution, Fleet, VehicleUse};
     use crate::models::{Route, Solution, ViolationType, Visit};
 
@@ -1179,7 +1206,13 @@ pub(crate) fn check(
         positions,
         ..
     } = build_customers(depot, input_customers, i32::MAX)?;
-    let dm = distance_matrix(&customers, &positions, distances, input_customers.len())?;
+    let dm = distance_matrix(
+        &customers,
+        &positions,
+        distances,
+        durations,
+        input_customers.len(),
+    )?;
     let vehicles = build_vehicles(input_vehicles)?;
     if method != Method::NearestNeighbor {
         refuse_mixed_fleet(method, &vehicles)?;
@@ -1505,79 +1538,108 @@ fn build_customers(
     })
 }
 
-/// The lengths every method plans with: `distances` when the request gives
-/// it, read as row and column 0 for the depot and `1 + p` for the customer at
-/// position `p` of `customers`, else the Euclidean distances between the
-/// coordinates. Travel time equals distance either way.
+/// The lengths and travel times every method plans with. `distances` when the
+/// request gives it, else the Euclidean distances between the coordinates;
+/// `durations` when it gives that, else travel time equals distance. Both are
+/// read as row and column 0 for the depot and `1 + p` for the customer at
+/// position `p` of `customers`.
 ///
-/// `distances` is refused unless it is square with one row per point (the
-/// depot and every customer, `inputs` of them) and its entries are finite and
-/// not negative. It need not be symmetric: a one-way street is a shorter way
+/// Each is refused unless it is square with one row per point (the depot and
+/// every customer, `inputs` of them) and its entries are finite and not
+/// negative. Neither need be symmetric: a one-way street is a shorter way
 /// there than back, and the moves that reverse part of a route price the
-/// reversed edges when the matrix is not.
+/// reversed edges when the matrix is not (and check the windows on the travel
+/// times again).
 fn distance_matrix(
     customers: &[Customer],
     positions: &[usize],
     distances: Option<&[Vec<f64>]>,
+    durations: Option<&[Vec<f64>]>,
     inputs: usize,
 ) -> Result<DistanceMatrix, ServiceError> {
-    let Some(rows) = distances else {
-        return Ok(DistanceMatrix::from_customers(customers));
+    // Internal point k is the depot (k = 0) or customers[k], the one at
+    // request position positions[k - 1].
+    let row_of = |k: usize| if k == 0 { 0 } else { positions[k - 1] + 1 };
+    let n = customers.len();
+    let internal = |rows: &[Vec<f64>]| -> Vec<f64> {
+        let mut data = Vec::with_capacity(n * n);
+        for a in 0..n {
+            for b in 0..n {
+                data.push(rows[row_of(a)][row_of(b)]);
+            }
+        }
+        data
     };
+    let matrix = match distances {
+        Some(rows) => {
+            check_grid("distances", "distance", rows, inputs)?;
+            DistanceMatrix::from_data(n, internal(rows)).expect("n × n entries")
+        }
+        None => DistanceMatrix::from_customers(customers),
+    };
+    match durations {
+        Some(rows) => {
+            check_grid("durations", "travel time", rows, inputs)?;
+            Ok(matrix
+                .with_travel_times(internal(rows))
+                .expect("n × n entries"))
+        }
+        None => Ok(matrix),
+    }
+}
+
+/// Refuses `rows` (the request's `parameter`, entries of `what`) unless it has
+/// one row per point -- the depot and `inputs` customers -- each as long, of
+/// finite entries not below 0.
+fn check_grid(
+    parameter: &str,
+    what: &str,
+    rows: &[Vec<f64>],
+    inputs: usize,
+) -> Result<(), ServiceError> {
     let size = inputs + 1;
     if rows.len() != size {
         return Err(ServiceError::new(
             Code::DimensionMismatch,
             format!(
-                "distances has {} rows for the depot and {inputs} customers -- one row per point, the depot first",
+                "{parameter} has {} rows for the depot and {inputs} customers -- one row per point, the depot first",
                 rows.len()
             ),
-            json!({ "parameter": "distances", "expected": size, "got": rows.len() }),
+            json!({ "parameter": parameter, "expected": size, "got": rows.len() }),
         ));
     }
     for (i, row) in rows.iter().enumerate() {
+        let at = format!("{parameter}[{i}]");
         if row.len() != size {
             return Err(ServiceError::new(
                 Code::DimensionMismatch,
                 format!(
-                    "distances[{i}] has {} entries -- one per point, {size} in all",
+                    "{at} has {} entries -- one per point, {size} in all",
                     row.len()
                 ),
-                json!({ "parameter": format!("distances[{i}]"), "expected": size,
-                        "got": row.len() }),
+                json!({ "parameter": at, "expected": size, "got": row.len() }),
             ));
         }
         for (j, &d) in row.iter().enumerate() {
-            let parameter = format!("distances[{i}]");
             if !d.is_finite() {
                 return Err(ServiceError::new(
                     Code::ValueNotFinite,
-                    format!("{parameter}[{j}] is {d} -- a distance is a finite number"),
-                    json!({ "parameter": parameter, "index": j }),
+                    format!("{at}[{j}] is {d} -- a {what} is a finite number"),
+                    json!({ "parameter": at, "index": j }),
                 ));
             }
             if d < 0.0 {
-                let mut fields = json!({ "parameter": parameter, "index": j, "got": d });
+                let mut fields = json!({ "parameter": at, "index": j, "got": d });
                 Bounds::of(0.0..).insert_into(&mut fields);
                 return Err(ServiceError::new(
                     Code::ParameterOutOfRange,
-                    format!("{parameter}[{j}] is {d} -- a distance is at least 0"),
+                    format!("{at}[{j}] is {d} -- a {what} is at least 0"),
                     fields,
                 ));
             }
         }
     }
-    // Internal point k is the depot (k = 0) or customers[k], the one at
-    // request position positions[k - 1].
-    let row_of = |k: usize| if k == 0 { 0 } else { positions[k - 1] + 1 };
-    let n = customers.len();
-    let mut data = Vec::with_capacity(n * n);
-    for a in 0..n {
-        for b in 0..n {
-            data.push(rows[row_of(a)][row_of(b)]);
-        }
-    }
-    Ok(DistanceMatrix::from_data(n, data).expect("n × n entries"))
+    Ok(())
 }
 
 /// Solver settings the method's runner refused (a population of 1, zero
@@ -2228,10 +2290,13 @@ mod tests {
         })
         .expect("valid config");
         solve(
-            (0.0, 0.0),
-            &detour_customers(),
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &detour_customers(),
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             method,
             &config,
         )
@@ -2281,10 +2346,13 @@ mod tests {
         let (customers, distances) = matrix_problem();
         for method in ["nn", "savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                Some(&distances),
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: Some(&distances),
+                    durations: None,
+                },
                 method,
                 &quick(method),
             )
@@ -2308,10 +2376,13 @@ mod tests {
             }))
             .expect("valid plan");
             let checked = check(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                Some(&distances),
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: Some(&distances),
+                    durations: None,
+                },
                 method,
                 &quick(method),
                 &plan,
@@ -2335,10 +2406,13 @@ mod tests {
         }
         for method in ["nn", "savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                Some(&distances),
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: Some(&distances),
+                    durations: None,
+                },
                 method,
                 &quick(method),
             )
@@ -2368,6 +2442,91 @@ mod tests {
     }
 
     #[test]
+    fn durations_keep_the_clock_and_distances_the_length() {
+        // Every leg takes ten times its length. Customer 1 is one unit away
+        // but due at 5: by distance it is reachable, by time it is not.
+        let (mut customers, distances) = matrix_problem();
+        let durations: Vec<Vec<f64>> = distances
+            .iter()
+            .map(|row| row.iter().map(|d| d * 10.0).collect())
+            .collect();
+        let out = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: Some(&distances),
+                durations: Some(&durations),
+            },
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect("solves");
+        for (route, summary) in out.routes.iter().zip(&out.route_summaries) {
+            let walk = |m: &[Vec<f64>]| {
+                let mut prev = 0;
+                let mut d = 0.0;
+                for &id in route {
+                    d += m[prev][id];
+                    prev = id;
+                }
+                d + m[prev][0]
+            };
+            assert!((summary.distance - walk(&distances)).abs() < 1e-9);
+            assert!((summary.duration - walk(&durations)).abs() < 1e-9);
+        }
+
+        customers[0] = customer(serde_json::json!({
+            "id": 1, "x": 0.0, "y": 0.0, "demand": 1, "time_window": [0.0, 5.0]
+        }));
+        let by_distance = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: Some(&distances),
+                durations: None,
+            },
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect("solves");
+        assert!(by_distance.unassigned.is_empty());
+        for method in ["nn", "savings", "ga", "alns"] {
+            let by_time = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: Some(&distances),
+                    durations: Some(&durations),
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
+            assert_eq!(by_time.unassigned, vec![1], "{method}");
+        }
+
+        let mut short = durations.clone();
+        short[3].pop();
+        let e = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: None,
+                durations: Some(&short),
+            },
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect_err("refused");
+        assert_eq!(e.fields["code"], "dimension_mismatch");
+        assert_eq!(e.fields["parameter"], "durations[3]");
+    }
+
+    #[test]
     fn a_customer_left_out_keeps_the_others_on_their_rows() {
         // Customer 2 asks for more than the vehicle carries and is reported
         // unassigned; 1 and 3 must still read rows 1 and 3, not 1 and 2.
@@ -2375,10 +2534,13 @@ mod tests {
         customers[1] = customer(serde_json::json!({ "id": 2, "x": 0.0, "y": 0.0, "demand": 5 }));
         let truck = [vehicle(serde_json::json!({ "capacity": 2 }))];
         let out = solve(
-            (0.0, 0.0),
-            &customers,
-            &truck,
-            Some(&distances),
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &truck,
+                distances: Some(&distances),
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
         )
@@ -2397,10 +2559,13 @@ mod tests {
         let (customers, distances) = matrix_problem();
         let refuse = |d: Vec<Vec<f64>>| {
             solve(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                Some(&d),
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: Some(&d),
+                    durations: None,
+                },
                 "nn",
                 &InputConfig::default(),
             )
@@ -2451,10 +2616,13 @@ mod tests {
             customer(serde_json::json!({ "id": 2, "x": -3.0, "y": 4.0, "demand": 1 })),
         ];
         let out = solve(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
         )
@@ -2470,10 +2638,13 @@ mod tests {
         }))
         .expect("valid plan");
         let checked = check(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
             &plan,
@@ -2506,10 +2677,13 @@ mod tests {
             vehicle(serde_json::json!({ "fixed_cost": 20 })),
         ];
         let err = solve(
-            (0.0, 0.0),
-            &detour_customers(),
-            &mixed,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &detour_customers(),
+                vehicles: &mixed,
+                distances: None,
+                durations: None,
+            },
             "savings",
             &InputConfig::default(),
         )
@@ -2522,8 +2696,18 @@ mod tests {
 
     #[test]
     fn an_unknown_method_is_rejected_even_with_no_customers() {
-        let err = solve((0.0, 0.0), &[], &[], None, "tabu", &InputConfig::default())
-            .expect_err("unknown method");
+        let err = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &[],
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
+            "tabu",
+            &InputConfig::default(),
+        )
+        .expect_err("unknown method");
         assert!(
             err.message.contains("tabu") && err.message.contains("\"alns\""),
             "{err}"
@@ -2532,7 +2716,18 @@ mod tests {
 
     #[test]
     fn no_customers_is_an_empty_solution() {
-        let out = solve((0.0, 0.0), &[], &[], None, "ga", &InputConfig::default()).expect("empty");
+        let out = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &[],
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
+            "ga",
+            &InputConfig::default(),
+        )
+        .expect("empty");
         assert!(out.routes.is_empty());
         assert_eq!(out.method_used, "ga");
     }
@@ -2543,10 +2738,13 @@ mod tests {
             "id": 42, "x": 1.0, "y": 1.0, "time_window": [9.0, 3.0]
         }))];
         let err = solve(
-            (0.0, 0.0),
-            &customers,
-            &[],
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
         )
@@ -2563,10 +2761,13 @@ mod tests {
         ];
         for method in ["nn", "savings", "ga", "alns"] {
             let err = solve(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &InputConfig::default(),
             )
@@ -2582,10 +2783,13 @@ mod tests {
             "id": 1, "x": 1.0, "y": 1.0, "time_window": [0.0, 100.0]
         }))];
         let out = solve(
-            (0.0, 0.0),
-            &customers,
-            &[],
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
         )
@@ -2600,10 +2804,13 @@ mod tests {
             "id": 7, "x": 1.0, "y": 1.0, "demand": 2.4
         }))];
         let err = solve(
-            (0.0, 0.0),
-            &customers,
-            &[],
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
             "nn",
             &InputConfig::default(),
         )
@@ -2618,10 +2825,13 @@ mod tests {
                 "id": 1, "x": 1.0, "y": 1.0, "demand": bad
             }))];
             let err = solve(
-                (0.0, 0.0),
-                &customers,
-                &[],
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &[],
+                    distances: None,
+                    durations: None,
+                },
                 "nn",
                 &InputConfig::default(),
             )
@@ -2632,10 +2842,13 @@ mod tests {
             // validated even with nobody to serve.
             let vehicles = [vehicle(serde_json::json!({ "capacity": bad }))];
             let err = solve(
-                (0.0, 0.0),
-                &[],
-                &vehicles,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &[],
+                    vehicles: &vehicles,
+                    distances: None,
+                    durations: None,
+                },
                 "nn",
                 &InputConfig::default(),
             )
@@ -2648,10 +2861,13 @@ mod tests {
         }))];
         let vehicles = [vehicle(serde_json::json!({ "capacity": 10.0 }))];
         assert!(solve(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None
+            },
             "nn",
             &InputConfig::default()
         )
@@ -2705,10 +2921,13 @@ mod tests {
         for method in ["nn", "savings", "ga", "alns"] {
             let run = || {
                 let out = solve(
-                    (0.0, 0.0),
-                    &customers,
-                    &vehicles,
-                    None,
+                    &ProblemInput {
+                        depot: (0.0, 0.0),
+                        customers: &customers,
+                        vehicles: &vehicles,
+                        distances: None,
+                        durations: None,
+                    },
                     method,
                     &quick(method),
                 )
@@ -2771,10 +2990,13 @@ mod tests {
                 };
                 for method in ["nn", "savings", "ga", "alns"] {
                     let out = solve(
-                        (0.0, 0.0),
-                        &customers,
-                        &fleet,
-                        None,
+                        &ProblemInput {
+                            depot: (0.0, 0.0),
+                            customers: &customers,
+                            vehicles: &fleet,
+                            distances: None,
+                            durations: None,
+                        },
                         method,
                         &config(method),
                     )
@@ -2805,8 +3027,18 @@ mod tests {
         let fleet = vec![vehicle(
             serde_json::json!({ "capacity": 10.0, "max_distance": 0.0 }),
         )];
-        let e = solve((0.0, 0.0), &customers, &fleet, None, "nn", &quick("nn"))
-            .expect_err("0 distance");
+        let e = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &fleet,
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &quick("nn"),
+        )
+        .expect_err("0 distance");
         // A limit must be > 0: zero itself is refused, so the bound is open.
         assert_eq!(
             e.fields,
@@ -2825,13 +3057,34 @@ mod tests {
             vehicle(serde_json::json!({ "capacity": 100.0 })),
         ];
         for method in ["savings", "ga", "alns"] {
-            let e = solve((0.0, 0.0), &customers, &fleet, None, method, &quick(method))
-                .expect_err(method);
+            let e = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &fleet,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect_err(method);
             assert_eq!(e.fields["code"], "mixed_fleet", "{method}");
             assert_eq!(e.fields["parameter"], "max_duration", "{method}");
             assert_eq!(e.fields["index"], 1, "{method}");
         }
-        assert!(solve((0.0, 0.0), &customers, &fleet, None, "nn", &quick("nn")).is_ok());
+        assert!(solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &fleet,
+                distances: None,
+                durations: None
+            },
+            "nn",
+            &quick("nn")
+        )
+        .is_ok());
     }
 
     // ---- max_vehicles ----
@@ -2846,10 +3099,13 @@ mod tests {
         let one_capacity = fleet(&[10.0]);
         for method in ["savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &customers,
-                &one_capacity,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &one_capacity,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &quick(method),
             )
@@ -2888,10 +3144,13 @@ mod tests {
         };
         for method in ["nn", "savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &six_of_ten(),
-                &two,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &six_of_ten(),
+                    vehicles: &two,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &fixed(method),
             )
@@ -2920,8 +3179,18 @@ mod tests {
             "capacity": 20.0, "cost_per_distance": 2.0, "fixed_cost": 5.0
         }))];
         for method in ["nn", "savings", "ga", "alns"] {
-            let out =
-                solve((0.0, 0.0), &customers, &truck, None, method, &quick(method)).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &truck,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert_eq!(out.route_summaries.len(), out.routes.len(), "{method}");
             let distance: f64 = out.route_summaries.iter().map(|r| r.distance).sum();
             let cost: f64 = out.route_summaries.iter().map(|r| r.cost).sum();
@@ -2952,10 +3221,13 @@ mod tests {
             "service_time": 2.0, "time_window": [10.0, 50.0]
         }))];
         let out = solve(
-            (0.0, 0.0),
-            &customers,
-            &fleet(&[10.0]),
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &fleet(&[10.0]),
+                distances: None,
+                durations: None,
+            },
             "nn",
             &quick("nn"),
         )
@@ -2984,8 +3256,18 @@ mod tests {
                 max_vehicles: Some(3),
                 ..quick(method)
             };
-            let out =
-                solve((0.0, 0.0), &customers, &vehicles, None, method, &config).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &vehicles,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &config,
+            )
+            .expect(method);
             let served: Vec<usize> = out.routes.iter().flatten().copied().collect();
             if method == "nn" {
                 // One vehicle is one route for nearest neighbour, whatever
@@ -3006,8 +3288,18 @@ mod tests {
         // Capacity 0: nothing with a demand fits; every customer is unassigned.
         let none = fleet(&[0.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out =
-                solve((0.0, 0.0), &customers, &none, None, method, &quick(method)).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &none,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert_eq!(out.unassigned, vec![1, 2, 3], "{method}");
             assert!(out.routes.is_empty(), "{method}: {:?}", out.routes);
         }
@@ -3020,10 +3312,13 @@ mod tests {
         let two = fleet(&[20.0, 20.0]);
         for method in ["savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &six_of_ten(),
-                &two,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &six_of_ten(),
+                    vehicles: &two,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &quick(method),
             )
@@ -3044,10 +3339,13 @@ mod tests {
         };
         for method in ["savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &six_of_ten(),
-                &roomy,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &six_of_ten(),
+                    vehicles: &roomy,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &fixed(method),
             )
@@ -3069,19 +3367,25 @@ mod tests {
         };
         for method in ["savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &customers,
-                &one_capacity,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &one_capacity,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &roomy(method),
             )
             .expect(method);
             let free = solve(
-                (0.0, 0.0),
-                &customers,
-                &one_capacity,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &one_capacity,
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &quick(method),
             )
@@ -3110,10 +3414,13 @@ mod tests {
         };
         for method in ["nn", "savings", "ga", "alns"] {
             let out = solve(
-                (0.0, 0.0),
-                &customers,
-                &fleet(&[100.0, 100.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &fleet(&[100.0, 100.0]),
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &fixed(method),
             )
@@ -3150,10 +3457,13 @@ mod tests {
                 ..quick(method)
             };
             let err = solve(
-                (0.0, 0.0),
-                &ring(4),
-                &fleet(&[10.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(4),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &config(method),
             )
@@ -3181,23 +3491,47 @@ mod tests {
         let customers = ring(4);
         let mixed = fleet(&[10.0, 100.0]);
         for method in ["savings", "ga", "alns"] {
-            let err = solve((0.0, 0.0), &customers, &mixed, None, method, &quick(method))
-                .expect_err(method);
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &mixed,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect_err(method);
             assert!(
                 err.message.contains(&format!("\"{method}\"")) && err.message.contains("capacit"),
                 "{method}: {err}"
             );
         }
-        assert!(solve((0.0, 0.0), &customers, &mixed, None, "nn", &quick("nn")).is_ok());
+        assert!(solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &mixed,
+                distances: None,
+                durations: None
+            },
+            "nn",
+            &quick("nn")
+        )
+        .is_ok());
 
         let uniform = fleet(&[20.0, 20.0]);
         for method in ["nn", "savings", "ga", "alns"] {
             assert!(
                 solve(
-                    (0.0, 0.0),
-                    &customers,
-                    &uniform,
-                    None,
+                    &ProblemInput {
+                        depot: (0.0, 0.0),
+                        customers: &customers,
+                        vehicles: &uniform,
+                        distances: None,
+                        durations: None
+                    },
                     method,
                     &quick(method)
                 )
@@ -3253,8 +3587,18 @@ mod tests {
         let customers = clashing_windows();
         let two = fleet(&[100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out =
-                solve((0.0, 0.0), &customers, &two, None, method, &quick(method)).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &two,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -3289,8 +3633,18 @@ mod tests {
         let customers = ordered_ring();
         let fleet = fleet(&[100.0, 100.0, 100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out =
-                solve((0.0, 0.0), &customers, &fleet, None, method, &quick(method)).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &fleet,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -3310,8 +3664,18 @@ mod tests {
         })));
         let fleet = fleet(&[100.0, 100.0, 100.0]);
         for method in ["nn", "savings", "ga", "alns"] {
-            let out =
-                solve((0.0, 0.0), &customers, &fleet, None, method, &quick(method)).expect(method);
+            let out = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &fleet,
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &quick(method),
+            )
+            .expect(method);
             assert!(
                 late_arrivals(&out, &customers).is_empty(),
                 "{method}: {:?}",
@@ -3334,18 +3698,41 @@ mod tests {
         };
         let errors = [
             solve(
-                (0.0, 0.0),
-                &ring(2),
-                &fleet(&[10.0, 100.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(2),
+                    vehicles: &fleet(&[10.0, 100.0]),
+                    distances: None,
+                    durations: None,
+                },
                 "ga",
                 &quick("ga"),
             )
             .expect_err("mixed fleet"),
-            solve((0.0, 0.0), &fraction, &[], None, "nn", &quick("nn"))
-                .expect_err("fractional demand"),
-            solve((0.0, 0.0), &ring(8), &fleet(&[10.0]), None, "ga", &no_fleet)
-                .expect_err("zero max_vehicles"),
+            solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &fraction,
+                    vehicles: &[],
+                    distances: None,
+                    durations: None,
+                },
+                "nn",
+                &quick("nn"),
+            )
+            .expect_err("fractional demand"),
+            solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(8),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None,
+                },
+                "ga",
+                &no_fleet,
+            )
+            .expect_err("zero max_vehicles"),
         ];
         for e in errors {
             assert!(!e.message.contains("  "), "{e}");
@@ -3359,18 +3746,15 @@ mod tests {
         let one = |json: serde_json::Value| [customer(json)];
         let cases: Vec<(ServiceError, &str, serde_json::Value)> = vec![
             (
-                solve((0.0, 0.0), &[], &[], None, "tabu", &quick("tabu")).expect_err("method"),
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &[], vehicles: &[], distances: None, durations: None }, "tabu", &quick("tabu")).expect_err("method"),
                 "unknown_option",
                 serde_json::json!({ "parameter": "method", "got": "tabu" }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &[
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &[
                         customer(serde_json::json!({ "id": 5, "x": 1.0, "y": 0.0 })),
                         customer(serde_json::json!({ "id": 5, "x": 2.0, "y": 0.0 })),
-                    ],
-                    &[], None,
+                    ], vehicles: &[], distances: None, durations: None },
                     "nn",
                     &quick("nn"),
                 )
@@ -3379,10 +3763,7 @@ mod tests {
                 serde_json::json!({ "id": 5, "first": 0, "second": 1 }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": 0.5 })),
-                    &[], None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": 0.5 })), vehicles: &[], distances: None, durations: None },
                     "nn",
                     &quick("nn"),
                 )
@@ -3391,16 +3772,13 @@ mod tests {
                 serde_json::json!({ "parameter": "demand", "index": 0, "id": 9, "value": 0.5 }),
             ),
             (
-                solve((0.0, 0.0), &[], &fleet(&[10.0, 2.5]), None, "nn", &quick("nn"))
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &[], vehicles: &fleet(&[10.0, 2.5]), distances: None, durations: None }, "nn", &quick("nn"))
                     .expect_err("capacity"),
                 "not_whole_units",
                 serde_json::json!({ "parameter": "capacity", "index": 1, "id": null }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": -3.0 })),
-                    &[], None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &one(serde_json::json!({ "id": 9, "x": 1.0, "y": 0.0, "demand": -3.0 })), vehicles: &[], distances: None, durations: None },
                     "nn",
                     &quick("nn"),
                 )
@@ -3410,17 +3788,14 @@ mod tests {
                                     "min": 0.0, "max": f64::from(i32::MAX), "got": -3.0 }),
             ),
             (
-                solve((0.0, 0.0), &[], &fleet(&[10.0, 3e9]), None, "nn", &quick("nn"))
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &[], vehicles: &fleet(&[10.0, 3e9]), distances: None, durations: None }, "nn", &quick("nn"))
                     .expect_err("too large"),
                 "parameter_out_of_range",
                 serde_json::json!({ "parameter": "capacity", "index": 1, "id": null,
                                     "min": 0.0, "max": f64::from(i32::MAX), "got": 3e9 }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &one(serde_json::json!({ "id": 3, "x": 1.0, "y": 0.0, "time_window": [4.0, 1.0] })),
-                    &[], None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &one(serde_json::json!({ "id": 3, "x": 1.0, "y": 0.0, "time_window": [4.0, 1.0] })), vehicles: &[], distances: None, durations: None },
                     "nn",
                     &quick("nn"),
                 )
@@ -3429,16 +3804,13 @@ mod tests {
                 serde_json::json!({ "id": 3, "index": 0, "ready": 4.0, "due": 1.0 }),
             ),
             (
-                solve((0.0, 0.0), &ring(2), &fleet(&[10.0, 100.0]), None, "ga", &quick("ga"))
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(2), vehicles: &fleet(&[10.0, 100.0]), distances: None, durations: None }, "ga", &quick("ga"))
                     .expect_err("mixed"),
                 "mixed_fleet",
                 serde_json::json!({ "method": "ga", "capacities": [10, 100], "index": 1 }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &ring(8),
-                    &fleet(&[10.0]), None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(8), vehicles: &fleet(&[10.0]), distances: None, durations: None },
                     "ga",
                     &InputConfig {
                         max_vehicles: Some(0),
@@ -3451,10 +3823,7 @@ mod tests {
                                     "max": null, "got": 0.0 }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &ring(4),
-                    &fleet(&[10.0]), None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(4), vehicles: &fleet(&[10.0]), distances: None, durations: None },
                     "ga",
                     &InputConfig {
                         population_size: Some(1),
@@ -3467,10 +3836,7 @@ mod tests {
                                     "min": 2.0, "max": null, "got": 1.0 }),
             ),
             (
-                solve(
-                    (0.0, 0.0),
-                    &ring(4),
-                    &fleet(&[10.0]), None,
+                solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(4), vehicles: &fleet(&[10.0]), distances: None, durations: None },
                     "alns",
                     &InputConfig {
                         max_iterations: Some(0),
@@ -3536,8 +3902,18 @@ mod tests {
             ),
         ];
         for (method, config, setting, readers) in cases {
-            let err = solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), None, method, &config)
-                .expect_err(method);
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(4),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &config,
+            )
+            .expect_err(method);
             assert_eq!(
                 err.fields,
                 serde_json::json!({ "code": "invalid_option",
@@ -3552,10 +3928,13 @@ mod tests {
         }
         for method in ["nn", "savings", "ga", "alns"] {
             assert!(solve(
-                (0.0, 0.0),
-                &ring(4),
-                &fleet(&[10.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(4),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None
+                },
                 method,
                 &quick(method)
             )
@@ -3613,13 +3992,26 @@ mod tests {
                         max_vehicles,
                         ..quick(method)
                     };
-                    let out = solve((0.0, 0.0), customers, vehicles, None, method, &config)
-                        .unwrap_or_else(|e| panic!("{name} {method}: {e:?}"));
+                    let out = solve(
+                        &ProblemInput {
+                            depot: (0.0, 0.0),
+                            customers,
+                            vehicles,
+                            distances: None,
+                            durations: None,
+                        },
+                        method,
+                        &config,
+                    )
+                    .unwrap_or_else(|e| panic!("{name} {method}: {e:?}"));
                     let checked = check(
-                        (0.0, 0.0),
-                        customers,
-                        vehicles,
-                        None,
+                        &ProblemInput {
+                            depot: (0.0, 0.0),
+                            customers,
+                            vehicles,
+                            distances: None,
+                            durations: None,
+                        },
                         method,
                         &config,
                         &as_solution(&out),
@@ -3657,10 +4049,13 @@ mod tests {
         }))
         .expect("a solution");
         let out = check(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             "nn",
             &config,
             &solution,
@@ -3707,14 +4102,28 @@ mod tests {
         let customers = ring(2);
         let vehicles = fleet(&[100.0]);
         let config = InputConfig::default();
-        let out = solve((0.0, 0.0), &customers, &vehicles, None, "nn", &config).expect("solved");
+        let out = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &config,
+        )
+        .expect("solved");
         let mut solution = as_solution(&out);
         solution.total_distance = Some(out.total_distance + 1.0);
         let checked = check(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             "nn",
             &config,
             &solution,
@@ -3726,10 +4135,13 @@ mod tests {
         ));
         solution.route_vehicles = Some(vec![]);
         let e = check(
-            (0.0, 0.0),
-            &customers,
-            &vehicles,
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
             "nn",
             &config,
             &solution,
@@ -3773,10 +4185,13 @@ mod tests {
                 request[setting] = value(setting);
                 let config: InputConfig = serde_json::from_value(request).expect("a config");
                 let run = solve(
-                    (0.0, 0.0),
-                    &ring(4),
-                    &fleet(&[10.0]),
-                    None,
+                    &ProblemInput {
+                        depot: (0.0, 0.0),
+                        customers: &ring(4),
+                        vehicles: &fleet(&[10.0]),
+                        distances: None,
+                        durations: None,
+                    },
                     &info.name,
                     &config,
                 );
@@ -3802,9 +4217,19 @@ mod tests {
     #[test]
     fn a_negative_count_is_refused_like_a_too_small_one() {
         let refused = |method: &str, config: InputConfig| {
-            solve((0.0, 0.0), &ring(4), &fleet(&[10.0]), None, method, &config)
-                .expect_err("out of range")
-                .fields
+            solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(4),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &config,
+            )
+            .expect_err("out of range")
+            .fields
         };
         let expected = |parameter: &str, method: &str, min: f64, got: f64| {
             serde_json::json!({ "code": "parameter_out_of_range", "parameter": parameter,
@@ -3839,10 +4264,13 @@ mod tests {
             );
         }
         let err = solve(
-            (0.0, 0.0),
-            &ring(4),
-            &fleet(&[10.0]),
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &ring(4),
+                vehicles: &fleet(&[10.0]),
+                distances: None,
+                durations: None,
+            },
             "ga",
             &InputConfig {
                 population_size: Some(-1),
@@ -3865,10 +4293,13 @@ mod tests {
                 ..quick(method)
             };
             let err = solve(
-                (0.0, 0.0),
-                &ring(4),
-                &fleet(&[10.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(4),
+                    vehicles: &fleet(&[10.0]),
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &config(method),
             )
@@ -3884,10 +4315,13 @@ mod tests {
             };
             assert!(
                 solve(
-                    (0.0, 0.0),
-                    &ring(4),
-                    &fleet(&[10.0]),
-                    None,
+                    &ProblemInput {
+                        depot: (0.0, 0.0),
+                        customers: &ring(4),
+                        vehicles: &fleet(&[10.0]),
+                        distances: None,
+                        durations: None
+                    },
                     method,
                     &config(method)
                 )
@@ -3915,10 +4349,13 @@ mod tests {
                 ..InputConfig::default()
             };
             let out = solve(
-                (0.0, 0.0),
-                &ring(30),
-                &fleet(&[20.0]),
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(30),
+                    vehicles: &fleet(&[20.0]),
+                    distances: None,
+                    durations: None,
+                },
                 method,
                 &config,
             )
@@ -3930,8 +4367,18 @@ mod tests {
                 time_limit_ms: Some(0),
                 ..InputConfig::default()
             };
-            let err = solve((0.0, 0.0), &ring(3), &fleet(&[20.0]), None, method, &zero)
-                .expect_err("0 ms");
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &ring(3),
+                    vehicles: &fleet(&[20.0]),
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &zero,
+            )
+            .expect_err("0 ms");
             assert_eq!(err.fields["code"], "parameter_out_of_range");
             assert_eq!(err.fields["parameter"], "config.time_limit_ms");
             assert_eq!(err.fields["min"], serde_json::json!(1.0));
@@ -3941,10 +4388,13 @@ mod tests {
             ..InputConfig::default()
         };
         let err = solve(
-            (0.0, 0.0),
-            &ring(3),
-            &fleet(&[20.0]),
-            None,
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &ring(3),
+                vehicles: &fleet(&[20.0]),
+                distances: None,
+                durations: None,
+            },
             "savings",
             &unread,
         )
@@ -3961,8 +4411,18 @@ mod tests {
             customer(serde_json::json!({ "id": 1, "x": 1.0, "y": 0.0 })),
             customer(serde_json::json!({ "id": -1, "x": 0.0, "y": 1.0 })),
         ];
-        let err =
-            solve((0.0, 0.0), &customers, &[], None, "nn", &quick("nn")).expect_err("negative id");
+        let err = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &[],
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &quick("nn"),
+        )
+        .expect_err("negative id");
         assert_eq!(
             err.fields,
             serde_json::json!({ "code": "parameter_out_of_range", "parameter": "id",
@@ -4427,10 +4887,13 @@ mod oracle_tests {
             let capacity = 7.0;
             for method in methods() {
                 let out = solve(
-                    depot,
-                    &input(&list),
-                    &vehicles(6, capacity),
-                    None,
+                    &ProblemInput {
+                        depot,
+                        customers: &input(&list),
+                        vehicles: &vehicles(6, capacity),
+                        distances: None,
+                        durations: None,
+                    },
                     &method.name,
                     &config(),
                 )
@@ -4493,10 +4956,13 @@ mod oracle_tests {
             let optimum = best_tour(depot, &list);
             for method in methods() {
                 let out = solve(
-                    depot,
-                    &input(&list),
-                    &vehicles(1, 1e9),
-                    None,
+                    &ProblemInput {
+                        depot,
+                        customers: &input(&list),
+                        vehicles: &vehicles(1, 1e9),
+                        distances: None,
+                        durations: None,
+                    },
                     &method.name,
                     &config(),
                 )
@@ -4538,10 +5004,13 @@ mod oracle_tests {
         let capacity = 7.0;
         let cfg = config();
         let out = solve(
-            depot,
-            &input(&list),
-            &vehicles(6, capacity),
-            None,
+            &ProblemInput {
+                depot,
+                customers: &input(&list),
+                vehicles: &vehicles(6, capacity),
+                distances: None,
+                durations: None,
+            },
             "ga",
             &cfg,
         )
@@ -4553,10 +5022,13 @@ mod oracle_tests {
         );
         let check_of = |p: &InputSolution| {
             check(
-                depot,
-                &input(&list),
-                &vehicles(6, capacity),
-                None,
+                &ProblemInput {
+                    depot,
+                    customers: &input(&list),
+                    vehicles: &vehicles(6, capacity),
+                    distances: None,
+                    durations: None,
+                },
                 "ga",
                 &cfg,
                 p,
@@ -4635,10 +5107,13 @@ mod oracle_tests {
                 let cfg: InputConfig =
                     serde_json::from_value(json!({ setting: value(setting) })).expect("a config");
                 let result = solve(
-                    depot,
-                    &input(&list),
-                    &vehicles(4, 8.0),
-                    None,
+                    &ProblemInput {
+                        depot,
+                        customers: &input(&list),
+                        vehicles: &vehicles(4, 8.0),
+                        distances: None,
+                        durations: None,
+                    },
                     &method.name,
                     &cfg,
                 );
@@ -4663,10 +5138,13 @@ mod oracle_tests {
         let fleet: Vec<InputVehicle> = vec![serde_json::from_value(json!({})).expect("a vehicle")];
         for method in methods() {
             let out = solve(
-                (0.0, 0.0),
-                &input(&list),
-                &fleet,
-                None,
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &input(&list),
+                    vehicles: &fleet,
+                    distances: None,
+                    durations: None,
+                },
                 &method.name,
                 &config(),
             )
@@ -4694,10 +5172,13 @@ mod oracle_tests {
             .expect("a vehicle")];
             for method in methods() {
                 let err = solve(
-                    (0.0, 0.0),
-                    &input(&list),
-                    &fleet,
-                    None,
+                    &ProblemInput {
+                        depot: (0.0, 0.0),
+                        customers: &input(&list),
+                        vehicles: &fleet,
+                        distances: None,
+                        durations: None,
+                    },
                     &method.name,
                     &config(),
                 )
@@ -4715,7 +5196,18 @@ mod oracle_tests {
         // A customer no vehicle carries is not summed: it is unassigned.
         let fleet = vehicles(1, 1000.0);
         let list = [(10.0, 0.0, 5.0), (20.0, 5.0, 2.0e9), (5.0, 15.0, 2.0e9)];
-        let out = solve((0.0, 0.0), &input(&list), &fleet, None, "nn", &config()).expect("solves");
+        let out = solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &input(&list),
+                vehicles: &fleet,
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &config(),
+        )
+        .expect("solves");
         assert_eq!(out.unassigned.len(), 2);
     }
 }

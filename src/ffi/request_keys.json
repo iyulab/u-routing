@@ -32,6 +32,7 @@
             "depot_x": {},
             "depot_y": {},
             "distances": {},
+            "durations": {},
             "method": {},
             "vehicles": {
               "items": {
@@ -86,6 +87,7 @@
         "depot_x": {},
         "depot_y": {},
         "distances": {},
+        "durations": {},
         "method": {
           "enum": [
             "nn",

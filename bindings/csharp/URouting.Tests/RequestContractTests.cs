@@ -36,6 +36,7 @@ public class RequestContractTests
         // One method plans with an explicit matrix (the coordinates' distances, rounded up), so
         // the key is written; the others read the coordinates.
         Distances = method == RoutingMethod.Savings ? Matrix([(0, 0), (10, 5), (-4, 8), (6, -9), (-7, -6)]) : null,
+        Durations = method == RoutingMethod.Savings ? Matrix([(0, 0), (10, 5), (-4, 8), (6, -9), (-7, -6)]) : null,
         // Every setting the method reads -- one it does not read is refused, so the
         // settings are spread over the methods and every one is written by some run.
         Config = method switch

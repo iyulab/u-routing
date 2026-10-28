@@ -31,6 +31,9 @@ pub struct DistanceMatrix {
     /// Whether every `get(a, b)` equals `get(b, a)`, worked out on first use
     /// and forgotten by `set`.
     symmetric: OnceLock<bool>,
+    /// Travel times, row-major like `data`, when they differ from the
+    /// distances ([`with_travel_times`](Self::with_travel_times)).
+    times: Option<Vec<f64>>,
 }
 
 impl DistanceMatrix {
@@ -40,6 +43,7 @@ impl DistanceMatrix {
             data: vec![0.0; size * size],
             size,
             symmetric: OnceLock::new(),
+            times: None,
         }
     }
 
@@ -68,6 +72,7 @@ impl DistanceMatrix {
             data,
             size,
             symmetric: OnceLock::new(),
+            times: None,
         })
     }
 
@@ -80,6 +85,31 @@ impl DistanceMatrix {
             return f64::INFINITY;
         }
         self.data[from * self.size + to]
+    }
+
+    /// The same matrix with travel times of their own: `times` is an n×n grid
+    /// in row-major order like [`from_data`](Self::from_data)'s, and
+    /// [`travel_time`](Self::travel_time) reads it instead of the distance --
+    /// time windows and the duration limit are kept on it, lengths and costs
+    /// stay the distances. `None` when `times` is not `size × size` long.
+    pub fn with_travel_times(mut self, times: Vec<f64>) -> Option<Self> {
+        if times.len() != self.size * self.size {
+            return None;
+        }
+        self.times = Some(times);
+        Some(self)
+    }
+
+    /// The travel time from `from` to `to`: the travel time given with
+    /// [`with_travel_times`](Self::with_travel_times), else the distance (one
+    /// unit of distance takes one unit of time). `f64::INFINITY` out of bounds,
+    /// as [`get`](Self::get).
+    pub fn travel_time(&self, from: usize, to: usize) -> f64 {
+        match &self.times {
+            Some(times) if from < self.size && to < self.size => times[from * self.size + to],
+            Some(_) => f64::INFINITY,
+            None => self.get(from, to),
+        }
     }
 
     /// Sets the distance from location `from` to location `to`.

@@ -139,6 +139,14 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
     /// </summary>
     public IReadOnlyList<IReadOnlyList<double>>? Distances { get; init; }
 
+    /// <summary>
+    /// The travel time between every two points, laid out as <see cref="Distances"/>, or
+    /// <c>null</c> for travel time equal to distance. Time windows, <see cref="Vehicle.MaxDuration"/>
+    /// and each route's duration are kept on it; lengths and costs stay the distances. Refused
+    /// as <see cref="Distances"/> is.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<double>>? Durations { get; init; }
+
     /// <summary>The method (nearest neighbour when not set).</summary>
     public RoutingMethod Method { get; init; } = RoutingMethod.NearestNeighbor;
 

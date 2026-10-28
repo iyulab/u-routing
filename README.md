@@ -282,6 +282,11 @@ there shorter than the way back, and the moves that reverse part of a route pric
 the reversed edges. The coordinates still order the customers for `"ga"`'s sweep
 seed only.
 
+**Travel times: `durations`.** Travel time equals distance unless `durations` gives it,
+laid out as `distances` (with or without `distances` beside it). Time windows,
+`max_duration` and each route's `duration` are kept on it; lengths, `max_distance` and
+costs stay the distances -- a slow road is long in time and short in kilometres.
+
 ```javascript
 solve_vrp({
   customers: [{ id: 1, x: 0, y: 0, demand: 1 }, { id: 2, x: 0, y: 0, demand: 1 }],

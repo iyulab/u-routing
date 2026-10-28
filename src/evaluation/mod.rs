@@ -62,8 +62,9 @@ pub fn route_checks_needed(customers: &[Customer], limits: &RouteLimits) -> bool
 
 /// Whether a route `depot → route[0] → … → depot` reaches every customer by
 /// its due time and keeps `limits`, with the same clock as
-/// [`RouteEvaluator::build_route`]: departure at 0, travel time equal to
-/// distance, waiting for a window that has not opened, and service before
+/// [`RouteEvaluator::build_route`]: departure at 0, travel times from
+/// [`DistanceMatrix::travel_time`] (the distances unless it has times of its
+/// own), waiting for a window that has not opened, and service before
 /// moving on. Capacity is not checked here. O(n) and allocation-free, so a
 /// search can ask it about every candidate move.
 pub fn route_feasible(
@@ -77,9 +78,8 @@ pub fn route_feasible(
     let mut distance = 0.0;
     let mut prev = depot;
     for &cid in route {
-        let travel = distances.get(prev, cid);
-        distance += travel;
-        let arrival = time + travel;
+        distance += distances.get(prev, cid);
+        let arrival = time + distances.travel_time(prev, cid);
         let customer = &customers[cid];
         let start = match customer.time_window() {
             Some(tw) => {
@@ -93,8 +93,10 @@ pub fn route_feasible(
         time = start + customer.service_duration();
         prev = cid;
     }
-    let back = distances.get(prev, depot);
-    limits.allow(distance + back, time + back)
+    limits.allow(
+        distance + distances.get(prev, depot),
+        time + distances.travel_time(prev, depot),
+    )
 }
 
 #[cfg(test)]

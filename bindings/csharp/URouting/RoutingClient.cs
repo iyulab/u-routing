@@ -180,15 +180,9 @@ public sealed class RoutingClient : IDisposable
             ["method"] = JsonSerializer.SerializeToNode(request.Method, RoutingJson.Default.RoutingMethod),
         };
         if (request.Distances is { } distances)
-        {
-            var rows = new JsonArray();
-            for (var i = 0; i < distances.Count; i++)
-            {
-                var at = $"distances[{i}]";
-                rows.Add((JsonNode)new JsonArray(distances[i].Select((d, j) => Num(at, d, j)).ToArray()));
-            }
-            body["distances"] = rows;
-        }
+            body["distances"] = Grid("distances", distances);
+        if (request.Durations is { } durations)
+            body["durations"] = Grid("durations", durations);
         if (request.Config is { } c2)
         {
             var config = new JsonObject();
@@ -205,6 +199,18 @@ public sealed class RoutingClient : IDisposable
             body["config"] = config;
         }
         return body;
+    }
+
+    /// <summary>A matrix as rows of finite numbers, refused where a value is not one.</summary>
+    private static JsonArray Grid(string parameter, IReadOnlyList<IReadOnlyList<double>> grid)
+    {
+        var rows = new JsonArray();
+        for (var i = 0; i < grid.Count; i++)
+        {
+            var at = $"{parameter}[{i}]";
+            rows.Add((JsonNode)new JsonArray(grid[i].Select((d, j) => Num(at, d, j)).ToArray()));
+        }
+        return rows;
     }
 
     private static void Put(JsonObject o, string key, double? value, string parameter)

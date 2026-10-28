@@ -50,6 +50,10 @@ struct VrpInput {
     /// then the customers in the order given. Absent: Euclidean.
     #[serde(default)]
     distances: Option<Vec<Vec<f64>>>,
+    /// Travel time between every two points, laid out as `distances`.
+    /// Absent: travel time equals distance.
+    #[serde(default)]
+    durations: Option<Vec<Vec<f64>>>,
     #[serde(default = "service::default_method")]
     method: String,
     #[serde(default)]
@@ -155,10 +159,13 @@ pub unsafe extern "C" fn urouting_solve_vrp(
 
         let start = Instant::now();
         match service::solve(
-            (input.depot_x, input.depot_y),
-            &input.customers,
-            &input.vehicles,
-            input.distances.as_deref(),
+            &service::ProblemInput {
+                depot: (input.depot_x, input.depot_y),
+                customers: &input.customers,
+                vehicles: &input.vehicles,
+                distances: input.distances.as_deref(),
+                durations: input.durations.as_deref(),
+            },
             &input.method,
             &config,
         ) {
@@ -197,10 +204,13 @@ pub unsafe extern "C" fn urouting_check_solution(
         let problem = input.problem;
         let config = problem.config.unwrap_or_default();
         match service::check(
-            (problem.depot_x, problem.depot_y),
-            &problem.customers,
-            &problem.vehicles,
-            problem.distances.as_deref(),
+            &service::ProblemInput {
+                depot: (problem.depot_x, problem.depot_y),
+                customers: &problem.customers,
+                vehicles: &problem.vehicles,
+                distances: problem.distances.as_deref(),
+                durations: problem.durations.as_deref(),
+            },
             &problem.method,
             &config,
             &input.solution,

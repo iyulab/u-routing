@@ -58,9 +58,8 @@ impl<'a> RouteEvaluator<'a> {
         let mut prev = depot_id;
 
         for &cid in customer_ids {
-            let travel = self.distances.get(prev, cid);
-            total_distance += travel;
-            let arrival = current_time + travel;
+            total_distance += self.distances.get(prev, cid);
+            let arrival = current_time + self.distances.travel_time(prev, cid);
 
             let customer = &self.customers[cid];
 
@@ -94,9 +93,8 @@ impl<'a> RouteEvaluator<'a> {
         }
 
         // Return to depot
-        let return_travel = self.distances.get(prev, depot_id);
-        total_distance += return_travel;
-        let total_duration = current_time + return_travel;
+        total_distance += self.distances.get(prev, depot_id);
+        let total_duration = current_time + self.distances.travel_time(prev, depot_id);
 
         route.set_total_distance(total_distance);
         route.set_total_duration(total_duration);

@@ -716,6 +716,21 @@
             "null"
           ]
         },
+        "durations": {
+          "default": null,
+          "description": "Travel time between every two points, laid out as `distances`. Time\nwindows, `max_duration` and each route's `duration` are kept on it;\nlengths and costs stay the distances. Absent or `null`: travel time\nequals distance.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "method": {
           "default": "nn",
           "enum": [

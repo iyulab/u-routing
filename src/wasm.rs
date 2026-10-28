@@ -216,6 +216,13 @@ struct VrpInput {
     #[serde(default)]
     #[tsify(optional, type = "number[][] | null")]
     distances: Option<Vec<Vec<f64>>>,
+    /// Travel time between every two points, laid out as `distances`. Time
+    /// windows, `max_duration` and each route's `duration` are kept on it;
+    /// lengths and costs stay the distances. Absent or `null`: travel time
+    /// equals distance.
+    #[serde(default)]
+    #[tsify(optional, type = "number[][] | null")]
+    durations: Option<Vec<Vec<f64>>>,
     #[serde(default = "service::default_method")]
     #[tsify(optional)]
     #[tsify(type = "\"nn\" | \"savings\" | \"ga\" | \"alns\"")]
@@ -253,10 +260,13 @@ pub fn check_vrp_solution(
     let solution: InputSolution = from_js(solution, "solution")?;
     let config = input.config.unwrap_or_default();
     let output = service::check(
-        (input.depot.x, input.depot.y),
-        &input.customers,
-        &input.vehicles,
-        input.distances.as_deref(),
+        &service::ProblemInput {
+            depot: (input.depot.x, input.depot.y),
+            customers: &input.customers,
+            vehicles: &input.vehicles,
+            distances: input.distances.as_deref(),
+            durations: input.durations.as_deref(),
+        },
         &input.method,
         &config,
         &solution,
@@ -328,10 +338,13 @@ pub fn solve_vrp(
 
     let start = web_time();
     let mut output = service::solve(
-        (input.depot.x, input.depot.y),
-        &input.customers,
-        &input.vehicles,
-        input.distances.as_deref(),
+        &service::ProblemInput {
+            depot: (input.depot.x, input.depot.y),
+            customers: &input.customers,
+            vehicles: &input.vehicles,
+            distances: input.distances.as_deref(),
+            durations: input.durations.as_deref(),
+        },
         &input.method,
         &config,
     )
@@ -449,10 +462,13 @@ mod path_tests {
     ) -> Result<crate::service::VrpOutput, crate::service::ServiceError> {
         let input: super::VrpInput = super::from_json(problem, "problem")?;
         crate::service::solve(
-            (input.depot.x, input.depot.y),
-            &input.customers,
-            &input.vehicles,
-            input.distances.as_deref(),
+            &crate::service::ProblemInput {
+                depot: (input.depot.x, input.depot.y),
+                customers: &input.customers,
+                vehicles: &input.vehicles,
+                distances: input.distances.as_deref(),
+                durations: input.durations.as_deref(),
+            },
             &input.method,
             &input.config.unwrap_or_default(),
         )

@@ -18,6 +18,11 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   refused as `dimension_mismatch` (`parameter` `"distances"` or `"distances[i]"`), a negative
   entry as `parameter_out_of_range`, a non-finite one as `value_not_finite`. The matrix may be
   asymmetric (see Fixed).
+- `durations` on a request (and .NET `VrpRequest.Durations`), laid out as `distances`: travel
+  times of their own. Time windows, `max_duration` and each route's `duration` are kept on it;
+  lengths, `max_distance` and costs stay the distances. Refused as `distances` is (`parameter`
+  `"durations"` / `"durations[i]"`). In Rust, `DistanceMatrix::with_travel_times` and
+  `DistanceMatrix::travel_time`, which every method's clock reads.
 
 - `examples/cvrplib.rs`: measures `ga` on CVRPLIB instances (`.vrp` with rounded Euclidean
   distances, best known costs from `.sol`), checking every answer serves each customer once

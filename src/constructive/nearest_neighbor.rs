@@ -111,7 +111,10 @@ pub fn nearest_neighbor(
                 let back = distances.get(i, depot);
                 if !limits.allow(
                     travelled + d + back,
-                    clock + d + customers[i].service_duration() + back,
+                    clock
+                        + distances.travel_time(current, i)
+                        + customers[i].service_duration()
+                        + distances.travel_time(i, depot),
                 ) {
                     continue;
                 }
@@ -126,7 +129,8 @@ pub fn nearest_neighbor(
                     route_customers.push(next);
                     current_load += customers[next].demand();
                     travelled += d;
-                    clock += d + customers[next].service_duration();
+                    clock +=
+                        distances.travel_time(current, next) + customers[next].service_duration();
                     current = next;
                 }
                 None => break,

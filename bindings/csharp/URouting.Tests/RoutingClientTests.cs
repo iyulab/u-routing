@@ -200,6 +200,11 @@ public class RoutingClientTests
         var oneWay = _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, 3], [6, 5, 0]], Method = RoutingMethod.Savings });
         Assert.Equal(13.0, oneWay.TotalDistance, 9);
 
+        // Twice as long in time: the route's duration, not its distance, doubles.
+        var slow = _client.SolveVrp(request with { Durations = [[0, 8, 12], [8, 0, 6], [12, 6, 0]] });
+        Assert.Equal(13.0, slow.TotalDistance, 9);
+        Assert.Equal(26.0, slow.RouteSummaries.Sum(r => r.Duration), 9);
+
         var nan = Assert.Throws<RoutingException>(() =>
             _client.SolveVrp(request with { Distances = [[0, 4, 6], [4, 0, double.NaN], [6, 3, 0]] }));
         Assert.Equal("value_not_finite", nan.ErrorCode);

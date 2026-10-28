@@ -108,11 +108,10 @@ pub fn split_tw(
             // Compute distance
             if j == i {
                 route_dist = distances.get(depot, cid);
-                time = route_dist;
+                time = distances.travel_time(depot, cid);
             } else {
-                let travel = distances.get(tour[j - 1], cid);
-                route_dist += travel;
-                time += travel;
+                route_dist += distances.get(tour[j - 1], cid);
+                time += distances.travel_time(tour[j - 1], cid);
             }
 
             // Check time window
@@ -133,7 +132,7 @@ pub fn split_tw(
             // A route over the vehicle's distance or duration limit is not an
             // arc of the split graph. A longer one may still be (its return
             // leg can be shorter), so the scan goes on.
-            if !limits.allow(total_route, time + back) {
+            if !limits.allow(total_route, time + distances.travel_time(cid, depot)) {
                 continue;
             }
             let new_cost = cost[i] + route_cost + total_route;

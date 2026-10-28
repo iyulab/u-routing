@@ -106,7 +106,7 @@ pub fn nearest_neighbor_tw(
 
                 // Check time window feasibility
                 let travel = distances.get(current, i);
-                let arrival = current_time + travel;
+                let arrival = current_time + distances.travel_time(current, i);
 
                 if let Some(tw) = customers[i].time_window() {
                     if arrival > tw.due() {
@@ -119,10 +119,9 @@ pub fn nearest_neighbor_tw(
                     Some(tw) => arrival + tw.waiting_time(arrival),
                     None => arrival,
                 };
-                let back = distances.get(i, depot);
                 if !limits.allow(
-                    travelled + travel + back,
-                    start + customers[i].service_duration() + back,
+                    travelled + travel + distances.get(i, depot),
+                    start + customers[i].service_duration() + distances.travel_time(i, depot),
                 ) {
                     continue;
                 }
@@ -140,7 +139,7 @@ pub fn nearest_neighbor_tw(
                     route_customers.push(next);
 
                     let travel = distances.get(current, next);
-                    let arrival = current_time + travel;
+                    let arrival = current_time + distances.travel_time(current, next);
 
                     // Update time considering waiting
                     let service_start = if let Some(tw) = customers[next].time_window() {
