@@ -21,6 +21,7 @@
 //! Routeing Problems with Time Windows", *Journal of the Operational Research
 //! Society* 46(12), 1433-1446.
 
+use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
@@ -71,6 +72,7 @@ pub fn exchange_improve(
     }
 
     let depot = vehicle.depot_id();
+    let floor = gain_floor(distances);
     let mut routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
 
     let mut improved = true;
@@ -87,7 +89,7 @@ pub fn exchange_improve(
                     customers,
                     vehicle,
                 ) {
-                    if delta < -1e-10 {
+                    if delta < -floor {
                         // Execute the exchange
                         let tail1: Vec<usize> = routes[r1][cut1..].to_vec();
                         let tail2: Vec<usize> = routes[r2][cut2..].to_vec();
@@ -119,6 +121,7 @@ fn find_best_exchange(
     let n2 = route2.len();
 
     let limits = &RouteLimits::of(vehicle);
+    let floor = gain_floor(distances);
     let constrained = route_checks_needed(customers, limits);
     let mut best: Option<(usize, usize, f64)> = None;
 
@@ -173,7 +176,7 @@ fn find_best_exchange(
 
             let delta = (new_edge1 + new_edge2) - (old_edge1 + old_edge2);
 
-            if delta < -1e-10 && best.as_ref().is_none_or(|b| delta < b.2) {
+            if delta < -floor && best.as_ref().is_none_or(|b| delta < b.2) {
                 if constrained {
                     let new1: Vec<usize> = route1[..cut1]
                         .iter()

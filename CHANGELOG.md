@@ -8,6 +8,20 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Fixed
+
+A map in small units (coordinates of 1e-9, say) was treated as if nothing could be gained on it:
+
+- The local search (`relocate_improve`, `exchange_improve`, 2-opt, Or-opt, 3-opt, route
+  elimination and minimisation, so `"ga"` and `"alns"` too) accepted a move only when it saved
+  more than an absolute 1e-10 (1e-9 for the route removals), so on a map whose distances are
+  that small it took none and returned its start. The least gain is now 1e-12 of the largest
+  distance (the same 1e-10 on a map of order 100), and the answers on the usual maps are
+  unchanged. `DistanceMatrix::scale` is that largest distance.
+- `check_solution` and `check_vrp_solution` compared a reported distance or cost with the
+  recomputed one by a relative 1e-6 with a floor of 1 on the distance, so on a map in small
+  units a wrong figure passed. The tolerance is now a share of the figure itself.
+
 ## [0.25.0] - 2026-10-29
 
 Depends on u-metaheur 0.19 and u-numflow 0.16. The .NET client is `URouting` 0.22.0.

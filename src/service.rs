@@ -1394,12 +1394,12 @@ pub(crate) fn check(
         })
         .collect();
     if let (Some(reported), Some(actual)) = (solution.total_distance, actual_total) {
-        if (reported - actual).abs() > 1e-6 * actual.abs().max(1.0) {
+        if (reported - actual).abs() > 1e-6 * actual.abs() {
             violations.push(PlanViolation::DistanceMismatch { reported, actual });
         }
     }
     if let (Some(reported), Some(actual)) = (solution.total_cost, actual_cost) {
-        if (reported - actual).abs() > 1e-6 * actual.abs().max(1.0) {
+        if (reported - actual).abs() > 1e-6 * actual.abs() {
             violations.push(PlanViolation::CostMismatch { reported, actual });
         }
     }
@@ -4095,6 +4095,49 @@ mod tests {
             wire,
             json!({ "code": "capacity_exceeded", "route": 0, "load": 10, "capacity": 5 })
         );
+    }
+
+    /// A reported total is judged by its share of the plan's own, so a wrong
+    /// figure on a map in small units is as wrong as on a map of order 10.
+    #[test]
+    fn a_reported_total_is_compared_by_its_share_whatever_the_unit() {
+        for scale in [1e-9, 1.0, 1e6] {
+            let customers: Vec<InputCustomer> = ring(2)
+                .into_iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let a = (i + 1) as f64;
+                    customer(serde_json::json!({
+                        "id": i + 1,
+                        "x": a.cos() * 10.0 * scale,
+                        "y": a.sin() * 10.0 * scale,
+                        "demand": 5.0
+                    }))
+                })
+                .collect();
+            let vehicles = fleet(&[100.0]);
+            let config = InputConfig::default();
+            let input = ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            };
+            let out = solve(&input, "nn", &config).expect("solved");
+            let mut solution = as_solution(&out);
+            let right = check(&input, "nn", &config, &solution).expect("checked");
+            assert!(right.violations.is_empty(), "a correct plan, scale {scale}");
+            solution.total_distance = Some(out.total_distance * 1.001);
+            let wrong = check(&input, "nn", &config, &solution).expect("checked");
+            assert!(
+                wrong
+                    .violations
+                    .iter()
+                    .any(|v| matches!(v, PlanViolation::DistanceMismatch { .. })),
+                "a total 0.1 % off is caught, scale {scale}"
+            );
+        }
     }
 
     #[test]

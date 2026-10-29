@@ -107,7 +107,7 @@ pub(crate) fn minimize_routes<R: Rng>(
                 .map(|(_, route)| route.clone())
                 .collect();
             if let Some(rest) = pool.empty_into(rest, &routes[r], max_iterations, rng, deadline) {
-                if cost(&rest) < before - 1e-9 {
+                if cost(&rest) < before - 1e-12 * before.abs() {
                     routes = rest;
                     continue 'search;
                 }

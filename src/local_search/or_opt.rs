@@ -18,6 +18,7 @@
 //! Or, I. (1976). "Traveling Salesman-Type Combinatorial Problems and Their
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
+use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
@@ -118,7 +119,8 @@ fn try_or_opt_pass(
         return false;
     }
 
-    let mut best_delta = -1e-10;
+    let floor = gain_floor(distances);
+    let mut best_delta = -floor;
     let mut best_from = 0;
     let mut best_to = 0;
 
@@ -178,7 +180,7 @@ fn try_or_opt_pass(
         }
     }
 
-    if best_delta < -1e-10 {
+    if best_delta < -floor {
         *route = moved(route, best_from, best_to, seg_len);
         true
     } else {

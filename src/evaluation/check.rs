@@ -146,7 +146,7 @@ pub fn check_solution(
             push(v.kind);
         }
         let (reported, actual) = (route.total_distance(), timed.total_distance());
-        if (reported - actual).abs() > DISTANCE_TOLERANCE * actual.abs().max(1.0) {
+        if (reported - actual).abs() > DISTANCE_TOLERANCE * actual.abs() {
             push(ViolationType::DistanceMismatch {
                 route_index,
                 reported,

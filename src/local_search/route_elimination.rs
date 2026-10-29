@@ -28,6 +28,7 @@
 //! Bräysy, O. & Gendreau, M. (2005). "Vehicle Routing Problem with Time
 //! Windows, Part II: Metaheuristics", *Transportation Science* 39(1), 119-139.
 
+use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Vehicle};
@@ -116,7 +117,7 @@ pub(crate) fn eliminate_routes(
                     break;
                 }
             }
-            if placed_all && added < saved - 1e-9 {
+            if placed_all && added < saved - gain_floor(distances) {
                 routes = rest;
                 continue 'search;
             }

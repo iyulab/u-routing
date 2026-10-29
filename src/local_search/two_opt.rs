@@ -21,6 +21,7 @@
 //! Croes, G.A. (1958). "A method for solving traveling salesman problems",
 //! *Operations Research* 6(6), 791-812.
 
+use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
@@ -77,6 +78,7 @@ pub fn two_opt_improve(
     }
 
     let constrained = route_checks_needed(customers, limits);
+    let floor = gain_floor(distances);
     let mut current = route.to_vec();
     let mut improved = true;
 
@@ -87,7 +89,7 @@ pub fn two_opt_improve(
         for i in 0..n - 1 {
             for j in i + 1..n {
                 let delta = two_opt_delta(&current, depot, distances, i, j);
-                if delta < -1e-10 {
+                if delta < -floor {
                     // Reverse segment [i+1..=j] — but in our 0-indexed route
                     // that means reverse [i..=j] since i and j are customer indices
                     current[i..=j].reverse();

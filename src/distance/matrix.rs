@@ -31,6 +31,8 @@ pub struct DistanceMatrix {
     /// Whether every `get(a, b)` equals `get(b, a)`, worked out on first use
     /// and forgotten by `set`.
     symmetric: OnceLock<bool>,
+    /// The largest distance, worked out on first use and forgotten by `set`.
+    scale: OnceLock<f64>,
     /// Travel times, row-major like `data`, when they differ from the
     /// distances ([`with_travel_times`](Self::with_travel_times)).
     times: Option<Vec<f64>>,
@@ -43,6 +45,7 @@ impl DistanceMatrix {
             data: vec![0.0; size * size],
             size,
             symmetric: OnceLock::new(),
+            scale: OnceLock::new(),
             times: None,
         }
     }
@@ -72,6 +75,7 @@ impl DistanceMatrix {
             data,
             size,
             symmetric: OnceLock::new(),
+            scale: OnceLock::new(),
             times: None,
         })
     }
@@ -119,7 +123,17 @@ impl DistanceMatrix {
         if from < self.size && to < self.size {
             self.data[from * self.size + to] = distance;
             self.symmetric = OnceLock::new();
+            self.scale = OnceLock::new();
         }
+    }
+
+    /// The largest distance of the matrix: the size the distances are in,
+    /// against which a search tells a gain from rounding (0 for an empty or
+    /// all-zero matrix).
+    pub fn scale(&self) -> f64 {
+        *self
+            .scale
+            .get_or_init(|| self.data.iter().copied().fold(0.0, f64::max))
     }
 
     /// Number of locations in this matrix.

@@ -19,6 +19,7 @@
 //! Lin, S. (1965). "Computer Solutions of the Traveling Salesman Problem",
 //! *Bell System Technical Journal* 44(10), 2245-2269.
 
+use super::gain_floor;
 use super::or_opt::route_distance;
 use super::two_opt::reversal_delta;
 use crate::distance::DistanceMatrix;
@@ -117,6 +118,7 @@ fn try_three_opt_move(
     accepts: &dyn Fn(&[usize]) -> bool,
 ) -> Option<Vec<usize>> {
     let n = route.len();
+    let floor = gain_floor(distances);
 
     // Segment endpoints for cost calculation
     let a_end = route[i];
@@ -150,7 +152,7 @@ fn try_three_opt_move(
         + distances.get(c_start, d_start)
         + rev_c;
     let delta1 = cost1 - old_cost;
-    if delta1 < -1e-10 {
+    if delta1 < -floor {
         improving.push((delta1, 1));
     }
 
@@ -160,7 +162,7 @@ fn try_three_opt_move(
         + distances.get(c_end, d_start)
         + rev_b;
     let delta2 = cost2 - old_cost;
-    if delta2 < -1e-10 {
+    if delta2 < -floor {
         improving.push((delta2, 2));
     }
 
@@ -171,7 +173,7 @@ fn try_three_opt_move(
         + rev_b
         + rev_c;
     let delta3 = cost3 - old_cost;
-    if delta3 < -1e-10 {
+    if delta3 < -floor {
         improving.push((delta3, 3));
     }
 
@@ -180,7 +182,7 @@ fn try_three_opt_move(
         + distances.get(c_end, b_start)
         + distances.get(b_end, d_start);
     let delta4 = cost4 - old_cost;
-    if delta4 < -1e-10 {
+    if delta4 < -floor {
         improving.push((delta4, 4));
     }
 
@@ -190,7 +192,7 @@ fn try_three_opt_move(
         + distances.get(b_start, d_start)
         + rev_b;
     let delta5 = cost5 - old_cost;
-    if delta5 < -1e-10 {
+    if delta5 < -floor {
         improving.push((delta5, 5));
     }
 
@@ -200,7 +202,7 @@ fn try_three_opt_move(
         + distances.get(b_end, d_start)
         + rev_c;
     let delta6 = cost6 - old_cost;
-    if delta6 < -1e-10 {
+    if delta6 < -floor {
         improving.push((delta6, 6));
     }
 
@@ -211,7 +213,7 @@ fn try_three_opt_move(
         + rev_b
         + rev_c;
     let delta7 = cost7 - old_cost;
-    if delta7 < -1e-10 {
+    if delta7 < -floor {
         improving.push((delta7, 7));
     }
 

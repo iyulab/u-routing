@@ -17,6 +17,7 @@
 //! Or, I. (1976). "Traveling Salesman-Type Combinatorial Problems and Their
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
+use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
@@ -99,6 +100,8 @@ struct Relocations<'a> {
     vehicle: &'a Vehicle,
     limits: RouteLimits,
     constrained: bool,
+    /// The least gain that counts (see [`gain_floor`]).
+    floor: f64,
     loads: Vec<i32>,
     /// `pairs[from * n + to]`: the best move from route `from` into `to`.
     pairs: Vec<Option<RelocateMove>>,
@@ -118,6 +121,7 @@ impl<'a> Relocations<'a> {
             distances,
             vehicle,
             constrained: route_checks_needed(customers, &limits),
+            floor: gain_floor(distances),
             limits,
             loads: routes.iter().map(|r| Self::load(customers, r)).collect(),
             pairs: vec![None; n * n],
@@ -203,7 +207,7 @@ impl<'a> Relocations<'a> {
                 let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
                     + if to_route.is_empty() { fixed } else { 0.0 };
                 let delta = removal_delta + insertion_delta;
-                if delta < -1e-10 {
+                if delta < -self.floor {
                     if self.constrained {
                         candidates.push((delta, from_pos, to_pos));
                     } else if cheapest.is_none_or(|(d, _, _)| delta < d) {
