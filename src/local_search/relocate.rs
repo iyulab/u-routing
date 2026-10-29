@@ -86,7 +86,7 @@ pub fn relocate_improve(
         let customer_id = routes[mv.from_route][mv.from_pos];
         routes[mv.from_route].remove(mv.from_pos);
         routes[mv.to_route].insert(mv.to_pos, customer_id);
-        search.moved(&routes, mv.from_route, mv.to_route);
+        search.moved(&routes, &mv);
     }
 
     // Rebuild solution
@@ -112,6 +112,9 @@ struct Relocations<'a> {
     /// costs to insert a customer into a route does not depend on where the
     /// customer is, so it stays true until the route itself changes.
     least_insertion: Vec<f64>,
+    /// `argmin[customer * routes + to]`: a position of `to` where
+    /// `least_insertion` is reached (meaningful while that is known).
+    argmin: Vec<u32>,
     /// Whether a customer with no improving position is skipped on the
     /// strength of `least_insertion` (the scan it saves finds nothing).
     prune: bool,
@@ -147,6 +150,7 @@ impl<'a> Relocations<'a> {
             pairs: vec![None; n * n],
             routes: n,
             least_insertion: vec![f64::NAN; customers.len() * n],
+            argmin: vec![0; customers.len() * n],
             prune,
         };
         for from in 0..n {
@@ -181,22 +185,87 @@ impl<'a> Relocations<'a> {
             .cloned()
     }
 
-    /// Searches again every pair with route `a` or `b` in it.
-    fn moved(&mut self, routes: &[Vec<usize>], a: usize, b: usize) {
+    /// Searches again every pair with route `a` or `b` in it, after the move
+    /// `mv` was applied to `routes`.
+    fn moved(&mut self, routes: &[Vec<usize>], mv: &RelocateMove) {
         let n = routes.len();
+        let (a, b) = (mv.from_route, mv.to_route);
         for r in [a, b] {
             self.loads[r] = Self::load(self.customers, &routes[r]);
-            // The route changed: what it costs to insert into it is not known.
-            for customer in 0..self.customers.len() {
-                self.least_insertion[customer * self.routes + r] = f64::NAN;
-            }
         }
+        // The moved customer sits in `b` now, and `a` lost it: what it costs
+        // to insert into a route it is in was never known.
+        let moved = routes[b][mv.to_pos];
+        self.least_insertion[moved * self.routes + b] = f64::NAN;
+        self.least_insertion[moved * self.routes + a] = f64::NAN;
+        self.after_removal(routes, a, mv.from_pos);
+        self.after_insertion(routes, b, mv.to_pos);
         for other in 0..n {
             for r in [a, b] {
                 let out_of = self.best_between(routes, r, other);
                 self.pairs[r * n + other] = out_of;
                 let into = self.best_between(routes, other, r);
                 self.pairs[other * n + r] = into;
+            }
+        }
+    }
+
+    /// Brings the known least insertions into route `r` up to date after the
+    /// customer at `pos` left it. Of its positions only the two around the
+    /// customer vanish, and one (its neighbours joined) appears: a least
+    /// reached elsewhere stays, and is beaten only by the new position.
+    fn after_removal(&mut self, routes: &[Vec<usize>], r: usize, pos: usize) {
+        let depot = self.vehicle.depot_id();
+        let route = &routes[r];
+        for customer in 0..self.customers.len() {
+            let slot = customer * self.routes + r;
+            let known = self.least_insertion[slot];
+            if !known.is_finite() {
+                continue;
+            }
+            let at = self.argmin[slot] as usize;
+            if at == pos || at == pos + 1 {
+                self.least_insertion[slot] = f64::NAN;
+                continue;
+            }
+            let joined = insertion_cost(route, pos, customer, depot, self.distances);
+            if joined < known {
+                self.least_insertion[slot] = joined;
+                self.argmin[slot] = pos as u32;
+            } else if at > pos + 1 {
+                self.argmin[slot] = (at - 1) as u32;
+            }
+        }
+    }
+
+    /// Brings the known least insertions into route `r` up to date after a
+    /// customer was inserted at `pos`: the position it split becomes two.
+    fn after_insertion(&mut self, routes: &[Vec<usize>], r: usize, pos: usize) {
+        let depot = self.vehicle.depot_id();
+        let route = &routes[r];
+        for customer in 0..self.customers.len() {
+            let slot = customer * self.routes + r;
+            let known = self.least_insertion[slot];
+            if !known.is_finite() {
+                continue;
+            }
+            let at = self.argmin[slot] as usize;
+            if at == pos {
+                self.least_insertion[slot] = f64::NAN;
+                continue;
+            }
+            let before = insertion_cost(route, pos, customer, depot, self.distances);
+            let after = insertion_cost(route, pos + 1, customer, depot, self.distances);
+            let (split, split_at) = if after < before {
+                (after, pos + 1)
+            } else {
+                (before, pos)
+            };
+            if split < known {
+                self.least_insertion[slot] = split;
+                self.argmin[slot] = split_at as u32;
+            } else if at > pos {
+                self.argmin[slot] = (at + 1) as u32;
             }
         }
     }
@@ -242,10 +311,14 @@ impl<'a> Relocations<'a> {
                 continue;
             }
             let mut least = f64::INFINITY;
+            let mut least_at = 0;
             for to_pos in 0..=to_route.len() {
                 let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
                     + if to_route.is_empty() { fixed } else { 0.0 };
-                least = least.min(insertion_delta);
+                if insertion_delta < least {
+                    least = insertion_delta;
+                    least_at = to_pos;
+                }
                 let delta = removal_delta + insertion_delta;
                 if delta < -self.floor {
                     if self.constrained {
@@ -259,6 +332,7 @@ impl<'a> Relocations<'a> {
                 }
             }
             self.least_insertion[slot] = least;
+            self.argmin[slot] = least_at as u32;
         }
         candidates.extend(cheapest);
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -356,6 +430,44 @@ mod tests {
     use super::*;
     use crate::constructive::nearest_neighbor;
 
+    impl Relocations<'_> {
+        /// Every known least insertion is what a scan of the route as it
+        /// stands finds, bit for bit, and `argmin` is a position reaching it.
+        fn assert_cache_exact(&self, routes: &[Vec<usize>]) {
+            let depot = self.vehicle.depot_id();
+            for (r, route) in routes.iter().enumerate() {
+                for customer in 0..self.customers.len() {
+                    let known = self.least_insertion[customer * self.routes + r];
+                    if !known.is_finite() || route.contains(&customer) {
+                        continue;
+                    }
+                    let fixed = if route.is_empty() {
+                        self.vehicle.fixed_cost_in_distance()
+                    } else {
+                        0.0
+                    };
+                    let values: Vec<f64> = (0..=route.len())
+                        .map(|pos| {
+                            insertion_cost(route, pos, customer, depot, self.distances) + fixed
+                        })
+                        .collect();
+                    let least = values.iter().copied().fold(f64::INFINITY, f64::min);
+                    assert_eq!(
+                        known.to_bits(),
+                        least.to_bits(),
+                        "customer {customer} route {r}"
+                    );
+                    let at = self.argmin[customer * self.routes + r] as usize;
+                    assert_eq!(
+                        values[at].to_bits(),
+                        least.to_bits(),
+                        "argmin of {customer} in {r}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Moves taken with the scan that skips customers with no improving
     /// position are exactly those taken by the full scan, on random maps with
     /// ties (a coarse grid), tight capacities and routes of every length.
@@ -395,7 +507,10 @@ mod tests {
                     taken.push((mv.from_route, mv.from_pos, mv.to_route, mv.to_pos));
                     let id = routes[mv.from_route].remove(mv.from_pos);
                     routes[mv.to_route].insert(mv.to_pos, id);
-                    search.moved(&routes, mv.from_route, mv.to_route);
+                    search.moved(&routes, &mv);
+                    if prune {
+                        search.assert_cache_exact(&routes);
+                    }
                 }
                 (taken, routes)
             };
