@@ -329,11 +329,13 @@ left out, as many as the plan needs). A fleet may mix kinds of different
 capacity, costs and limits. Customers the fleet cannot carry come back in
 `unassigned`. Without `vehicles`, there is one vehicle of unlimited capacity.
 `"nn"` fills the vehicles in the order of the list, a kind of `count` vehicles
-as that many in a row. `"savings"`, `"ga"` and `"alns"` plan with the kind that
-carries the most and then give every route the kind that carries it cheapest,
-within the counts; a fleet too small for what that needs loses its lightest
-routes first, and their customers are placed on the remaining routes wherever
-they fit.
+as that many in a row. `"savings"`, `"ga"` and `"alns"` plan once with each kind that
+can carry the largest customer (a `time_limit_ms` is shared among those runs),
+give every route of each plan the kind that carries it cheapest within the
+counts, and keep the cheapest plan -- never dearer than the best single kind
+alone. A route no vehicle left can carry is cut for the kinds still available;
+what the fleet still cannot take is reported in `unassigned`, the lightest
+routes first.
 
 **What a route costs: `fixed_cost` and `cost_per_distance` on a vehicle.** A
 route costs its vehicle's `fixed_cost` (default 0, `>= 0`) plus

@@ -532,7 +532,7 @@ fn default_cost_per_distance() -> f64 {
 /// refused by the range check like a too-small one ([`Whole`]).
 /// Besides the per-method parameters, it carries limits the solver has to
 /// respect whichever method runs -- `max_vehicles` is one.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -592,6 +592,17 @@ pub(crate) struct InputConfig {
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     max_vehicles: Option<i128>,
+}
+
+impl InputConfig {
+    /// This config for one of `parts` runs that share the time limit: its limit
+    /// divided by `parts` (at least 1 ms). `None` when there is no limit to share.
+    fn with_time_share(&self, parts: usize) -> Option<InputConfig> {
+        let limit = self.time_limit_ms.filter(|&ms| ms > 0)?;
+        let mut shared = self.clone();
+        shared.time_limit_ms = Some((limit / parts as i128).max(1));
+        Some(shared)
+    }
 }
 
 /// The method a request names when it names none.
@@ -953,41 +964,71 @@ pub(crate) fn solve(
         },
         _ => max_vehicles,
     };
-    // The methods that plan every route with one vehicle plan with the largest
-    // kind; a fleet of several kinds is then given its vehicles route by route
-    // (see `assign_fleet`).
-    let planner = planning_vehicle(&vehicles);
-    let plan = match method {
-        Method::NearestNeighbor => solve_nn(&customers, &dm, &fleet),
-        Method::Savings => solve_savings(&customers, &dm, &vehicles[planner], planner),
-        Method::Genetic => solve_ga(&customers, &dm, &vehicles[planner], planner, config)?,
-        Method::Alns => solve_alns(&customers, &dm, &vehicles[planner], planner, config)?,
-    };
-    // A fixed fleet is kept by every method alike: `"nn"` cannot exceed its
-    // vehicle list, but it can exceed a smaller `max_vehicles`.
-    let plan = match max_vehicles {
-        Some(max) if plan.routes.len() > max => {
-            let limited = limit_routes(plan.routes, plan.vehicles, &vehicles, max, &dm, &customers);
-            let limits: Vec<RouteLimits> = limited
-                .vehicles
-                .iter()
-                .map(|&v| RouteLimits::of(&vehicles[v]))
-                .collect();
-            let (routes, _) = apply_local_search(&limited.routes, &limits, &dm, &customers);
-            Plan {
-                routes,
-                vehicles: limited.vehicles,
-                method,
-                stop_reason: plan.stop_reason,
-            }
-        }
-        _ => plan,
-    };
-    let plan = if fleet.len() > 1 && method != Method::NearestNeighbor {
-        assign_fleet(plan, &fleet, &customers, &dm)
+    // The methods that plan every route with one vehicle plan with one kind of
+    // the fleet, and a fleet of several kinds is then given its vehicles route
+    // by route (see `assign_fleet`). Which kind to plan with decides how good the
+    // plan can be, so each kind that can carry the largest customer gets a turn
+    // and the best plan stands -- never worse than the best one kind alone.
+    let templates: Vec<usize> = if fleet.len() > 1 && method != Method::NearestNeighbor {
+        planning_kinds(&fleet, &customers)
     } else {
-        plan
+        vec![planning_vehicle(&vehicles)]
     };
+    // A time limit is the run's whole, shared among the plans it makes.
+    let shared = (templates.len() > 1)
+        .then(|| config.with_time_share(templates.len()))
+        .flatten();
+    let config = shared.as_ref().unwrap_or(config);
+    let mut chosen: Option<(Plan, usize, f64)> = None;
+    for &planner in &templates {
+        let plan = match method {
+            Method::NearestNeighbor => solve_nn(&customers, &dm, &fleet),
+            Method::Savings => solve_savings(&customers, &dm, &vehicles[planner], planner),
+            Method::Genetic => solve_ga(&customers, &dm, &vehicles[planner], planner, config)?,
+            Method::Alns => solve_alns(&customers, &dm, &vehicles[planner], planner, config)?,
+        };
+        // A fixed fleet is kept by every method alike: `"nn"` cannot exceed its
+        // vehicle list, but it can exceed a smaller `max_vehicles`.
+        let plan = match max_vehicles {
+            Some(max) if plan.routes.len() > max => {
+                let limited =
+                    limit_routes(plan.routes, plan.vehicles, &vehicles, max, &dm, &customers);
+                let limits: Vec<RouteLimits> = limited
+                    .vehicles
+                    .iter()
+                    .map(|&v| RouteLimits::of(&vehicles[v]))
+                    .collect();
+                let (routes, _) = apply_local_search(&limited.routes, &limits, &dm, &customers);
+                Plan {
+                    routes,
+                    vehicles: limited.vehicles,
+                    method,
+                    stop_reason: plan.stop_reason,
+                }
+            }
+            _ => plan,
+        };
+        let plan = if fleet.len() > 1 && method != Method::NearestNeighbor {
+            assign_fleet(plan, &fleet, &customers, &dm)
+        } else {
+            plan
+        };
+        // The plan that leaves fewer customers out wins, then the cheaper.
+        let served: usize = plan.routes.iter().map(Vec::len).sum();
+        let cost: f64 = plan
+            .routes
+            .iter()
+            .zip(&plan.vehicles)
+            .map(|(r, &v)| vehicles[v].route_cost(route_distance(r, &dm)))
+            .sum();
+        let better = chosen
+            .as_ref()
+            .is_none_or(|(_, s, c)| served > *s || (served == *s && cost < *c));
+        if better {
+            chosen = Some((plan, served, cost));
+        }
+    }
+    let (plan, _, _) = chosen.expect("at least one plan is made");
     let route_summaries: Vec<RouteSummary> = plan
         .routes
         .iter()
@@ -1917,6 +1958,30 @@ fn planning_vehicle(vehicles: &[Vehicle]) -> usize {
         }
     }
     best
+}
+
+/// The kinds a fleet of several is planned with: each distinct kind that can
+/// carry the largest customer, the one that carries the most first.
+fn planning_kinds(fleet: &[VehicleType], customers: &[Customer]) -> Vec<usize> {
+    let largest = customers.iter().map(Customer::demand).max().unwrap_or(0);
+    let mut kinds: Vec<usize> = Vec::new();
+    for (k, t) in fleet.iter().enumerate() {
+        let duplicate = kinds.iter().any(|&j| t.same_kind_as(&fleet[j]));
+        if !duplicate && t.vehicle().capacity() >= largest {
+            kinds.push(k);
+        }
+    }
+    if kinds.is_empty() {
+        // Only possible when a customer asks for more than every kind carries,
+        // which `build_customers` has already set aside.
+        kinds.push(planning_vehicle(
+            &fleet
+                .iter()
+                .map(|t| t.vehicle().clone())
+                .collect::<Vec<_>>(),
+        ));
+    }
+    kinds
 }
 
 /// Cuts `route`, in its order, into pieces that `vehicle` carries: each piece

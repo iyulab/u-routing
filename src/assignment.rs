@@ -67,7 +67,7 @@ impl VehicleType {
 
     /// Whether `other` is the same kind of vehicle in everything a route can
     /// tell apart: capacity, costs and limits.
-    fn same_kind_as(&self, other: &VehicleType) -> bool {
+    pub(crate) fn same_kind_as(&self, other: &VehicleType) -> bool {
         let (a, b) = (&self.vehicle, &other.vehicle);
         a.capacity() == b.capacity()
             && a.fixed_cost() == b.fixed_cost()
