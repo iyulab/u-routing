@@ -101,13 +101,13 @@ fn the_local_search_takes_the_same_moves_on_a_map_of_any_size() {
 /// size.
 #[test]
 fn the_checker_judges_a_reported_distance_on_a_map_of_any_size() {
-    use u_routing::evaluation::{check_solution, Fleet, VehicleUse};
+    use u_routing::evaluation::{check_solution, Fleet};
     use u_routing::models::ViolationType;
 
     let vehicles: Vec<Vehicle> = (0..6).map(|i| Vehicle::new(i, 25)).collect();
     let fleet = Fleet {
         vehicles: &vehicles,
-        usage: VehicleUse::AnyNumber,
+        counts: &[],
         max_routes: None,
     };
     for scale in [1e-12, 1e-9, 1e-6, 1.0, 1e6, 1e9] {

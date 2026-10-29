@@ -105,7 +105,6 @@ fn main() {
     for path in &names {
         let name = path.file_stem().and_then(|n| n.to_str()).expect("a name");
         let (points, capacity) = read(path);
-        let n = points.len();
         let distances: Vec<Vec<f64>> = points
             .iter()
             .map(|a| {
@@ -120,8 +119,8 @@ fn main() {
             .enumerate()
             .map(|(i, &(x, y, d))| json!({ "id": i + 1, "x": x, "y": y, "demand": d }))
             .collect();
-        // No fleet limit: as many vehicles as customers.
-        let vehicles: Vec<Value> = (1..n).map(|_| json!({ "capacity": capacity })).collect();
+        // No fleet limit: one kind of vehicle, as many of it as the plan needs.
+        let vehicles: Vec<Value> = vec![json!({ "capacity": capacity })];
         let best: Option<f64> = std::fs::read_to_string(path.with_extension("sol"))
             .ok()
             .and_then(|s| {

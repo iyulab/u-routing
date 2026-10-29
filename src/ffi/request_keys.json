@@ -39,6 +39,7 @@
                 "properties": {
                   "capacity": {},
                   "cost_per_distance": {},
+                  "count": {},
                   "fixed_cost": {},
                   "max_distance": {},
                   "max_duration": {}
@@ -101,6 +102,7 @@
             "properties": {
               "capacity": {},
               "cost_per_distance": {},
+              "count": {},
               "fixed_cost": {},
               "max_distance": {},
               "max_duration": {}

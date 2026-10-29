@@ -322,13 +322,18 @@ const reads = (method, setting) =>
 console.log(reads('ga', 'max_iterations')); // false -- leave the field out
 ```
 
-**How each method reads `vehicles`.** `"nn"` assigns every route to a vehicle
-in the list, so it uses at most that many vehicles, each with its own capacity;
-customers the fleet cannot carry come back in `unassigned`. `"savings"`, `"ga"`
-and `"alns"` plan every route with one capacity and open as many routes as the
-demand needs, so `num_vehicles` can exceed the length of `vehicles`; they
-reject a fleet whose vehicles differ in capacity, limits or costs. Without
-`vehicles`, there is one vehicle of unlimited capacity.
+**How the methods read `vehicles`.** Every method reads the same fleet: `vehicles`
+lists *kinds* of vehicle -- capacity, `fixed_cost`, `cost_per_distance` and the
+limits -- and `count` says how many of a kind there are (a whole number >= 1;
+left out, as many as the plan needs). A fleet may mix kinds of different
+capacity, costs and limits. Customers the fleet cannot carry come back in
+`unassigned`. Without `vehicles`, there is one vehicle of unlimited capacity.
+`"nn"` fills the vehicles in the order of the list, a kind of `count` vehicles
+as that many in a row. `"savings"`, `"ga"` and `"alns"` plan with the kind that
+carries the most and then give every route the kind that carries it cheapest,
+within the counts; a fleet too small for what that needs loses its lightest
+routes first, and their customers are placed on the remaining routes wherever
+they fit.
 
 **What a route costs: `fixed_cost` and `cost_per_distance` on a vehicle.** A
 route costs its vehicle's `fixed_cost` (default 0, `>= 0`) plus
@@ -367,8 +372,8 @@ solve_vrp({ depot: { x: 0, y: 0 }, customers,
 single-entry list is how a caller states one capacity, which is why the
 example above passes `vehicles: [{ capacity: 100 }]` and still gets as many
 routes as the demand needs. A caller whose fleet really is fixed says so with
-`config.max_vehicles`, and every method keeps to it, `"nn"` included (`"nn"`
-cannot exceed its vehicle list, but it can exceed a smaller `max_vehicles`).
+`count` (per kind) or `config.max_vehicles` (in all), and every method keeps to
+them.
 When the plan a method found needs more routes, the lightest routes are
 emptied one at a time and their customers moved, cheapest insertion first, into
 the routes that remain -- never past a vehicle's capacity and never making a
@@ -451,7 +456,6 @@ try {
 | `duplicate_id` | `id`, `first`, `second` | Two customers share an `id` (at positions `first` and `second`, from 0) — `routes` and `unassigned` name customers by id, so each needs its own |
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity with a fractional part. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
-| `mixed_fleet` | `method`, `parameter` (`"capacity"`, `"fixed_cost"`, `"cost_per_distance"`, `"max_distance"` or `"max_duration"`), `values`, `capacities`, `index` | Vehicles that differ in capacity, cost or limits with `"savings"`, `"ga"` or `"alns"`, which plan every route with one vehicle; `index` is the first vehicle that differs from the first |
 | `parameter_out_of_range` | `parameter`, `index` (vehicles and customers), `id` (customers, for a demand), `method` (method settings), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` / `cost_per_distance` of 0 or less (no route could keep it), a negative `fixed_cost` (`min: 0`), a whole demand or capacity outside 0 to 2147483647 (`min: 0`, `max: 2147483647`), customers whose demands (those a vehicle can carry) add up past 2147483647 (`parameter: "total_demand"`, `min: 0`, `max: 2147483647` — a route's load is counted in 32 bits), a GA `mutation_rate` outside (0, 1] or `elite_ratio` outside (0, 1), a `config.max_vehicles` below 1, a negative `config.seed`, a customer `id` below 0 (with `index`), a negative entry of `distances` (`parameter: "distances[i]"`, `index: j`, `min: 0`), or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` below 1, … — with `method`; a negative count is refused here like a too-small one). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
 | `invalid_option` | `parameter`, `method` | A setting the method does not read (`config.max_iterations` with `"ga"`), or settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
@@ -491,9 +495,8 @@ when `"ga"` went its stall budget without a better plan; `"time_limit"` when
 `unassigned` lists the customers (by `id`) that no route serves — for example
 when a fixed fleet under `"nn"` cannot carry the total demand. A non-empty list
 means the plan is partial. `route_vehicles` says which vehicle drives each route:
-its index in `vehicles` — `"nn"` gives each route its own vehicle from the list,
-`"savings"`, `"ga"` and `"alns"` drive every route with the single vehicle type,
-`0` (also `0` when the request lists no vehicles). `total_cost` prices each
+its index in `vehicles`, the kind that drives the route (`0` when the request
+lists no vehicles). `total_cost` prices each
 route with its vehicle's `fixed_cost` and `cost_per_distance` (equal to
 `total_distance` with the defaults).
 
@@ -552,7 +555,7 @@ request and plan name them):
 | `customer_missing` | `customer` | The customer is on no route and not in `unassigned` |
 | `wrongly_unassigned` | `customer` | In `unassigned` but served, listed twice, or no customer of the request |
 | `unknown_vehicle` | `route`, `vehicle` | The route's vehicle is not in `vehicles` |
-| `vehicle_reused` | `route`, `vehicle` | `"nn"` drives each vehicle once; this route uses one again |
+| `fleet_count_exceeded` | `route`, `vehicle`, `count` | The kind has fewer vehicles (`count`) than the plan has routes for it; `route` is the first past the count |
 | `too_many_routes` | `routes`, `max_routes` | More routes than `config.max_vehicles` |
 | `distance_mismatch` | `reported`, `actual` | The reported `total_distance` differs from the routes' own (compared only when every route can be driven) |
 | `cost_mismatch` | `reported`, `actual` | The reported `total_cost` differs from what the routes cost with their vehicles (compared only when every route can be driven by a known vehicle) |

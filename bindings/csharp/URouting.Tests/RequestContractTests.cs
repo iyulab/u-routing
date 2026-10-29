@@ -19,7 +19,7 @@ public class RequestContractTests
     private static readonly Dictionary<string, string> NotWritten = [];
 
     private static Vehicle Vehicle() =>
-        new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000, FixedCost: 50, CostPerDistance: 2);
+        new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000, FixedCost: 50, CostPerDistance: 2, Count: 2);
 
     private static VrpRequest Full(RoutingMethod method) => new(0, 0,
         [

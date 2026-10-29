@@ -168,6 +168,7 @@ public sealed class RoutingClient : IDisposable
             Put(vehicle, "max_duration", v.MaxDuration, $"{at}.max_duration");
             Put(vehicle, "fixed_cost", v.FixedCost, $"{at}.fixed_cost");
             Put(vehicle, "cost_per_distance", v.CostPerDistance, $"{at}.cost_per_distance");
+            Put(vehicle, "count", v.Count);
             vehicles.Add((JsonNode)vehicle);
         }
 
@@ -299,7 +300,7 @@ public class RoutingException : Exception
     /// Stable, machine-readable reason: the <c>code</c> of the engine's error body, the same
     /// name the WebAssembly binding puts on its <c>Error</c> — <c>unknown_option</c>,
     /// <c>duplicate_id</c>, <c>invalid_time_window</c>, <c>not_whole_units</c>,
-    /// <c>mixed_fleet</c>, <c>parameter_out_of_range</c>, <c>invalid_option</c>,
+    /// <c>parameter_out_of_range</c>, <c>invalid_option</c>,
     /// <c>value_not_finite</c>, <c>malformed_input</c>, <c>internal</c>, ….
     /// <c>null</c> when the engine returned no readable body.
     /// </summary>

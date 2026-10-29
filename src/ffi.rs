@@ -533,7 +533,9 @@ mod tests {
         // cannot serve everyone with the fleet it was given. The customers it
         // leaves out used to be absent from the response with nothing saying
         // so -- a partial plan that read as a complete one.
-        let (code, body) = solve(&problem("nn"));
+        let mut request = problem("nn");
+        request["vehicles"][0]["count"] = 1.into();
+        let (code, body) = solve(&request);
         assert_eq!(code, 0, "{body}");
         let unassigned: Vec<u64> = body["unassigned"]
             .as_array()

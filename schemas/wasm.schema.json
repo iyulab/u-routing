@@ -240,6 +240,15 @@
           "format": "double",
           "type": "number"
         },
+        "count": {
+          "default": null,
+          "description": "How many vehicles of this kind there are (a whole number `>= 1`). Absent\nor `null`: as many as the plan needs. A fleet may list kinds that differ in\ncapacity, costs and limits; every method plans with all of them.",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "fixed_cost": {
           "default": 0.0,
           "description": "Cost of using this vehicle for a route, whatever its length (`>= 0`,\ndefault 0). Every method minimizes the plan's `total_cost`, so a fixed\ncost trades distance for fewer routes.",
@@ -548,11 +557,16 @@
         },
         {
           "additionalProperties": false,
-          "description": "`\"nn\"` drives each vehicle once; this route uses one a second time.",
+          "description": "The request has fewer vehicles of this kind than the plan has routes\nfor it: `count` is its `vehicles[].count`; `route` is the first route\npast it.",
           "properties": {
             "code": {
-              "const": "vehicle_reused",
+              "const": "fleet_count_exceeded",
               "type": "string"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
             },
             "route": {
               "format": "uint",
@@ -567,7 +581,8 @@
           "required": [
             "code",
             "route",
-            "vehicle"
+            "vehicle",
+            "count"
           ],
           "type": "object"
         },

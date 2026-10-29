@@ -65,6 +65,17 @@ impl VehicleType {
         self.count
     }
 
+    /// Whether `other` is the same kind of vehicle in everything a route can
+    /// tell apart: capacity, costs and limits.
+    fn same_kind_as(&self, other: &VehicleType) -> bool {
+        let (a, b) = (&self.vehicle, &other.vehicle);
+        a.capacity() == b.capacity()
+            && a.fixed_cost() == b.fixed_cost()
+            && a.cost_per_distance() == b.cost_per_distance()
+            && a.max_distance() == b.max_distance()
+            && a.max_duration() == b.max_duration()
+    }
+
     /// Whether one vehicle of this type can drive a route asking for `demand`.
     pub fn carries(&self, demand: &RouteDemand) -> bool {
         demand.load <= self.vehicle.capacity()
@@ -126,6 +137,14 @@ pub fn assign_types(
     // cannot be used.
     let mut column_type: Vec<usize> = Vec::new();
     for (t, ty) in types.iter().enumerate() {
+        // A type the same as an earlier one that has no limit is never needed:
+        // the earlier one can take any route it could.
+        if types[..t]
+            .iter()
+            .any(|s| s.count.is_none() && s.same_kind_as(ty))
+        {
+            continue;
+        }
         let copies = ty.count.map_or(n, |c| c.min(n));
         column_type.extend(std::iter::repeat_n(t, copies));
     }

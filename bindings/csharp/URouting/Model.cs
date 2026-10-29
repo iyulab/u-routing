@@ -84,14 +84,17 @@ public sealed record Customer(
 /// (duration on the clock that starts at 0 at the depot, travel time equal to distance).
 /// A route the vehicle drives costs <see cref="FixedCost"/> plus <see cref="CostPerDistance"/> ×
 /// its distance (defaults 0 and 1); every method minimizes the plan's total cost, so a fixed
-/// cost trades distance for fewer routes.
+/// cost trades distance for fewer routes. A vehicle stands for a <em>kind</em>:
+/// <see cref="Count"/> says how many vehicles of it there are (at least 1); <c>null</c> is as many as the
+/// plan needs. A fleet may mix kinds that differ in capacity, costs and limits.
 /// </summary>
 public sealed record Vehicle(
     double? Capacity = null,
     double? MaxDistance = null,
     double? MaxDuration = null,
     double? FixedCost = null,
-    double? CostPerDistance = null);
+    double? CostPerDistance = null,
+    int? Count = null);
 
 /// <summary>
 /// Solver settings; a <c>null</c> takes the engine's default. Each method reads the ones that
@@ -257,7 +260,7 @@ public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Viola
 [JsonDerivedType(typeof(CustomerMissing), "customer_missing")]
 [JsonDerivedType(typeof(WronglyUnassigned), "wrongly_unassigned")]
 [JsonDerivedType(typeof(UnknownVehicle), "unknown_vehicle")]
-[JsonDerivedType(typeof(VehicleReused), "vehicle_reused")]
+[JsonDerivedType(typeof(FleetCountExceeded), "fleet_count_exceeded")]
 [JsonDerivedType(typeof(TooManyRoutes), "too_many_routes")]
 [JsonDerivedType(typeof(DistanceMismatch), "distance_mismatch")]
 [JsonDerivedType(typeof(CostMismatch), "cost_mismatch")]
@@ -283,8 +286,11 @@ public abstract record PlanViolation
     public sealed record WronglyUnassigned(long Customer) : PlanViolation;
     /// <summary>The route's vehicle is not in the request's vehicles.</summary>
     public sealed record UnknownVehicle(int Route, long Vehicle) : PlanViolation;
-    /// <summary>Nearest neighbour drives each vehicle once; this route uses one again.</summary>
-    public sealed record VehicleReused(int Route, long Vehicle) : PlanViolation;
+    /// <summary>
+    /// The request has fewer vehicles of this kind (<paramref name="Count"/>) than the plan has routes
+    /// for it; <paramref name="Route"/> is the first route past the count.
+    /// </summary>
+    public sealed record FleetCountExceeded(int Route, long Vehicle, int Count) : PlanViolation;
     /// <summary>More routes than <see cref="VrpConfig.MaxVehicles"/>.</summary>
     public sealed record TooManyRoutes(int Routes, int MaxRoutes) : PlanViolation;
     /// <summary>The reported total distance differs from the routes' own.</summary>

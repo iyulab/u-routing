@@ -76,13 +76,15 @@ pub enum ViolationType {
         /// The vehicle index given.
         vehicle_id: usize,
     },
-    /// A vehicle drives a second route where each vehicle drives one
-    /// ([`VehicleUse::OneRouteEach`](crate::evaluation::VehicleUse)).
-    VehicleReused {
-        /// Route index of the second use.
+    /// A vehicle type drives more routes than there are vehicles of it
+    /// ([`Fleet::counts`](crate::evaluation::Fleet)).
+    FleetCountExceeded {
+        /// Route index of the first route past the count.
         route_index: usize,
-        /// The vehicle.
+        /// The vehicle type.
         vehicle_id: usize,
+        /// How many vehicles of the type there are.
+        count: usize,
     },
     /// The plan uses more routes than the fleet allows.
     TooManyRoutes {

@@ -16,10 +16,13 @@ use serde_json::json;
 use crate::alns::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemoval};
 use crate::alns::repair::{GreedyInsertion, RegretInsertion};
 use crate::alns::{Destroy, Repair, RoutingAlnsProblem};
+use crate::assignment::{assign_types, RouteDemand, VehicleType};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_time_windows, route_checks_needed, RouteEvaluator, RouteLimits};
-use crate::fleet::limit_routes;
+use crate::evaluation::{
+    has_time_windows, route_checks_needed, route_feasible, RouteEvaluator, RouteLimits,
+};
+use crate::fleet::{cheapest_insertion, limit_routes};
 use crate::ga::RoutingGaProblem;
 use crate::ga::{split, split_tw};
 use crate::local_search::{or_opt_improve, two_opt_improve};
@@ -58,12 +61,11 @@ pub(crate) enum Code {
     DuplicateId,
     InvalidTimeWindow,
     NotWholeUnits,
-    MixedFleet,
     Internal,
 }
 
 impl Code {
-    pub(crate) const ALL: [Code; 11] = [
+    pub(crate) const ALL: [Code; 10] = [
         Code::MalformedInput,
         Code::ValueNotFinite,
         Code::UnknownOption,
@@ -73,7 +75,6 @@ impl Code {
         Code::DuplicateId,
         Code::InvalidTimeWindow,
         Code::NotWholeUnits,
-        Code::MixedFleet,
         Code::Internal,
     ];
 
@@ -88,7 +89,6 @@ impl Code {
             Code::DuplicateId => "duplicate_id",
             Code::InvalidTimeWindow => "invalid_time_window",
             Code::NotWholeUnits => "not_whole_units",
-            Code::MixedFleet => "mixed_fleet",
             Code::Internal => "internal",
         }
     }
@@ -114,7 +114,6 @@ impl Code {
             Code::DuplicateId => &["id", "first", "second"],
             Code::InvalidTimeWindow => &["id", "index", "ready", "due"],
             Code::NotWholeUnits => &["parameter", "index", "id", "value"],
-            Code::MixedFleet => &["method", "parameter", "values", "capacities", "index"],
             Code::Internal => &[],
         }
     }
@@ -507,6 +506,12 @@ pub(crate) struct InputVehicle {
     #[serde(default = "default_cost_per_distance")]
     #[cfg_attr(feature = "wasm", tsify(optional))]
     cost_per_distance: f64,
+    /// How many vehicles of this kind there are (a whole number `>= 1`). Absent
+    /// or `null`: as many as the plan needs. A fleet may list kinds that differ in
+    /// capacity, costs and limits; every method plans with all of them.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
+    count: Option<i128>,
 }
 
 /// No limit: the most the model stores, which is also the most one customer
@@ -900,7 +905,8 @@ pub(crate) fn solve(
             })
         })
         .transpose()?;
-    let vehicles = build_vehicles(input_vehicles)?;
+    let fleet = build_vehicles(input_vehicles)?;
+    let vehicles: Vec<Vehicle> = fleet.iter().map(|t| t.vehicle().clone()).collect();
     // The largest load any vehicle takes: a customer asking for more rides on
     // no route at all, whatever the method -- reported unassigned up front
     // rather than left for each method to notice (savings and ALNS opened a
@@ -923,14 +929,6 @@ pub(crate) fn solve(
         durations,
         input_customers.len(),
     )?;
-    // Only nearest neighbour assigns routes to particular vehicles. The other
-    // methods plan every route with one vehicle -- one capacity and one set of
-    // limits -- so a fleet that differs in either is not a problem they can
-    // state (it used to be solved as a fleet of the first vehicle).
-    if method != Method::NearestNeighbor {
-        refuse_mixed_fleet(method, &vehicles)?;
-    }
-
     if customers.len() <= 1 {
         return Ok(VrpOutput {
             routes: vec![],
@@ -946,11 +944,24 @@ pub(crate) fn solve(
         });
     }
 
+    // One kind of vehicle with a count is a fleet of that many: the routes
+    // are bounded like `max_vehicles` bounds them.
+    let max_vehicles = match (fleet.as_slice(), method) {
+        ([only], m) if m != Method::NearestNeighbor => match (max_vehicles, only.count()) {
+            (Some(max), Some(count)) => Some(max.min(count)),
+            (max, count) => max.or(count),
+        },
+        _ => max_vehicles,
+    };
+    // The methods that plan every route with one vehicle plan with the largest
+    // kind; a fleet of several kinds is then given its vehicles route by route
+    // (see `assign_fleet`).
+    let planner = planning_vehicle(&vehicles);
     let plan = match method {
-        Method::NearestNeighbor => solve_nn(&customers, &dm, &vehicles),
-        Method::Savings => solve_savings(&customers, &dm, &vehicles),
-        Method::Genetic => solve_ga(&customers, &dm, &vehicles[0], config)?,
-        Method::Alns => solve_alns(&customers, &dm, &vehicles[0], config)?,
+        Method::NearestNeighbor => solve_nn(&customers, &dm, &fleet),
+        Method::Savings => solve_savings(&customers, &dm, &vehicles[planner], planner),
+        Method::Genetic => solve_ga(&customers, &dm, &vehicles[planner], planner, config)?,
+        Method::Alns => solve_alns(&customers, &dm, &vehicles[planner], planner, config)?,
     };
     // A fixed fleet is kept by every method alike: `"nn"` cannot exceed its
     // vehicle list, but it can exceed a smaller `max_vehicles`.
@@ -971,6 +982,11 @@ pub(crate) fn solve(
             }
         }
         _ => plan,
+    };
+    let plan = if fleet.len() > 1 && method != Method::NearestNeighbor {
+        assign_fleet(plan, &fleet, &customers, &dm)
+    } else {
+        plan
     };
     let route_summaries: Vec<RouteSummary> = plan
         .routes
@@ -1090,8 +1106,14 @@ pub(crate) enum PlanViolation {
     WronglyUnassigned { customer: i64 },
     /// The route's vehicle is not in the request's `vehicles`.
     UnknownVehicle { route: usize, vehicle: i64 },
-    /// `"nn"` drives each vehicle once; this route uses one a second time.
-    VehicleReused { route: usize, vehicle: i64 },
+    /// The request has fewer vehicles of this kind than the plan has routes
+    /// for it: `count` is its `vehicles[].count`; `route` is the first route
+    /// past it.
+    FleetCountExceeded {
+        route: usize,
+        vehicle: i64,
+        count: usize,
+    },
     /// More routes than `config.max_vehicles`.
     TooManyRoutes { routes: usize, max_routes: usize },
     /// The reported `total_distance` differs from the routes' own.
@@ -1141,9 +1163,10 @@ impl PlanViolation {
                 route: 0,
                 vehicle: 0,
             },
-            Self::VehicleReused {
+            Self::FleetCountExceeded {
                 route: 0,
                 vehicle: 0,
+                count: 0,
             },
             Self::TooManyRoutes {
                 routes: 0,
@@ -1191,7 +1214,7 @@ pub(crate) fn check(
         distances,
         durations,
     } = *problem;
-    use crate::evaluation::{check_solution, Fleet, VehicleUse};
+    use crate::evaluation::{check_solution, Fleet};
     use crate::models::{Route, Solution, ViolationType, Visit};
 
     let method = Method::parse(method)?;
@@ -1213,10 +1236,9 @@ pub(crate) fn check(
         durations,
         input_customers.len(),
     )?;
-    let vehicles = build_vehicles(input_vehicles)?;
-    if method != Method::NearestNeighbor {
-        refuse_mixed_fleet(method, &vehicles)?;
-    }
+    let fleet_types = build_vehicles(input_vehicles)?;
+    let vehicles: Vec<Vehicle> = fleet_types.iter().map(|t| t.vehicle().clone()).collect();
+    let counts: Vec<Option<usize>> = fleet_types.iter().map(VehicleType::count).collect();
     if let Some(route_vehicles) = &solution.route_vehicles {
         if route_vehicles.len() != solution.routes.len() {
             return Err(ServiceError::new(
@@ -1297,11 +1319,7 @@ pub(crate) fn check(
 
     let fleet = Fleet {
         vehicles: &vehicles,
-        usage: if method == Method::NearestNeighbor {
-            VehicleUse::OneRouteEach
-        } else {
-            VehicleUse::AnyNumber
-        },
+        counts: &counts,
         max_routes,
     };
     let caller = |internal: usize| -> i64 { caller_of[internal] as i64 };
@@ -1381,9 +1399,12 @@ pub(crate) fn check(
                         vehicle: vehicle_given(route_index),
                     }
                 }
-                ViolationType::VehicleReused { route_index, .. } => PlanViolation::VehicleReused {
+                ViolationType::FleetCountExceeded {
+                    route_index, count, ..
+                } => PlanViolation::FleetCountExceeded {
                     route: route_index,
                     vehicle: vehicle_given(route_index),
+                    count,
                 },
                 ViolationType::TooManyRoutes { routes, max_routes } => {
                     PlanViolation::TooManyRoutes { routes, max_routes }
@@ -1802,68 +1823,11 @@ fn whole_units(
     Ok(value as i32)
 }
 
-/// Builds the vehicle list from input, falling back to a single unlimited vehicle.
-/// `mixed_fleet` at the first vehicle that differs from the first one in
-/// capacity, `fixed_cost`, `cost_per_distance`, `max_distance` or
-/// `max_duration`, naming that field.
-fn refuse_mixed_fleet(method: Method, vehicles: &[Vehicle]) -> Result<(), ServiceError> {
-    let first = &vehicles[0];
-    for (index, other) in vehicles.iter().enumerate().skip(1) {
-        let differs = [
-            ("capacity", json!(first.capacity()), json!(other.capacity())),
-            (
-                "fixed_cost",
-                json!(first.fixed_cost()),
-                json!(other.fixed_cost()),
-            ),
-            (
-                "cost_per_distance",
-                json!(first.cost_per_distance()),
-                json!(other.cost_per_distance()),
-            ),
-            (
-                "max_distance",
-                json!(first.max_distance()),
-                json!(other.max_distance()),
-            ),
-            (
-                "max_duration",
-                json!(first.max_duration()),
-                json!(other.max_duration()),
-            ),
-        ]
-        .into_iter()
-        .find(|(_, a, b)| a != b);
-        if let Some((parameter, a, b)) = differs {
-            let plural = if parameter == "capacity" {
-                "capacities"
-            } else {
-                parameter
-            };
-            return Err(ServiceError::new(
-                Code::MixedFleet,
-                format!(
-                    "method \"{}\" plans every route with one vehicle, but the fleet has \
-                     {plural} {a} and {b}; give every vehicle the same {parameter}, or use \
-                     \"nn\", which reads each vehicle",
-                    method.name(),
-                ),
-                json!({
-                    "method": method.name(),
-                    "parameter": parameter,
-                    "values": [a, b],
-                    "capacities": [first.capacity(), other.capacity()],
-                    "index": index,
-                }),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, ServiceError> {
+/// Builds the fleet from input: its kinds of vehicle in the order given, each
+/// with its count. No `vehicles` is one kind of unlimited capacity.
+fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, ServiceError> {
     if input_vehicles.is_empty() {
-        return Ok(vec![Vehicle::new(0, i32::MAX)]);
+        return Ok(vec![VehicleType::new(Vehicle::new(0, i32::MAX), None)]);
     }
     input_vehicles
         .iter()
@@ -1918,38 +1882,230 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<Vehicle>, Servi
                     fields,
                 ));
             }
-            Ok(vehicle
-                .with_fixed_cost(v.fixed_cost)
-                .with_cost_per_distance(v.cost_per_distance))
+            let count = v
+                .count
+                .map(|n| {
+                    whole_in::<usize>("count", n, 1, usize::MAX as i128).map_err(|mut e| {
+                        e.fields["index"] = json!(i);
+                        e
+                    })
+                })
+                .transpose()?;
+            Ok(VehicleType::new(
+                vehicle
+                    .with_fixed_cost(v.fixed_cost)
+                    .with_cost_per_distance(v.cost_per_distance),
+                count,
+            ))
         })
         .collect()
+}
+
+/// The kind of vehicle the methods that plan every route alike plan with: the
+/// one that carries the most (then the one that costs least per unit of
+/// distance travelled, then the first listed). Every route they make fits it.
+fn planning_vehicle(vehicles: &[Vehicle]) -> usize {
+    let mut best = 0;
+    for (i, v) in vehicles.iter().enumerate().skip(1) {
+        let b = &vehicles[best];
+        let better = v.capacity() > b.capacity()
+            || (v.capacity() == b.capacity()
+                && (v.fixed_cost_in_distance(), v.cost_per_distance())
+                    < (b.fixed_cost_in_distance(), b.cost_per_distance()));
+        if better {
+            best = i;
+        }
+    }
+    best
+}
+
+/// Cuts `route`, in its order, into pieces that `vehicle` carries: each piece
+/// takes customers until the next would overload it or break the vehicle's
+/// limits and time windows. A piece of one customer may still be more than the
+/// vehicle can do; the assignment that follows is what decides.
+fn split_route(
+    route: &[usize],
+    vehicle: &Vehicle,
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+) -> Vec<Vec<usize>> {
+    let limits = RouteLimits::of(vehicle);
+    let constrained = route_checks_needed(customers, &limits);
+    let mut pieces: Vec<Vec<usize>> = Vec::new();
+    let mut load = 0;
+    for &c in route {
+        let demand = customers[c].demand();
+        if let Some(current) = pieces.last_mut() {
+            let mut fits = load + demand <= vehicle.capacity();
+            if fits && constrained {
+                current.push(c);
+                fits = route_feasible(current, 0, dm, customers, &limits);
+                current.pop();
+            }
+            if fits {
+                current.push(c);
+                load += demand;
+                continue;
+            }
+        }
+        pieces.push(vec![c]);
+        load = demand;
+    }
+    pieces
+}
+
+/// Gives every route of `plan` the kind of vehicle that carries it cheapest,
+/// within the counts of the fleet. A route that no vehicle left can carry is cut
+/// into pieces that the kinds still available carry; what the fleet still cannot
+/// take is emptied: those customers go into the routes that remain wherever
+/// they fit, and the ones that fit nowhere are left unassigned, as with a
+/// fixed fleet.
+fn assign_fleet(
+    plan: Plan,
+    fleet: &[VehicleType],
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+) -> Plan {
+    let template = fleet[0].vehicle();
+    let demand_of = |route: &[usize]| {
+        let (built, _) = RouteEvaluator::new(customers, dm, template).build_route(route);
+        RouteDemand {
+            load: route.iter().map(|&c| customers[c].demand()).sum(),
+            distance: route_distance(route, dm),
+            duration: built.total_duration(),
+        }
+    };
+    let assign = |routes: &[Vec<usize>]| -> Vec<Option<usize>> {
+        let demands: Vec<RouteDemand> = routes.iter().map(|r| demand_of(r)).collect();
+        let sizes: Vec<usize> = routes.iter().map(Vec::len).collect();
+        assign_types(&demands, &sizes, fleet)
+    };
+    let mut routes = plan.routes;
+    let mut given = assign(&routes);
+    // A route no vehicle left carries is cut for the kinds still available.
+    for _ in 0..4 {
+        if given.iter().all(Option::is_some) {
+            break;
+        }
+        let mut used = vec![0usize; fleet.len()];
+        for kind in given.iter().flatten() {
+            used[*kind] += 1;
+        }
+        let mut cutter: Option<usize> = None;
+        for (k, t) in fleet.iter().enumerate() {
+            let free = t.count().is_none_or(|c| used[k] < c);
+            if free && cutter.is_none_or(|b| t.vehicle().capacity() > fleet[b].vehicle().capacity())
+            {
+                cutter = Some(k);
+            }
+        }
+        let Some(cutter) = cutter else { break };
+        let mut cut = false;
+        let mut next: Vec<Vec<usize>> = Vec::with_capacity(routes.len());
+        for (route, slot) in routes.into_iter().zip(&given) {
+            if slot.is_some() {
+                next.push(route);
+                continue;
+            }
+            let pieces = split_route(&route, fleet[cutter].vehicle(), customers, dm);
+            cut |= pieces.len() > 1;
+            next.extend(pieces);
+        }
+        routes = next;
+        given = assign(&routes);
+        if !cut {
+            break;
+        }
+    }
+    if given.iter().any(Option::is_none) {
+        let mut kept: Vec<Vec<usize>> = Vec::new();
+        let mut kept_types: Vec<usize> = Vec::new();
+        let mut pool: Vec<usize> = Vec::new();
+        for (route, slot) in routes.into_iter().zip(&given) {
+            match slot {
+                Some(t) => {
+                    kept.push(route);
+                    kept_types.push(*t);
+                }
+                None => pool.extend(route),
+            }
+        }
+        // The largest demands first: they have the fewest places to go.
+        pool.sort_by_key(|&c| (std::cmp::Reverse(customers[c].demand()), c));
+        for c in pool {
+            let placed = cheapest_insertion(
+                &kept,
+                |ri| fleet[kept_types[ri]].vehicle().capacity(),
+                |ri| RouteLimits::of(fleet[kept_types[ri]].vehicle()),
+                c,
+                dm,
+                customers,
+            );
+            if let Some((ri, pos, _)) = placed {
+                kept[ri].insert(pos, c);
+            }
+        }
+        routes = kept;
+        // The vehicles each kept route already has still carry it, so this
+        // assigns every route -- at least as cheaply as before.
+        given = assign(&routes);
+    }
+    let types: Vec<usize> = given
+        .into_iter()
+        .map(|t| t.expect("every kept route has a vehicle that carries it"))
+        .collect();
+    Plan {
+        routes,
+        vehicles: types,
+        method: plan.method,
+        stop_reason: plan.stop_reason,
+    }
 }
 
 // ============================================================================
 // Solver methods
 // ============================================================================
 
-fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicle]) -> Plan {
+fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, fleet: &[VehicleType]) -> Plan {
+    // Nearest neighbour drives each route with a vehicle of its own, taken in
+    // the order of the fleet: a kind of `count` vehicles is that many in a row
+    // (no more than there are customers to drive).
+    let mut vehicles: Vec<Vehicle> = Vec::new();
+    let mut kind_of: Vec<usize> = Vec::new();
+    for (kind, t) in fleet.iter().enumerate() {
+        let copies = t.count().unwrap_or(customers.len()).min(customers.len());
+        for _ in 0..copies {
+            vehicles.push(t.vehicle().clone());
+            kind_of.push(kind);
+        }
+    }
     let solution = if has_time_windows(customers) {
-        nearest_neighbor_tw(customers, dm, vehicles)
+        nearest_neighbor_tw(customers, dm, &vehicles)
     } else {
-        nearest_neighbor(customers, dm, vehicles)
+        nearest_neighbor(customers, dm, &vehicles)
     };
     Plan {
         routes: solution.routes().iter().map(|r| r.customer_ids()).collect(),
-        // Nearest neighbour drives each route with its own vehicle.
-        vehicles: solution.routes().iter().map(|r| r.vehicle_id()).collect(),
+        vehicles: solution
+            .routes()
+            .iter()
+            .map(|r| kind_of[r.vehicle_id()])
+            .collect(),
         method: Method::NearestNeighbor,
         stop_reason: StopReason::Completed,
     }
 }
 
-fn solve_savings(customers: &[Customer], dm: &DistanceMatrix, vehicles: &[Vehicle]) -> Plan {
-    let vehicle_template = &vehicles[0];
-    let solution = clarke_wright_savings(customers, dm, vehicle_template);
+fn solve_savings(
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+    vehicle: &Vehicle,
+    kind: usize,
+) -> Plan {
+    let solution = clarke_wright_savings(customers, dm, vehicle);
     let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     Plan {
-        vehicles: vec![0; routes.len()],
+        vehicles: vec![kind; routes.len()],
         routes,
         method: Method::Savings,
         stop_reason: StopReason::Completed,
@@ -1962,6 +2118,7 @@ fn solve_ga(
     customers: &[Customer],
     dm: &DistanceMatrix,
     vehicle: &Vehicle,
+    kind: usize,
     cfg: &InputConfig,
 ) -> Result<Plan, ServiceError> {
     let (capacity, limits) = (vehicle.capacity(), RouteLimits::of(vehicle));
@@ -2051,7 +2208,7 @@ fn solve_ga(
     let route_limits = vec![limits; routes.len()];
     let (routes, _) = apply_local_search(&routes, &route_limits, dm, customers);
     Ok(Plan {
-        vehicles: vec![0; routes.len()],
+        vehicles: vec![kind; routes.len()],
         routes,
         method: Method::Genetic,
         stop_reason: ga_result.stop_reason,
@@ -2064,6 +2221,7 @@ fn solve_alns(
     customers: &[Customer],
     dm: &DistanceMatrix,
     vehicle: &Vehicle,
+    kind: usize,
     cfg: &InputConfig,
 ) -> Result<Plan, ServiceError> {
     let (capacity, limits) = (vehicle.capacity(), RouteLimits::of(vehicle));
@@ -2129,7 +2287,7 @@ fn solve_alns(
     let route_limits = vec![limits; alns_routes.len()];
     let (routes, _) = apply_local_search(&alns_routes, &route_limits, dm, customers);
     Ok(Plan {
-        vehicles: vec![0; routes.len()],
+        vehicles: vec![kind; routes.len()],
         routes,
         method: Method::Alns,
         stop_reason: result.stop_reason,
@@ -2183,7 +2341,7 @@ mod tests {
                 PlanViolation::CustomerMissing { .. } => 6,
                 PlanViolation::WronglyUnassigned { .. } => 7,
                 PlanViolation::UnknownVehicle { .. } => 8,
-                PlanViolation::VehicleReused { .. } => 9,
+                PlanViolation::FleetCountExceeded { .. } => 9,
                 PlanViolation::TooManyRoutes { .. } => 10,
                 PlanViolation::DistanceMismatch { .. } => 11,
                 PlanViolation::CostMismatch { .. } => 12,
@@ -2608,8 +2766,12 @@ mod tests {
     #[test]
     fn total_cost_prices_each_route_with_its_vehicle() {
         let vehicles = [
-            vehicle(serde_json::json!({ "capacity": 1, "fixed_cost": 5, "cost_per_distance": 2 })),
-            vehicle(serde_json::json!({ "capacity": 1, "fixed_cost": 1, "cost_per_distance": 3 })),
+            vehicle(
+                serde_json::json!({ "capacity": 1, "fixed_cost": 5, "cost_per_distance": 2, "count": 1 }),
+            ),
+            vehicle(
+                serde_json::json!({ "capacity": 1, "fixed_cost": 1, "cost_per_distance": 3, "count": 1 }),
+            ),
         ];
         let customers = [
             customer(serde_json::json!({ "id": 1, "x": 3.0, "y": 4.0, "demand": 1 })),
@@ -2672,24 +2834,6 @@ mod tests {
             assert_eq!(err.code(), "parameter_out_of_range");
             assert_eq!(err.fields["parameter"], parameter);
         }
-        let mixed = [
-            vehicle(serde_json::json!({ "fixed_cost": 10 })),
-            vehicle(serde_json::json!({ "fixed_cost": 20 })),
-        ];
-        let err = solve(
-            &ProblemInput {
-                depot: (0.0, 0.0),
-                customers: &detour_customers(),
-                vehicles: &mixed,
-                distances: None,
-                durations: None,
-            },
-            "savings",
-            &InputConfig::default(),
-        )
-        .expect_err("one vehicle type");
-        assert_eq!(err.code(), "mixed_fleet");
-        assert_eq!(err.fields["parameter"], "fixed_cost");
     }
 
     // ---- entry point ----
@@ -3047,44 +3191,146 @@ mod tests {
         );
     }
 
-    /// The methods that plan every route alike need one vehicle type; nearest
-    /// neighbour reads each vehicle and takes a mixed fleet.
+    // ---- a fleet of several kinds ----
+
+    /// Solves `customers` with `method` and the checker's verdict on the plan:
+    /// the plan, and the violations it breaks (none when feasible).
+    fn solved_and_checked(
+        customers: &[InputCustomer],
+        vehicles: &[InputVehicle],
+        method: &str,
+        config: &InputConfig,
+    ) -> (VrpOutput, Vec<PlanViolation>) {
+        let problem = ProblemInput {
+            depot: (0.0, 0.0),
+            customers,
+            vehicles,
+            distances: None,
+            durations: None,
+        };
+        let out = solve(&problem, method, config).expect(method);
+        let plan: InputSolution = serde_json::from_value(serde_json::json!({
+            "routes": out.routes,
+            "route_vehicles": out.route_vehicles,
+            "unassigned": out.unassigned,
+            "total_distance": out.total_distance,
+            "total_cost": out.total_cost,
+        }))
+        .expect("valid plan");
+        let checked = check(&problem, method, config, &plan).expect("checks");
+        (out, checked.violations)
+    }
+
+    /// Every method plans the same fleet: kinds that differ in capacity and
+    /// costs are all used, each route is on a kind that carries it, and the
+    /// checker finds nothing wrong with the plan.
     #[test]
-    fn a_fleet_mixed_in_its_limits_is_refused_by_the_one_vehicle_methods() {
-        let customers = ring(6);
-        let fleet = vec![
-            vehicle(serde_json::json!({ "capacity": 100.0, "max_duration": 60.0 })),
-            vehicle(serde_json::json!({ "capacity": 100.0 })),
+    fn every_method_plans_a_fleet_of_several_kinds() {
+        let customers = ring(8); // 8 customers of 5: 40 in all
+        let kinds = [
+            vehicle(serde_json::json!({ "capacity": 10, "fixed_cost": 1 })),
+            vehicle(serde_json::json!({ "capacity": 40, "fixed_cost": 50 })),
+        ];
+        for method in ["nn", "savings", "ga", "alns"] {
+            let (out, violations) = solved_and_checked(&customers, &kinds, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+            for (route, summary) in out.route_summaries.iter().enumerate() {
+                let capacity = [10, 40][out.route_vehicles[route]];
+                assert!(summary.load <= capacity, "{method}: route {route}");
+            }
+        }
+    }
+
+    /// A kind without `count` is as many vehicles as the plan needs -- the
+    /// fleet a single vehicle of a request has always stood for -- by every
+    /// method, `"nn"` included.
+    #[test]
+    fn a_kind_without_a_count_is_as_many_vehicles_as_the_plan_needs() {
+        let customers = ring(8);
+        let one_kind = fleet(&[10.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let (out, violations) =
+                solved_and_checked(&customers, &one_kind, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert!(out.unassigned.is_empty(), "{method}");
+            assert_eq!(out.routes.len(), 4, "{method}: 40 units in vehicles of 10");
+        }
+    }
+
+    /// `count` bounds the vehicles of a kind: no method plans more routes for
+    /// it, and the customers its vehicles cannot carry are reported.
+    #[test]
+    fn a_count_bounds_the_vehicles_of_a_kind() {
+        let customers = ring(8);
+        let two_vans = [vehicle(serde_json::json!({ "capacity": 10, "count": 2 }))];
+        for method in ["nn", "savings", "ga", "alns"] {
+            let (out, violations) =
+                solved_and_checked(&customers, &two_vans, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert_eq!(out.routes.len(), 2, "{method}");
+            assert_eq!(out.unassigned.len(), 4, "{method}: 40 units, 20 carried");
+        }
+        // Two kinds: the dear one has a single vehicle, so the rest of the work
+        // goes to the cheap one -- and the checker agrees on the counts.
+        let kinds = [
+            vehicle(serde_json::json!({ "capacity": 20, "fixed_cost": 30, "count": 1 })),
+            vehicle(serde_json::json!({ "capacity": 10, "fixed_cost": 1 })),
         ];
         for method in ["savings", "ga", "alns"] {
-            let e = solve(
-                &ProblemInput {
-                    depot: (0.0, 0.0),
-                    customers: &customers,
-                    vehicles: &fleet,
-                    distances: None,
-                    durations: None,
-                },
-                method,
-                &quick(method),
-            )
-            .expect_err(method);
-            assert_eq!(e.fields["code"], "mixed_fleet", "{method}");
-            assert_eq!(e.fields["parameter"], "max_duration", "{method}");
-            assert_eq!(e.fields["index"], 1, "{method}");
+            let (out, violations) = solved_and_checked(&customers, &kinds, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert!(out.unassigned.is_empty(), "{method}: {:?}", out.unassigned);
+            let first = out.route_vehicles.iter().filter(|&&v| v == 0).count();
+            assert!(
+                first <= 1,
+                "{method}: kind 0 has one vehicle, used {first} times"
+            );
         }
-        assert!(solve(
+    }
+
+    /// Among the kinds that carry a route, the cheapest drives it.
+    #[test]
+    fn the_cheapest_kind_that_carries_a_route_drives_it() {
+        let customers = ring(8);
+        let kinds = [
+            vehicle(serde_json::json!({ "capacity": 40, "fixed_cost": 100 })),
+            vehicle(serde_json::json!({ "capacity": 40, "fixed_cost": 0 })),
+        ];
+        for method in ["savings", "ga", "alns"] {
+            let (out, violations) = solved_and_checked(&customers, &kinds, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert!(
+                out.route_vehicles.iter().all(|&v| v == 1),
+                "{method}: {:?}",
+                out.route_vehicles
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_below_one_is_refused() {
+        let customers = ring(3);
+        let kinds = [
+            vehicle(serde_json::json!({ "capacity": 10 })),
+            vehicle(serde_json::json!({ "capacity": 10, "count": 0 })),
+        ];
+        let err = solve(
             &ProblemInput {
                 depot: (0.0, 0.0),
                 customers: &customers,
-                vehicles: &fleet,
+                vehicles: &kinds,
                 distances: None,
-                durations: None
+                durations: None,
             },
             "nn",
-            &quick("nn")
+            &quick("nn"),
         )
-        .is_ok());
+        .expect_err("count 0");
+        assert_eq!(err.code(), "parameter_out_of_range");
+        assert_eq!(err.fields["parameter"], "count");
+        assert_eq!(err.fields["index"], 1);
+        assert_eq!(err.fields["min"], 1.0);
     }
 
     // ---- max_vehicles ----
@@ -3483,64 +3729,6 @@ mod tests {
         }
     }
 
-    /// Only nearest neighbour reads each vehicle. The other methods plan with
-    /// one capacity, and took the first vehicle's for the whole fleet: a
-    /// fleet of 10 and 100 was solved as two vehicles of 10.
-    #[test]
-    fn methods_that_plan_one_capacity_refuse_a_mixed_fleet() {
-        let customers = ring(4);
-        let mixed = fleet(&[10.0, 100.0]);
-        for method in ["savings", "ga", "alns"] {
-            let err = solve(
-                &ProblemInput {
-                    depot: (0.0, 0.0),
-                    customers: &customers,
-                    vehicles: &mixed,
-                    distances: None,
-                    durations: None,
-                },
-                method,
-                &quick(method),
-            )
-            .expect_err(method);
-            assert!(
-                err.message.contains(&format!("\"{method}\"")) && err.message.contains("capacit"),
-                "{method}: {err}"
-            );
-        }
-        assert!(solve(
-            &ProblemInput {
-                depot: (0.0, 0.0),
-                customers: &customers,
-                vehicles: &mixed,
-                distances: None,
-                durations: None
-            },
-            "nn",
-            &quick("nn")
-        )
-        .is_ok());
-
-        let uniform = fleet(&[20.0, 20.0]);
-        for method in ["nn", "savings", "ga", "alns"] {
-            assert!(
-                solve(
-                    &ProblemInput {
-                        depot: (0.0, 0.0),
-                        customers: &customers,
-                        vehicles: &uniform,
-                        distances: None,
-                        durations: None
-                    },
-                    method,
-                    &quick(method)
-                )
-                .is_ok(),
-                "{method}"
-            );
-        }
-    }
-
     /// Two customers beside the depot whose windows cannot share a route:
     /// serving customer 1 lasts until t = 6, and customer 2 closes at t = 3.
     fn clashing_windows() -> Vec<InputCustomer> {
@@ -3700,18 +3888,6 @@ mod tests {
             solve(
                 &ProblemInput {
                     depot: (0.0, 0.0),
-                    customers: &ring(2),
-                    vehicles: &fleet(&[10.0, 100.0]),
-                    distances: None,
-                    durations: None,
-                },
-                "ga",
-                &quick("ga"),
-            )
-            .expect_err("mixed fleet"),
-            solve(
-                &ProblemInput {
-                    depot: (0.0, 0.0),
                     customers: &fraction,
                     vehicles: &[],
                     distances: None,
@@ -3802,12 +3978,6 @@ mod tests {
                 .expect_err("window"),
                 "invalid_time_window",
                 serde_json::json!({ "id": 3, "index": 0, "ready": 4.0, "due": 1.0 }),
-            ),
-            (
-                solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(2), vehicles: &fleet(&[10.0, 100.0]), distances: None, durations: None }, "ga", &quick("ga"))
-                    .expect_err("mixed"),
-                "mixed_fleet",
-                serde_json::json!({ "method": "ga", "capacities": [10, 100], "index": 1 }),
             ),
             (
                 solve(&ProblemInput { depot: (0.0, 0.0), customers: &ring(8), vehicles: &fleet(&[10.0]), distances: None, durations: None },
@@ -4034,7 +4204,10 @@ mod tests {
         let customers: Vec<InputCustomer> = (1..=4)
             .map(|i| customer(json!({ "id": 10 * i, "x": i as f64, "y": 0.0, "demand": 5.0 })))
             .collect();
-        let vehicles = fleet(&[10.0, 5.0]);
+        let vehicles = vec![
+            vehicle(json!({ "capacity": 10.0, "count": 1 })),
+            vehicle(json!({ "capacity": 5.0, "count": 1 })),
+        ];
         let config = InputConfig {
             max_vehicles: Some(2),
             ..InputConfig::default()
@@ -4082,9 +4255,10 @@ mod tests {
                     route: 2,
                     customer: 77
                 },
-                PlanViolation::VehicleReused {
+                PlanViolation::FleetCountExceeded {
                     route: 2,
-                    vehicle: 1
+                    vehicle: 1,
+                    count: 1
                 },
                 PlanViolation::CustomerMissing { customer: 40 },
             ]
@@ -4530,7 +4704,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "GA with valid config should succeed");
         let output = result.unwrap();
         assert_eq!(output.method, Method::Genetic);
@@ -4556,7 +4730,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_err(), "population_size=1 should fail validation");
         let err = result.unwrap_err();
         assert!(
@@ -4575,7 +4749,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_err(), "population_size=0 should fail validation");
     }
 
@@ -4590,7 +4764,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_err(), "max_generations=0 should fail validation");
         let err = result.unwrap_err();
         assert!(
@@ -4614,7 +4788,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let err = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg)
+        let err = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg)
             .expect_err("elite_ratio filling entire population");
         assert_eq!(
             err.fields,
@@ -4635,7 +4809,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "GA with 1 customer should succeed");
         let output = result.unwrap();
         assert_eq!(output.routes.len(), 1);
@@ -4658,8 +4832,8 @@ mod tests {
                 seed: Some(42),
                 ..InputConfig::default()
             };
-            let err =
-                solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg).expect_err("out of (0, 1]");
+            let err = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg)
+                .expect_err("out of (0, 1]");
             // (0, 1]: the lower end is open, the upper closed.
             assert_eq!(
                 err.fields,
@@ -4696,7 +4870,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "ALNS with valid config should succeed");
         let output = result.unwrap();
         assert_eq!(output.method, Method::Alns);
@@ -4713,7 +4887,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_err(), "max_iterations=0 should fail validation");
         let err = result.unwrap_err();
         assert!(
@@ -4729,7 +4903,7 @@ mod tests {
     fn ga_default_config() {
         let (customers, dm) = test_customers(3);
         let cfg = InputConfig::default();
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "GA with default config should succeed");
     }
 
@@ -4737,7 +4911,7 @@ mod tests {
     fn alns_default_config() {
         let (customers, dm) = test_customers(3);
         let cfg = InputConfig::default();
-        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_alns(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "ALNS with default config should succeed");
     }
 
@@ -4752,7 +4926,7 @@ mod tests {
             seed: Some(123),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 1000), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 1000), 0, &cfg);
         assert!(
             result.is_ok(),
             "GA with 20 customers should succeed: {:?}",
@@ -4782,7 +4956,7 @@ mod tests {
             seed: Some(99),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 5), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 5), 0, &cfg);
         assert!(
             result.is_ok(),
             "GA with tight capacity should succeed: {:?}",
@@ -4803,7 +4977,7 @@ mod tests {
             seed: Some(42),
             ..InputConfig::default()
         };
-        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), &cfg);
+        let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "GA with 2 customers should succeed");
     }
 }

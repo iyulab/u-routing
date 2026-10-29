@@ -138,15 +138,13 @@ fn main() {
             eprintln!("{name}: not a Solomon instance, skipped");
             continue;
         };
-        let vehicles: Vec<Value> = (0..inst.vehicles)
-            .map(|_| {
-                json!({
-                    "capacity": inst.capacity,
-                    "max_duration": inst.horizon,
-                    "fixed_cost": fixed_cost,
-                })
-            })
-            .collect();
+        // One kind of vehicle, as many of it as the instance's fleet.
+        let vehicles: Vec<Value> = vec![json!({
+            "capacity": inst.capacity,
+            "max_duration": inst.horizon,
+            "fixed_cost": fixed_cost,
+            "count": inst.vehicles,
+        })];
         for method in &methods {
             // Only the settings the method reads: any other is refused
             // (`invalid_option`, `urouting_methods`).

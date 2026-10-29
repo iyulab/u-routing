@@ -17,6 +17,19 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Changed
 
+- **Breaking** A fleet may mix kinds of vehicle -- different capacities, costs and limits -- and every method
+  plans with all of them. `vehicles` lists *kinds*; the new `vehicles[].count` (a whole number >= 1) says how
+  many there are, and a kind without `count` is as many as the plan needs. `"savings"`, `"ga"` and `"alns"` plan
+  with the kind that carries the most and then give every route the kind that carries it cheapest within the
+  counts (an exact assignment); a route no vehicle left can carry is cut for the kinds still available, and what
+  the fleet cannot take is reported in `unassigned`. `"nn"` fills the vehicles in the order of the list.
+  - `mixed_fleet` is gone: no fleet is refused for mixing kinds.
+  - `"nn"` no longer reads each list entry as one vehicle: an entry without `count` is unlimited. Write
+    `count: 1` per vehicle (or `count: n` for n alike) to keep a fixed fleet.
+  - `check_vrp_solution`: `vehicle_reused` is `fleet_count_exceeded` (`route`, `vehicle`, `count`), reported for
+    every method when a kind drives more routes than its `count`. In Rust, `evaluation::Fleet` has `counts`
+    where it had `usage`, and `VehicleUse` and `ViolationType::VehicleReused` are gone
+    (`ViolationType::FleetCountExceeded`).
 - `relocate_improve` skips a customer whose cheapest insertion into a route cannot improve on
   its removal, instead of scanning every position of that route again after every move. The
   cost of inserting a customer into a route does not depend on where the customer is, so it is

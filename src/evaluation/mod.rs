@@ -3,7 +3,7 @@
 mod check;
 mod evaluator;
 
-pub use check::{check_solution, Fleet, VehicleUse};
+pub use check::{check_solution, Fleet};
 pub use evaluator::RouteEvaluator;
 
 use crate::distance::DistanceMatrix;

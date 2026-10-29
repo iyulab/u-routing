@@ -4,22 +4,15 @@ use super::RouteEvaluator;
 use crate::distance::DistanceMatrix;
 use crate::models::{Customer, Solution, Vehicle, Violation, ViolationType};
 
-/// How a plan may use the vehicles of its fleet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VehicleUse {
-    /// The fleet lists individual vehicles: each drives at most one route.
-    OneRouteEach,
-    /// The fleet lists vehicle types: any number of routes may use each.
-    AnyNumber,
-}
-
-/// The vehicles a plan may use, and how.
+/// The vehicles a plan may use.
 #[derive(Debug, Clone, Copy)]
 pub struct Fleet<'a> {
-    /// The vehicles; a route names one by its index here.
+    /// The vehicle types; a route names one by its index here.
     pub vehicles: &'a [Vehicle],
-    /// Whether a vehicle may drive more than one route.
-    pub usage: VehicleUse,
+    /// How many vehicles of each type there are, in the order of `vehicles`:
+    /// at most that many routes may use the type. `None` is without limit, and
+    /// so is an empty slice.
+    pub counts: &'a [Option<usize>],
     /// The most routes the plan may use, if bounded.
     pub max_routes: Option<usize>,
 }
@@ -47,7 +40,7 @@ const DISTANCE_TOLERANCE: f64 = 1e-6;
 ///
 /// ```
 /// use u_routing::distance::DistanceMatrix;
-/// use u_routing::evaluation::{check_solution, Fleet, VehicleUse};
+/// use u_routing::evaluation::{check_solution, Fleet};
 /// use u_routing::models::{Customer, Route, Solution, Vehicle, Visit, ViolationType};
 ///
 /// let customers = vec![
@@ -57,7 +50,7 @@ const DISTANCE_TOLERANCE: f64 = 1e-6;
 /// ];
 /// let dm = DistanceMatrix::from_customers(&customers);
 /// let vehicles = [Vehicle::new(0, 20)];
-/// let fleet = Fleet { vehicles: &vehicles, usage: VehicleUse::AnyNumber, max_routes: None };
+/// let fleet = Fleet { vehicles: &vehicles, counts: &[], max_routes: None };
 ///
 /// let mut route = Route::new(0);
 /// for id in [1, 2] {
@@ -91,7 +84,7 @@ pub fn check_solution(
     }
 
     let mut served = vec![false; customers.len()];
-    let mut vehicle_used = vec![false; fleet.vehicles.len()];
+    let mut vehicle_used = vec![0usize; fleet.vehicles.len()];
     for (route_index, route) in solution.routes().iter().enumerate() {
         let ids = route.customer_ids();
         let mut known = true;
@@ -120,14 +113,15 @@ pub fn check_solution(
             });
             continue;
         };
-        if fleet.usage == VehicleUse::OneRouteEach {
-            if vehicle_used[vehicle_id] {
-                push(ViolationType::VehicleReused {
+        vehicle_used[vehicle_id] += 1;
+        if let Some(Some(count)) = fleet.counts.get(vehicle_id) {
+            if vehicle_used[vehicle_id] == count + 1 {
+                push(ViolationType::FleetCountExceeded {
                     route_index,
                     vehicle_id,
+                    count: *count,
                 });
             }
-            vehicle_used[vehicle_id] = true;
         }
         // A route through an id that is not a customer cannot be timed.
         if !known {
@@ -230,7 +224,7 @@ mod tests {
         let vehicles = [Vehicle::new(0, 10)];
         let fleet = Fleet {
             vehicles: &vehicles,
-            usage: VehicleUse::AnyNumber,
+            counts: &[],
             max_routes: Some(2),
         };
         let s = plan(vec![route(0, &[1, 2], &dm), route(0, &[3, 4], &dm)], &[]);
@@ -243,7 +237,7 @@ mod tests {
         let vehicles = [Vehicle::new(0, 100)];
         let fleet = Fleet {
             vehicles: &vehicles,
-            usage: VehicleUse::AnyNumber,
+            counts: &[],
             max_routes: None,
         };
         // 1 twice, 4 missing, 2 served and reported unassigned, 9 and the
@@ -281,7 +275,7 @@ mod tests {
         let vehicles = [Vehicle::new(0, 10), Vehicle::new(1, 5)];
         let fleet = Fleet {
             vehicles: &vehicles,
-            usage: VehicleUse::OneRouteEach,
+            counts: &[Some(1), Some(1)],
             max_routes: None,
         };
         let ok = plan(vec![route(0, &[3, 4], &dm), route(1, &[1], &dm)], &[2]);
@@ -311,7 +305,7 @@ mod tests {
         );
         let fleet = Fleet {
             vehicles: &vehicles,
-            usage: VehicleUse::OneRouteEach,
+            counts: &[Some(1)],
             max_routes: Some(2),
         };
         assert_eq!(
@@ -321,9 +315,10 @@ mod tests {
                     routes: 3,
                     max_routes: 2
                 },
-                &ViolationType::VehicleReused {
+                &ViolationType::FleetCountExceeded {
                     route_index: 1,
-                    vehicle_id: 0
+                    vehicle_id: 0,
+                    count: 1
                 },
                 &ViolationType::UnknownVehicle {
                     route_index: 2,
@@ -344,7 +339,7 @@ mod tests {
             .with_max_duration(5.0)];
         let fleet = Fleet {
             vehicles: &vehicles,
-            usage: VehicleUse::AnyNumber,
+            counts: &[],
             max_routes: None,
         };
         let mut short = route(0, &[1, 2, 3, 4], &dm);
