@@ -23,6 +23,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod alns;
+pub mod assignment;
 pub mod constructive;
 pub mod distance;
 pub mod evaluation;
