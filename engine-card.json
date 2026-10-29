@@ -4,7 +4,7 @@
   "engine": {
     "id": "u-routing",
     "summary": "Vehicle routing: plans routes from a depot that serve every customer within vehicle capacity, time windows and route limits (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
-    "version": "0.24.0",
+    "version": "0.25.0",
     "license": "MIT",
     "repository": "https://github.com/iyulab/u-routing"
   },
@@ -12,16 +12,16 @@
     {
       "kind": "crate",
       "name": "u-routing",
-      "package_version": "0.24.0",
-      "engine_version": "0.24.0",
+      "package_version": "0.25.0",
+      "engine_version": "0.25.0",
       "note": "The crate also exposes the constructive heuristics, local-search moves and evaluator one by one; the WebAssembly operations are its request-level service.",
       "error_shape": "Err(...) from a method given settings it cannot run; infeasible customers come back in the plan's unassigned list."
     },
     {
       "kind": "npm",
       "name": "@iyulab/u-routing",
-      "package_version": "0.24.0",
-      "engine_version": "0.24.0",
+      "package_version": "0.25.0",
+      "engine_version": "0.25.0",
       "wasm": true,
       "note": "Objects in and out, typed in the .d.ts (VrpInput, VrpOutput, InputSolution, CheckOutput). Bundler and Node targets; no bundler-less browser build.",
       "error_shape": "A thrown Error whose code property is the code, with the fields (parameter, index, min, max, got, expected, ...) as its other properties."
@@ -29,8 +29,8 @@
     {
       "kind": "nuget",
       "name": "URouting",
-      "package_version": "0.21.0",
-      "engine_version": "0.24.0",
+      "package_version": "0.22.0",
+      "engine_version": "0.25.0",
       "note": "C ABI wrapper over the same service layer; versioned on its own axis.",
       "error_shape": "A RoutingException whose ErrorCode is the code, Parameter and Index the fields of those names, and Details the rest."
     }
