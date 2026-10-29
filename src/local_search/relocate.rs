@@ -105,6 +105,16 @@ struct Relocations<'a> {
     loads: Vec<i32>,
     /// `pairs[from * n + to]`: the best move from route `from` into `to`.
     pairs: Vec<Option<RelocateMove>>,
+    /// Routes in the search.
+    routes: usize,
+    /// `least_insertion[customer * routes + to]`: the least insertion delta of
+    /// the customer into route `to` as it stands, NaN when not known. What it
+    /// costs to insert a customer into a route does not depend on where the
+    /// customer is, so it stays true until the route itself changes.
+    least_insertion: Vec<f64>,
+    /// Whether a customer with no improving position is skipped on the
+    /// strength of `least_insertion` (the scan it saves finds nothing).
+    prune: bool,
 }
 
 impl<'a> Relocations<'a> {
@@ -113,6 +123,16 @@ impl<'a> Relocations<'a> {
         customers: &'a [Customer],
         distances: &'a DistanceMatrix,
         vehicle: &'a Vehicle,
+    ) -> Self {
+        Self::with_pruning(routes, customers, distances, vehicle, true)
+    }
+
+    fn with_pruning(
+        routes: &[Vec<usize>],
+        customers: &'a [Customer],
+        distances: &'a DistanceMatrix,
+        vehicle: &'a Vehicle,
+        prune: bool,
     ) -> Self {
         let limits = RouteLimits::of(vehicle);
         let n = routes.len();
@@ -125,10 +145,14 @@ impl<'a> Relocations<'a> {
             limits,
             loads: routes.iter().map(|r| Self::load(customers, r)).collect(),
             pairs: vec![None; n * n],
+            routes: n,
+            least_insertion: vec![f64::NAN; customers.len() * n],
+            prune,
         };
         for from in 0..n {
             for to in 0..n {
-                search.pairs[from * n + to] = search.best_between(routes, from, to);
+                let best = search.best_between(routes, from, to);
+                search.pairs[from * n + to] = best;
             }
         }
         search
@@ -162,11 +186,17 @@ impl<'a> Relocations<'a> {
         let n = routes.len();
         for r in [a, b] {
             self.loads[r] = Self::load(self.customers, &routes[r]);
+            // The route changed: what it costs to insert into it is not known.
+            for customer in 0..self.customers.len() {
+                self.least_insertion[customer * self.routes + r] = f64::NAN;
+            }
         }
         for other in 0..n {
             for r in [a, b] {
-                self.pairs[r * n + other] = self.best_between(routes, r, other);
-                self.pairs[other * n + r] = self.best_between(routes, other, r);
+                let out_of = self.best_between(routes, r, other);
+                self.pairs[r * n + other] = out_of;
+                let into = self.best_between(routes, other, r);
+                self.pairs[other * n + r] = into;
             }
         }
     }
@@ -174,7 +204,7 @@ impl<'a> Relocations<'a> {
     /// The best improving, feasible move of a customer of `from_r` into
     /// `to_r` (the first in position order among equals).
     fn best_between(
-        &self,
+        &mut self,
         routes: &[Vec<usize>],
         from_r: usize,
         to_r: usize,
@@ -203,9 +233,19 @@ impl<'a> Relocations<'a> {
                 } else {
                     0.0
                 };
+            // The cheapest position's delta is the removal plus the least
+            // insertion (adding a constant never reorders the rounded sums),
+            // so when that is not an improvement no position is one.
+            let slot = cid * self.routes + to_r;
+            let known = self.least_insertion[slot];
+            if self.prune && known.is_finite() && removal_delta + known >= -self.floor {
+                continue;
+            }
+            let mut least = f64::INFINITY;
             for to_pos in 0..=to_route.len() {
                 let insertion_delta = insertion_cost(to_route, to_pos, cid, depot, distances)
                     + if to_route.is_empty() { fixed } else { 0.0 };
+                least = least.min(insertion_delta);
                 let delta = removal_delta + insertion_delta;
                 if delta < -self.floor {
                     if self.constrained {
@@ -218,6 +258,7 @@ impl<'a> Relocations<'a> {
                     }
                 }
             }
+            self.least_insertion[slot] = least;
         }
         candidates.extend(cheapest);
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -314,6 +355,53 @@ fn rebuild_solution(
 mod tests {
     use super::*;
     use crate::constructive::nearest_neighbor;
+
+    /// Moves taken with the scan that skips customers with no improving
+    /// position are exactly those taken by the full scan, on random maps with
+    /// ties (a coarse grid), tight capacities and routes of every length.
+    #[test]
+    fn skipping_customers_without_an_improving_position_changes_no_move() {
+        let mut state = 20261029u64;
+        let mut next = move |bound: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) % bound
+        };
+        for case in 0..40 {
+            let n = 12 + next(40) as usize;
+            let mut customers = vec![Customer::depot(next(10) as f64, next(10) as f64)];
+            for id in 1..=n {
+                customers.push(Customer::new(
+                    id,
+                    next(12) as f64,
+                    next(12) as f64,
+                    1 + next(9) as i32,
+                    0.0,
+                ));
+            }
+            let dm = DistanceMatrix::from_customers(&customers);
+            let capacity = 12 + next(30) as i32;
+            let vehicles: Vec<Vehicle> = (0..n).map(|i| Vehicle::new(i, capacity)).collect();
+            let initial = nearest_neighbor(&customers, &dm, &vehicles);
+            let routes: Vec<Vec<usize>> =
+                initial.routes().iter().map(|r| r.customer_ids()).collect();
+            let run = |prune: bool| {
+                let mut routes = routes.clone();
+                let mut search =
+                    Relocations::with_pruning(&routes, &customers, &dm, &vehicles[0], prune);
+                let mut taken = Vec::new();
+                while let Some(mv) = search.best() {
+                    taken.push((mv.from_route, mv.from_pos, mv.to_route, mv.to_pos));
+                    let id = routes[mv.from_route].remove(mv.from_pos);
+                    routes[mv.to_route].insert(mv.to_pos, id);
+                    search.moved(&routes, mv.from_route, mv.to_route);
+                }
+                (taken, routes)
+            };
+            assert_eq!(run(true), run(false), "case {case}");
+        }
+    }
 
     #[test]
     fn test_relocate_single_route() {

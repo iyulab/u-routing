@@ -8,6 +8,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- `relocate_improve` skips a customer whose cheapest insertion into a route cannot improve on
+  its removal, instead of scanning every position of that route again after every move. The
+  cost of inserting a customer into a route does not depend on where the customer is, so it is
+  remembered until that route changes. The moves taken are the same ones, in the same order
+  (the answers of the usual instances are bit-identical: CVRPLIB X-n101 to X-n143 at 3 seeds
+  1.68 %, Solomon R1 144 routes / 14977); 29 % fewer insertions are evaluated on X-n401 and a
+  run takes 7.9 s instead of 8.7.
+
 ### Fixed
 
 A map in small units (coordinates of 1e-9, say) was treated as if nothing could be gained on it:
