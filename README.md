@@ -337,6 +337,24 @@ alone. A route no vehicle left can carry is cut for the kinds still available;
 what the fleet still cannot take is reported in `unassigned`, the lightest
 routes first.
 
+```js
+import { solve_vrp } from '@iyulab/u-routing';
+
+// Two kinds of truck: at most two small ones, and as many big ones as needed.
+const customers = [];
+for (let i = 1; i <= 6; i++) {
+  const a = 2 * Math.PI * i / 6;
+  customers.push({ id: i, x: Math.cos(a) * 10, y: Math.sin(a) * 10, demand: 10 });
+}
+const out = solve_vrp({
+  depot: { x: 0, y: 0 }, customers, method: "savings",
+  vehicles: [{ capacity: 20, fixed_cost: 1, count: 2 }, { capacity: 60, fixed_cost: 30 }],
+});
+console.log(out.route_vehicles); // the kind of each route: 0 = small, 1 = big
+if (out.unassigned.length > 0) throw new Error("a customer was left out");
+if (out.route_vehicles.filter((k) => k === 0).length > 2) throw new Error("count not kept");
+```
+
 **What a route costs: `fixed_cost` and `cost_per_distance` on a vehicle.** A
 route costs its vehicle's `fixed_cost` (default 0, `>= 0`) plus
 `cost_per_distance` (default 1, `> 0`) times its distance, and the plan's

@@ -82,4 +82,19 @@ for (const [method, budget] of [['ga', { max_generations: 1000000 }], ['alns', {
   ok(out.stop_reason === 'time_limit', method + ': stop_reason ' + out.stop_reason)
   ok(Date.now() - started < 5000, method + ': ran ' + (Date.now() - started) + ' ms past a 1 ms limit')
 }
+// A fleet of several kinds: every method plans with all of them, each route is
+// on a kind that carries it, and `count` bounds the vehicles of a kind.
+const kinds = [{ capacity: 20, fixed_cost: 1 }, { capacity: 60, fixed_cost: 30 }]
+for (const method of ['nn', 'savings', 'ga', 'alns']) {
+  const out = m.solve_vrp({ depot, customers, vehicles: kinds, method, config: base(method) })
+  ok(out.unassigned.length === 0, method + ': mixed fleet left out ' + JSON.stringify(out.unassigned))
+  out.routes.forEach((route, i) => {
+    ok(out.route_summaries[i].load <= kinds[out.route_vehicles[i]].capacity,
+      method + ': route ' + i + ' of load ' + out.route_summaries[i].load + ' on kind ' + out.route_vehicles[i])
+  })
+  const counted = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20, count: 1 }], method,
+                                config: base(method) })
+  ok(counted.routes.length === 1 && counted.unassigned.length === 4,
+    method + ': one vehicle of 20 gave ' + counted.routes.length + ' routes, left out ' + counted.unassigned.length)
+}
 console.log(`behaviour gate: ok (${checks} checks)`)
