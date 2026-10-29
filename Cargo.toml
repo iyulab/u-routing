@@ -62,6 +62,10 @@ required-features = ["ffi"]
 name = "cvrplib"
 required-features = ["ffi"]
 
+[[example]]
+name = "cvrplib_mixed"
+required-features = ["ffi"]
+
 [dev-dependencies]
 # Generates the JSON Schemas the engine card points at (tests only).
 schemars = "1"

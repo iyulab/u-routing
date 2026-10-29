@@ -14,6 +14,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   and `assign_types` -- gives each route of a plan the vehicle type that carries it, serving the most customers and
   then costing least, with the type counts respected (an exact assignment, checked against exhaustive search). The
   base of mixed-fleet planning.
+- The `cvrplib_mixed` example: a mixed fleet derived from a CVRPLIB X instance's capacity, planned against
+  each of its kinds alone.
 
 ### Changed
 
