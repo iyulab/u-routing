@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-02
+
+Depends on u-metaheur 0.19 and u-numflow 0.16. The .NET client is `URouting` 0.23.0.
+
 ### Added
 
 - `assignment`: `VehicleType` (a vehicle and how many of it there are, or no limit), `RouteDemand`, `cheapest_type`
