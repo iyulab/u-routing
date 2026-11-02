@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-02
+
+Depends on u-metaheur 0.19 and u-numflow 0.16. The .NET client is `URouting` 0.24.0.
+
 ### Added
 
 - Workload balance: `config.balance: { quantity: "load" | "distance" | "duration", weight }` makes every method
