@@ -272,6 +272,8 @@ pub fn check_vrp_solution(
         &solution,
     )
     .map_err(js_err)?;
+    #[cfg(test)]
+    crate::finite_out::assert_finite(&output);
     serde_wasm_bindgen::to_value(&output)
         .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }
@@ -351,6 +353,8 @@ pub fn solve_vrp(
     .map_err(js_err)?;
     output.computation_time_ms = elapsed_ms(start);
 
+    #[cfg(test)]
+    crate::finite_out::assert_finite(&output);
     serde_wasm_bindgen::to_value(&output)
         .map_err(|e| js_err(ServiceError::internal(&e.to_string())))
 }

@@ -36,6 +36,9 @@ pub mod models;
 #[cfg(any(feature = "wasm", feature = "ffi"))]
 mod service;
 
+#[cfg(all(test, any(feature = "wasm", feature = "ffi")))]
+mod finite_out;
+
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
