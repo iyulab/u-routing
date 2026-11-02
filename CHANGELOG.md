@@ -8,6 +8,17 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-02
+
+The .NET client is `URouting` 0.24.1.
+
+### Fixed
+
+- `"nn"` with a vehicle kind of `count` > 1 reported the wrong vehicle for most routes. `route_vehicles` named kind 0
+  wherever the route came from the first copies in the expanded list, so the plan's own `check_vrp_solution` found
+  `capacity_exceeded` and `fleet_count_exceeded`. Each route now reports the kind that drove it. Fleets with at most
+  one vehicle of each kind were not affected.
+
 ## [0.27.0] - 2026-11-02
 
 Depends on u-metaheur 0.19 and u-numflow 0.16. The .NET client is `URouting` 0.24.0.
