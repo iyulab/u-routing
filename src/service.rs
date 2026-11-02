@@ -17,6 +17,7 @@ use crate::alns::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemova
 use crate::alns::repair::{GreedyInsertion, RegretInsertion};
 use crate::alns::{Destroy, Repair, RoutingAlnsProblem};
 use crate::assignment::{assign_types, RouteDemand, VehicleType};
+use crate::balance::{self, Balance, Quantity, RouteFigures};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
@@ -478,6 +479,14 @@ pub(crate) struct InputCustomer {
     time_window: Option<[f64; 2]>,
 }
 
+impl InputCustomer {
+    /// No service time and no time window: the customer adds no time but the
+    /// travel to it.
+    fn is_untimed(&self) -> bool {
+        self.service_time == 0.0 && self.time_window.is_none()
+    }
+}
+
 #[derive(Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
@@ -592,6 +601,32 @@ pub(crate) struct InputConfig {
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     max_vehicles: Option<i128>,
+    /// Weigh the busiest route against cost: the plan minimises `total_cost`
+    /// plus `weight` × the largest workload of any route (`equity`), where a
+    /// workload is what `quantity` counts. Absent or `null`: cost alone.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "InputBalance | null"))]
+    balance: Option<InputBalance>,
+}
+
+/// The balance term of the objective (`config.balance`).
+#[derive(Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InputBalance {
+    /// What a route's workload counts: `"load"` -- its load as a share of
+    /// its vehicle's capacity; `"distance"` -- its length; `"duration"` --
+    /// when it is back at the depot (needs travel times, service times or
+    /// time windows; without them it is the distance).
+    #[cfg_attr(
+        feature = "wasm",
+        tsify(type = "\"load\" | \"distance\" | \"duration\"")
+    )]
+    quantity: String,
+    /// Units of cost one unit of the largest workload is worth (`>= 0`;
+    /// `0` is cost alone).
+    weight: f64,
 }
 
 impl InputConfig {
@@ -626,6 +661,10 @@ pub(crate) struct RouteSummary {
     /// (one unit of distance is one unit of time), waiting for time windows to
     /// open and service times. Equal to `distance` for a route with neither.
     pub(crate) duration: f64,
+    /// What `config.balance.quantity` counts for this route; `null` without
+    /// `config.balance`.
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
+    pub(crate) workload: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -648,6 +687,14 @@ pub(crate) struct VrpOutput {
     /// `fixed_cost` plus `cost_per_distance` × the route's distance. Equal to
     /// `total_distance` with the default costs.
     pub(crate) total_cost: f64,
+    /// The largest `workload` of any route (`0` for a plan without routes);
+    /// `null` without `config.balance`.
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
+    pub(crate) equity: Option<f64>,
+    /// What the plan minimises: `total_cost` + `config.balance.weight` ×
+    /// `equity`; `null` without `config.balance`.
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
+    pub(crate) objective: Option<f64>,
     pub(crate) num_vehicles: usize,
     pub(crate) method_used: String,
     /// Filled in by the binding: how to read a clock differs by target.
@@ -681,7 +728,7 @@ pub(crate) struct VrpOutput {
 /// The settings a request's `config` can carry, in the order of
 /// [`InputConfig`]'s fields. Which of them a method reads is
 /// [`Method::reads_setting`].
-pub(crate) const SETTINGS: [&str; 8] = [
+pub(crate) const SETTINGS: [&str; 9] = [
     "population_size",
     "max_generations",
     "mutation_rate",
@@ -690,6 +737,7 @@ pub(crate) const SETTINGS: [&str; 8] = [
     "seed",
     "time_limit_ms",
     "max_vehicles",
+    "balance",
 ];
 
 /// A refusal reason: the `code` and the fields that can stand beside it.
@@ -835,6 +883,7 @@ impl Method {
     /// - `max_iterations`: ALNS.
     /// - `seed`, `time_limit_ms`: the two search methods (GA, ALNS).
     /// - `max_vehicles`: every method -- the fixed fleet all of them keep to.
+    /// - `balance`: every method -- the objective all of them minimise.
     fn reads_setting(self, setting: &str) -> bool {
         use Method::*;
         match setting {
@@ -843,7 +892,7 @@ impl Method {
             }
             "max_iterations" => self == Alns,
             "seed" | "time_limit_ms" => matches!(self, Genetic | Alns),
-            "max_vehicles" => true,
+            "max_vehicles" | "balance" => true,
             _ => false,
         }
     }
@@ -940,6 +989,7 @@ pub(crate) fn solve(
         durations,
         input_customers.len(),
     )?;
+    let balance = balance_of(config, input_customers, durations.is_some())?;
     if customers.len() <= 1 {
         return Ok(VrpOutput {
             routes: vec![],
@@ -947,6 +997,8 @@ pub(crate) fn solve(
             route_summaries: vec![],
             total_distance: 0.0,
             total_cost: 0.0,
+            equity: balance.map(|_| 0.0),
+            objective: balance.map(|_| 0.0),
             num_vehicles: 0,
             method_used: method.name().to_string(),
             computation_time_ms: 0.0,
@@ -1013,7 +1065,22 @@ pub(crate) fn solve(
         } else {
             plan
         };
-        // The plan that leaves fewer customers out wins, then the cheaper.
+        // Every method ends on the same objective: moves between its routes
+        // while they lower cost + weight × the busiest route.
+        let plan = match balance {
+            Some(b) => {
+                let (routes, kinds) =
+                    balance::improve(plan.routes, plan.vehicles, &vehicles, &customers, &dm, b);
+                Plan {
+                    routes,
+                    vehicles: kinds,
+                    ..plan
+                }
+            }
+            None => plan,
+        };
+        // The plan that leaves fewer customers out wins, then the one with the
+        // lower objective (the cost, without a balance).
         let served: usize = plan.routes.iter().map(Vec::len).sum();
         let cost: f64 = plan
             .routes
@@ -1021,6 +1088,20 @@ pub(crate) fn solve(
             .zip(&plan.vehicles)
             .map(|(r, &v)| vehicles[v].route_cost(route_distance(r, &dm)))
             .sum();
+        let cost = match balance {
+            Some(b) => {
+                let equity = plan
+                    .routes
+                    .iter()
+                    .zip(&plan.vehicles)
+                    .map(|(r, &v)| {
+                        RouteFigures::of(r, &dm, &customers).workload(b.quantity, &vehicles[v])
+                    })
+                    .fold(0.0, f64::max);
+                cost + b.weight * equity
+            }
+            None => cost,
+        };
         let better = chosen
             .as_ref()
             .is_none_or(|(_, s, c)| served > *s || (served == *s && cost < *c));
@@ -1041,10 +1122,20 @@ pub(crate) fn solve(
                 load: built.total_load().into(),
                 cost: vehicles[v].route_cost(distance),
                 duration: built.total_duration(),
+                workload: balance.map(|b| {
+                    RouteFigures::of(route, &dm, &customers).workload(b.quantity, &vehicles[v])
+                }),
             }
         })
         .collect();
-    let total_cost = route_summaries.iter().map(|r| r.cost).sum();
+    let total_cost: f64 = route_summaries.iter().map(|r| r.cost).sum();
+    let equity = balance.map(|_| {
+        route_summaries
+            .iter()
+            .filter_map(|r| r.workload)
+            .fold(0.0, f64::max)
+    });
+    let objective = balance.zip(equity).map(|(b, e)| total_cost + b.weight * e);
     let total_distance = route_summaries.iter().map(|r| r.distance).sum();
     let routes = map_routes(&plan.routes, id_map.as_slice());
     // Derived from the routes rather than from each solver's own bookkeeping,
@@ -1059,6 +1150,8 @@ pub(crate) fn solve(
         num_vehicles: routes.len(),
         total_distance,
         total_cost,
+        equity,
+        objective,
         routes,
         route_vehicles: plan.vehicles,
         route_summaries,
@@ -1102,6 +1195,16 @@ pub(crate) struct InputSolution {
     #[serde(default)]
     #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
     total_cost: Option<f64>,
+    /// The plan's largest route workload as reported (see `solve`'s
+    /// `equity`); needs `config.balance`. Absent: not checked.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
+    equity: Option<f64>,
+    /// The plan's objective as reported (see `solve`'s `objective`); needs
+    /// `config.balance`. Absent: not checked.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
+    objective: Option<f64>,
 }
 
 /// One way a plan breaks its problem. `route` is an index into the plan's
@@ -1162,6 +1265,11 @@ pub(crate) enum PlanViolation {
     /// The reported `total_cost` differs from what the routes cost with
     /// their vehicles.
     CostMismatch { reported: f64, actual: f64 },
+    /// The reported `equity` differs from the routes' largest workload.
+    EquityMismatch { reported: f64, actual: f64 },
+    /// The reported `objective` differs from `total_cost` + weight × `equity`
+    /// of the routes.
+    ObjectiveMismatch { reported: f64, actual: f64 },
 }
 
 impl PlanViolation {
@@ -1218,6 +1326,14 @@ impl PlanViolation {
                 actual: 0.0,
             },
             Self::CostMismatch {
+                reported: 0.0,
+                actual: 0.0,
+            },
+            Self::EquityMismatch {
+                reported: 0.0,
+                actual: 0.0,
+            },
+            Self::ObjectiveMismatch {
                 reported: 0.0,
                 actual: 0.0,
             },
@@ -1280,6 +1396,23 @@ pub(crate) fn check(
     let fleet_types = build_vehicles(input_vehicles)?;
     let vehicles: Vec<Vehicle> = fleet_types.iter().map(|t| t.vehicle().clone()).collect();
     let counts: Vec<Option<usize>> = fleet_types.iter().map(VehicleType::count).collect();
+    let balance = balance_of(config, input_customers, durations.is_some())?;
+    if balance.is_none() {
+        for (field, given) in [
+            ("solution.equity", solution.equity.is_some()),
+            ("solution.objective", solution.objective.is_some()),
+        ] {
+            if given {
+                return Err(ServiceError::new(
+                    Code::InvalidOption,
+                    format!(
+                        "{field} is measured by config.balance -- give it, or leave {field} out"
+                    ),
+                    json!({ "parameter": field }),
+                ));
+            }
+        }
+    }
     if let Some(route_vehicles) = &solution.route_vehicles {
         if route_vehicles.len() != solution.routes.len() {
             return Err(ServiceError::new(
@@ -1315,6 +1448,7 @@ pub(crate) fn check(
     let mut plan = Solution::new();
     let mut actual_total = Some(0.0);
     let mut actual_cost = Some(0.0);
+    let mut actual_equity = Some(0.0_f64);
     for (r, ids) in solution.routes.iter().enumerate() {
         let vehicle = solution
             .route_vehicles
@@ -1347,9 +1481,16 @@ pub(crate) fn check(
                 (Some(c), Some(v)) => Some(c + v.route_cost(d)),
                 _ => None,
             };
+            actual_equity = match (actual_equity, vehicles.get(vehicle), balance) {
+                (Some(e), Some(v), Some(b)) => Some(
+                    e.max(RouteFigures::of(&internal_ids, &dm, &customers).workload(b.quantity, v)),
+                ),
+                _ => None,
+            };
         } else {
             actual_total = None;
             actual_cost = None;
+            actual_equity = None;
         }
         plan.add_route(route);
     }
@@ -1463,6 +1604,20 @@ pub(crate) fn check(
     if let (Some(reported), Some(actual)) = (solution.total_cost, actual_cost) {
         if (reported - actual).abs() > 1e-6 * actual.abs() {
             violations.push(PlanViolation::CostMismatch { reported, actual });
+        }
+    }
+    if let (Some(reported), Some(actual)) = (solution.equity, actual_equity) {
+        if (reported - actual).abs() > 1e-6 * actual.abs() {
+            violations.push(PlanViolation::EquityMismatch { reported, actual });
+        }
+    }
+    let actual_objective = match (balance, actual_cost, actual_equity) {
+        (Some(b), Some(c), Some(e)) => Some(c + b.weight * e),
+        _ => None,
+    };
+    if let (Some(reported), Some(actual)) = (solution.objective, actual_objective) {
+        if (reported - actual).abs() > 1e-6 * actual.abs() {
+            violations.push(PlanViolation::ObjectiveMismatch { reported, actual });
         }
     }
     Ok(CheckOutput {
@@ -1742,6 +1897,63 @@ fn settings_refused(method: Method, e: ConfigError) -> ServiceError {
 /// Refuses a setting the method does not read, naming the methods that do.
 /// Run without it, the request would claim a setting that changed nothing; it
 /// used to be accepted and ignored.
+/// `config.balance` as the solver reads it, refused when its quantity is not
+/// one it knows, its weight is not a number `>= 0`, or it balances
+/// `"duration"` on a problem with no time in it (no travel times, service
+/// times or time windows), where the duration is only the distance again.
+fn balance_of(
+    cfg: &InputConfig,
+    customers: &[InputCustomer],
+    travel_times: bool,
+) -> Result<Option<Balance>, ServiceError> {
+    let Some(input) = &cfg.balance else {
+        return Ok(None);
+    };
+    let quantity = Quantity::parse(&input.quantity).ok_or_else(|| {
+        ServiceError::new(
+            Code::UnknownOption,
+            format!(
+                "unknown config.balance.quantity '{}'. Supported: \"load\", \"distance\", \"duration\"",
+                input.quantity
+            ),
+            json!({ "parameter": "config.balance.quantity", "got": input.quantity,
+                    "expected": Quantity::NAMES }),
+        )
+    })?;
+    let weight = input.weight;
+    if !weight.is_finite() {
+        // Only JavaScript can send one (the binding refuses it first).
+        return Err(ServiceError::new(
+            Code::ValueNotFinite,
+            format!("config.balance.weight must be finite, got {weight}"),
+            json!({ "parameter": "config.balance.weight" }),
+        ));
+    }
+    if weight < 0.0 {
+        let mut fields = json!({ "parameter": "config.balance.weight", "got": weight });
+        Bounds::of((Bound::Included(0.0), Bound::Unbounded)).insert_into(&mut fields);
+        return Err(ServiceError::new(
+            Code::ParameterOutOfRange,
+            format!("config.balance.weight must be >= 0, got {weight}"),
+            fields,
+        ));
+    }
+    if quantity == Quantity::Duration
+        && !travel_times
+        && customers.iter().all(InputCustomer::is_untimed)
+    {
+        return Err(ServiceError::new(
+            Code::InvalidOption,
+            "config.balance.quantity \"duration\" needs time in the problem -- travel times \
+             (durations), service times or time windows; without them a route's duration is its \
+             distance: balance \"distance\""
+                .to_string(),
+            json!({ "parameter": "config.balance.quantity" }),
+        ));
+    }
+    Ok(Some(Balance { quantity, weight }))
+}
+
 fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), ServiceError> {
     let given = [
         cfg.population_size.is_some(),
@@ -1752,6 +1964,7 @@ fn refuse_unread_settings(method: Method, cfg: &InputConfig) -> Result<(), Servi
         cfg.seed.is_some(),
         cfg.time_limit_ms.is_some(),
         cfg.max_vehicles.is_some(),
+        cfg.balance.is_some(),
     ];
     for (setting, present) in SETTINGS.into_iter().zip(given) {
         if present && !method.reads_setting(setting) {
@@ -2394,7 +2607,7 @@ mod tests {
     /// has one), and the fields listed are the ones it serializes.
     #[test]
     fn the_code_catalog_covers_every_violation() {
-        let mut seen = [false; 13];
+        let mut seen = [false; 15];
         for v in PlanViolation::examples() {
             let i = match v {
                 PlanViolation::CapacityExceeded { .. } => 0,
@@ -2410,6 +2623,8 @@ mod tests {
                 PlanViolation::TooManyRoutes { .. } => 10,
                 PlanViolation::DistanceMismatch { .. } => 11,
                 PlanViolation::CostMismatch { .. } => 12,
+                PlanViolation::EquityMismatch { .. } => 13,
+                PlanViolation::ObjectiveMismatch { .. } => 14,
             };
             assert!(!seen[i], "two examples of variant {i}");
             seen[i] = true;
@@ -4448,6 +4663,7 @@ mod tests {
             "seed" => json!(1),
             "time_limit_ms" => json!(60_000),
             "max_vehicles" => json!(4),
+            "balance" => json!({ "quantity": "distance", "weight": 1.0 }),
             other => panic!("no sample value for {other}"),
         };
         // Small budgets the method reads, so each run is quick.
@@ -5380,6 +5596,7 @@ mod oracle_tests {
             "mutation_rate" | "elite_ratio" => json!(0.1),
             "seed" | "time_limit_ms" => json!(1000),
             "max_vehicles" => json!(5),
+            "balance" => json!({ "quantity": "load", "weight": 0.5 }),
             other => panic!("unknown setting {other}"),
         };
         let depot = (25.0, 25.0);
@@ -5491,5 +5708,265 @@ mod oracle_tests {
         )
         .expect("solves");
         assert_eq!(out.unassigned.len(), 2);
+    }
+}
+
+/// `config.balance`: every method answers cost + weight × the busiest route,
+/// the output and the checker report it, and without it nothing changes.
+#[cfg(test)]
+mod balance_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn customers(count: usize, seed: u64) -> Vec<InputCustomer> {
+        let mut state = seed;
+        let mut next = |m: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) % m) as f64
+        };
+        (0..count)
+            .map(|i| {
+                serde_json::from_value(json!({
+                    "id": i + 1, "x": next(100), "y": next(100), "demand": 1.0 + next(4)
+                }))
+                .expect("a customer")
+            })
+            .collect()
+    }
+
+    fn vehicles() -> Vec<InputVehicle> {
+        vec![serde_json::from_value(json!({ "capacity": 15.0, "count": 12 })).expect("a vehicle")]
+    }
+
+    fn config(method: &str, balance: serde_json::Value) -> InputConfig {
+        let mut c = match method {
+            "ga" => json!({ "seed": 3, "max_generations": 40 }),
+            "alns" => json!({ "seed": 3, "max_iterations": 200 }),
+            _ => json!({}),
+        };
+        if !balance.is_null() {
+            c["balance"] = balance;
+        }
+        serde_json::from_value(c).expect("a config")
+    }
+
+    fn problem<'a>(list: &'a [InputCustomer], fleet: &'a [InputVehicle]) -> ProblemInput<'a> {
+        ProblemInput {
+            depot: (50.0, 50.0),
+            customers: list,
+            vehicles: fleet,
+            distances: None,
+            durations: None,
+        }
+    }
+
+    fn plan_of(out: &VrpOutput) -> InputSolution {
+        serde_json::from_value(json!({
+            "routes": out.routes,
+            "route_vehicles": out.route_vehicles,
+            "unassigned": out.unassigned,
+            "total_distance": out.total_distance,
+            "total_cost": out.total_cost,
+            "equity": out.equity,
+            "objective": out.objective,
+        }))
+        .expect("a plan")
+    }
+
+    fn largest_distance(out: &VrpOutput) -> f64 {
+        out.route_summaries
+            .iter()
+            .map(|r| r.distance)
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn every_method_trades_cost_for_a_lighter_busiest_route() {
+        let fleet = vehicles();
+        for seed in 1..=3_u64 {
+            let list = customers(30, seed);
+            for method in ["nn", "savings", "ga", "alns"] {
+                let plain = solve(
+                    &problem(&list, &fleet),
+                    method,
+                    &config(method, json!(null)),
+                )
+                .expect("solves");
+                let plain_e = largest_distance(&plain);
+                let weight = 3.0;
+                let cfg = config(method, json!({ "quantity": "distance", "weight": weight }));
+                let out = solve(&problem(&list, &fleet), method, &cfg).expect("solves");
+                let equity = out.equity.expect("balanced");
+                let objective = out.objective.expect("balanced");
+                assert!(
+                    objective <= plain.total_cost + weight * plain_e + 1e-9,
+                    "{method} seed {seed}: objective {objective} vs plain {}",
+                    plain.total_cost + weight * plain_e
+                );
+                assert_eq!(out.unassigned, plain.unassigned, "{method} seed {seed}");
+                let largest = out
+                    .route_summaries
+                    .iter()
+                    .map(|r| r.workload.expect("balanced"))
+                    .fold(0.0, f64::max);
+                assert_eq!(largest, equity);
+                assert!((objective - (out.total_cost + weight * equity)).abs() < 1e-9);
+                for r in &out.route_summaries {
+                    assert_eq!(r.workload, Some(r.distance));
+                }
+                // The checker recomputes what was reported, and the plan keeps
+                // every rule.
+                let checked =
+                    check(&problem(&list, &fleet), method, &cfg, &plan_of(&out)).expect("checks");
+                assert!(
+                    checked.feasible,
+                    "{method} seed {seed}: {:?}",
+                    checked.violations
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_strong_weight_lowers_the_busiest_route() {
+        let fleet = vehicles();
+        let list = customers(30, 7);
+        let plain = solve(
+            &problem(&list, &fleet),
+            "savings",
+            &config("savings", json!(null)),
+        )
+        .expect("solves");
+        let out = solve(
+            &problem(&list, &fleet),
+            "savings",
+            &config("savings", json!({ "quantity": "distance", "weight": 20.0 })),
+        )
+        .expect("solves");
+        assert!(
+            out.equity.expect("balanced") < largest_distance(&plain),
+            "{:?} vs {}",
+            out.equity,
+            largest_distance(&plain)
+        );
+    }
+
+    #[test]
+    fn without_a_balance_or_with_weight_zero_the_plan_is_the_cost_plan() {
+        let fleet = vehicles();
+        let list = customers(25, 11);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let plain = solve(
+                &problem(&list, &fleet),
+                method,
+                &config(method, json!(null)),
+            )
+            .expect("solves");
+            assert_eq!(plain.equity, None);
+            assert_eq!(plain.objective, None);
+            assert!(plain.route_summaries.iter().all(|r| r.workload.is_none()));
+            let zero = solve(
+                &problem(&list, &fleet),
+                method,
+                &config(method, json!({ "quantity": "load", "weight": 0.0 })),
+            )
+            .expect("solves");
+            assert_eq!(zero.routes, plain.routes, "{method}");
+            assert_eq!(
+                zero.total_cost.to_bits(),
+                plain.total_cost.to_bits(),
+                "{method}"
+            );
+            assert_eq!(zero.objective, Some(plain.total_cost), "{method}");
+        }
+    }
+
+    #[test]
+    fn load_is_a_share_of_the_capacity_of_the_route_vehicle() {
+        let fleet = vehicles();
+        let list = customers(20, 5);
+        let out = solve(
+            &problem(&list, &fleet),
+            "savings",
+            &config("savings", json!({ "quantity": "load", "weight": 1.0 })),
+        )
+        .expect("solves");
+        for r in &out.route_summaries {
+            assert_eq!(r.workload, Some(r.load as f64 / 15.0));
+        }
+    }
+
+    #[test]
+    fn a_balance_the_solver_cannot_read_is_refused() {
+        let fleet = vehicles();
+        let list = customers(10, 1);
+        let refused = |balance: serde_json::Value| {
+            solve(&problem(&list, &fleet), "nn", &config("nn", balance)).expect_err("refused")
+        };
+        let e = refused(json!({ "quantity": "stops", "weight": 1.0 }));
+        assert_eq!(e.code(), "unknown_option");
+        assert_eq!(e.fields["parameter"], "config.balance.quantity");
+        assert_eq!(
+            e.fields["expected"],
+            json!(["load", "distance", "duration"])
+        );
+        let e = refused(json!({ "quantity": "load", "weight": -1.0 }));
+        assert_eq!(e.code(), "parameter_out_of_range");
+        assert_eq!(e.fields["min"], json!(0.0));
+        assert_eq!(e.fields["got"], json!(-1.0));
+        // No time in the problem: a duration would be the distance.
+        let e = refused(json!({ "quantity": "duration", "weight": 1.0 }));
+        assert_eq!(e.code(), "invalid_option");
+        // With a service time it is a balance of its own.
+        let mut timed = customers(10, 1);
+        timed[0] =
+            serde_json::from_value(json!({ "id": 1, "x": 3.0, "y": 4.0, "service_time": 5.0 }))
+                .expect("a customer");
+        let out = solve(
+            &problem(&timed, &fleet),
+            "nn",
+            &config("nn", json!({ "quantity": "duration", "weight": 1.0 })),
+        )
+        .expect("solves");
+        for r in &out.route_summaries {
+            assert_eq!(r.workload, Some(r.duration));
+        }
+        // A reported equity needs the balance it was measured by.
+        let plan: InputSolution =
+            serde_json::from_value(json!({ "routes": [[1]], "equity": 3.0 })).expect("a plan");
+        let e = check(
+            &problem(&list, &fleet),
+            "nn",
+            &config("nn", json!(null)),
+            &plan,
+        )
+        .expect_err("refused");
+        assert_eq!(e.code(), "invalid_option");
+        assert_eq!(e.fields["parameter"], "solution.equity");
+    }
+
+    #[test]
+    fn the_checker_reports_a_wrong_equity_and_objective() {
+        let fleet = vehicles();
+        let list = customers(15, 2);
+        let cfg = config("savings", json!({ "quantity": "distance", "weight": 2.0 }));
+        let out = solve(&problem(&list, &fleet), "savings", &cfg).expect("solves");
+        let mut plan = plan_of(&out);
+        plan.equity = out.equity.map(|e| e + 1.0);
+        plan.objective = out.objective.map(|o| o - 5.0);
+        let checked = check(&problem(&list, &fleet), "savings", &cfg, &plan).expect("checks");
+        let codes: Vec<String> = checked
+            .violations
+            .iter()
+            .map(|v| {
+                serde_json::to_value(v).expect("serializes")["code"]
+                    .as_str()
+                    .expect("a code")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(codes, ["equity_mismatch", "objective_mismatch"]);
     }
 }

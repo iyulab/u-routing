@@ -129,6 +129,10 @@ public sealed class RoutingClient : IDisposable
             solution["total_distance"] = Num("solution.total_distance", total);
         if (plan.TotalCost is { } cost)
             solution["total_cost"] = Num("solution.total_cost", cost);
+        if (plan.Equity is { } equity)
+            solution["equity"] = Num("solution.equity", equity);
+        if (plan.Objective is { } objective)
+            solution["objective"] = Num("solution.objective", objective);
         var json = new JsonObject { ["problem"] = Body(request), ["solution"] = solution }.ToJsonString();
         RequestObserver?.Invoke(nameof(NativeInterop.urouting_check_solution), json);
         var body = Invoke(NativeInterop.urouting_check_solution, json);
@@ -197,6 +201,12 @@ public sealed class RoutingClient : IDisposable
             if (c2.TimeLimitMs is { } timeLimit)
                 config["time_limit_ms"] = timeLimit;
             Put(config, "max_vehicles", c2.MaxVehicles);
+            if (c2.Balance is { } balance)
+                config["balance"] = new JsonObject
+                {
+                    ["quantity"] = JsonSerializer.SerializeToNode(balance.Quantity, RoutingJson.Default.WorkloadQuantity),
+                    ["weight"] = Num("config.balance.weight", balance.Weight),
+                };
             body["config"] = config;
         }
         return body;

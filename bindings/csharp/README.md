@@ -16,6 +16,9 @@
   method keeps to it and lists the customers that do not fit in `Unassigned`
 - **Route limits**: a vehicle's `max_distance` and `max_duration` bound every
   route, depot to depot; a customer no route can reach within them is unassigned
+- **Workload balance**: `VrpConfig.Balance` (`new Balance(WorkloadQuantity.Distance, weight)`)
+  makes every method minimise the total cost plus `weight` × the largest workload of any
+  route; the solution reports each route's `Workload`, the plan's `Equity` and `Objective`
 
 ## Installation
 
@@ -61,7 +64,7 @@ times of their own: time windows and `MaxDuration` are kept on it, lengths and c
 distances.
 
 Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
-`MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` by all — and a setting the
+`MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` and `Balance` by all — and a setting the
 method does not read is refused (`invalid_option`). `GetMethods()` returns that table,
 the one the refusal is made from:
 

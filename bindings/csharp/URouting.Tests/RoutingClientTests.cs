@@ -92,6 +92,8 @@ public class RoutingClientTests
             {
                 RoutingMethod.Genetic => new VrpConfig { Seed = 7, MaxGenerations = 20 },
                 RoutingMethod.Alns => new VrpConfig { Seed = 7, MaxIterations = 50 },
+                // A balanced plan: the record carries the workloads, equity and objective too.
+                RoutingMethod.Savings => new VrpConfig { Balance = new Balance(WorkloadQuantity.Distance, 2) },
                 _ => null,
             },
         };
@@ -99,6 +101,8 @@ public class RoutingClientTests
         var solution = _client.SolveVrp(request);
 
         Assert.Equal(method, solution.MethodUsed);
+        Assert.Equal(method == RoutingMethod.Savings, solution.Equity is not null);
+        Assert.Equal(method == RoutingMethod.Savings, solution.RouteSummaries.All(r => r.Workload is not null));
         var written = JsonSerializer.SerializeToNode(solution, RoutingJson.Default.VrpSolution);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(raw!), written), $"engine: {raw}\nrecord: {written}");
         var served = solution.Routes.SelectMany(r => r).Concat(solution.Unassigned).Order();
@@ -107,6 +111,24 @@ public class RoutingClientTests
         Assert.Equal(solution.Routes.Count, solution.RouteSummaries.Count);
         Assert.Equal(solution.TotalDistance, solution.RouteSummaries.Sum(r => r.Distance), 6);
         Assert.Equal(solution.TotalCost, solution.RouteSummaries.Sum(r => r.Cost), 6);
+    }
+
+    [Fact]
+    public void A_balanced_plan_checks_against_its_balance()
+    {
+        var request = new VrpRequest(0, 0, Customers)
+        {
+            Vehicles = [new(30)],
+            Method = RoutingMethod.Savings,
+            Config = new VrpConfig { Balance = new Balance(WorkloadQuantity.Load, 5) },
+        };
+        var solution = _client.SolveVrp(request);
+        Assert.Equal(solution.TotalCost + (5 * solution.Equity!.Value), solution.Objective!.Value, 9);
+
+        Assert.True(_client.CheckSolution(request, VrpPlan.Of(solution)).Feasible);
+        var wrong = VrpPlan.Of(solution) with { Equity = solution.Equity + 1 };
+        var check = _client.CheckSolution(request, wrong);
+        Assert.IsType<PlanViolation.EquityMismatch>(Assert.Single(check.Violations));
     }
 
     [Fact]

@@ -21,10 +21,41 @@
       ],
       "type": "object"
     },
+    "InputBalance": {
+      "additionalProperties": false,
+      "description": "The balance term of the objective (`config.balance`).",
+      "properties": {
+        "quantity": {
+          "description": "What a route's workload counts: `\"load\"` -- its load as a share of\nits vehicle's capacity; `\"distance\"` -- its length; `\"duration\"` --\nwhen it is back at the depot (needs travel times, service times or\ntime windows; without them it is the distance).",
+          "type": "string"
+        },
+        "weight": {
+          "description": "Units of cost one unit of the largest workload is worth (`>= 0`;\n`0` is cost alone).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "quantity",
+        "weight"
+      ],
+      "type": "object"
+    },
     "InputConfig": {
       "additionalProperties": false,
       "description": "Optional solver configuration.\n\nFields are shared across methods; each method uses only the relevant ones.\nCounts and the seed are whole numbers read signed, so a negative one is\nrefused by the range check like a too-small one ([`Whole`]).\nBesides the per-method parameters, it carries limits the solver has to\nrespect whichever method runs -- `max_vehicles` is one.",
       "properties": {
+        "balance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputBalance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Weigh the busiest route against cost: the plan minimises `total_cost`\nplus `weight` × the largest workload of any route (`equity`), where a\nworkload is what `quantity` counts. Absent or `null`: cost alone."
+        },
         "elite_ratio": {
           "default": null,
           "description": "Elite ratio for GA in (0, 1] (default: 0.1).",
@@ -170,6 +201,24 @@
       "additionalProperties": false,
       "description": "A plan to check, in the shape `solve` returns one: customer ids per route\n(the depot implied at both ends), the vehicle of each route, the\ncustomers reported unassigned and, optionally, the total distance reported.",
       "properties": {
+        "equity": {
+          "default": null,
+          "description": "The plan's largest route workload as reported (see `solve`'s\n`equity`); needs `config.balance`. Absent: not checked.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "objective": {
+          "default": null,
+          "description": "The plan's objective as reported (see `solve`'s `objective`); needs\n`config.balance`. Absent: not checked.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "route_vehicles": {
           "default": null,
           "description": "The vehicle of each route: its index in the request's `vehicles`.\nAbsent: `0` for every route.",
@@ -301,7 +350,8 @@
               "max_iterations",
               "seed",
               "time_limit_ms",
-              "max_vehicles"
+              "max_vehicles",
+              "balance"
             ],
             "type": "string"
           },
@@ -659,6 +709,54 @@
             "actual"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reported `equity` differs from the routes' largest workload.",
+          "properties": {
+            "actual": {
+              "format": "double",
+              "type": "number"
+            },
+            "code": {
+              "const": "equity_mismatch",
+              "type": "string"
+            },
+            "reported": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "code",
+            "reported",
+            "actual"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reported `objective` differs from `total_cost` + weight × `equity`\nof the routes.",
+          "properties": {
+            "actual": {
+              "format": "double",
+              "type": "number"
+            },
+            "code": {
+              "const": "objective_mismatch",
+              "type": "string"
+            },
+            "reported": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "code",
+            "reported",
+            "actual"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -684,6 +782,14 @@
           "description": "The demand the route carries: the sum of its customers' demands.",
           "format": "int64",
           "type": "integer"
+        },
+        "workload": {
+          "description": "What `config.balance.quantity` counts for this route; `null` without\n`config.balance`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
@@ -776,6 +882,14 @@
           "format": "double",
           "type": "number"
         },
+        "equity": {
+          "description": "The largest `workload` of any route (`0` for a plan without routes);\n`null` without `config.balance`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "method_used": {
           "type": "string"
         },
@@ -783,6 +897,14 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "objective": {
+          "description": "What the plan minimises: `total_cost` + `config.balance.weight` ×\n`equity`; `null` without `config.balance`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "route_summaries": {
           "description": "What each route comes to, in the order of `routes` -- the figures the\nplan's totals are sums of: `total_distance` is the sum of their\n`distance` and `total_cost` of their `cost`.",

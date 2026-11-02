@@ -51,6 +51,12 @@ public class RequestContractTests
                 MaxVehicles = 3,
             },
             RoutingMethod.Alns => new VrpConfig { MaxIterations = 20, Seed = 7, TimeLimitMs = 60_000, MaxVehicles = 3 },
+            // Savings plans with travel times, so a duration balance is one of its own.
+            RoutingMethod.Savings => new VrpConfig
+            {
+                MaxVehicles = 3,
+                Balance = new Balance(WorkloadQuantity.Duration, 0.5),
+            },
             _ => new VrpConfig { MaxVehicles = 3 },
         },
     };

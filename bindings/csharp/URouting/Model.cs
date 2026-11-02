@@ -36,7 +36,29 @@ public enum RoutingSetting
     [JsonStringEnumMemberName("time_limit_ms")] TimeLimitMs,
     /// <summary><see cref="VrpConfig.MaxVehicles"/>.</summary>
     [JsonStringEnumMemberName("max_vehicles")] MaxVehicles,
+    /// <summary><see cref="VrpConfig.Balance"/>.</summary>
+    [JsonStringEnumMemberName("balance")] Balance,
 }
+
+/// <summary>What a route's workload counts in a <see cref="Balance"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<WorkloadQuantity>))]
+public enum WorkloadQuantity
+{
+    /// <summary>The load as a share of the route's vehicle's capacity.</summary>
+    [JsonStringEnumMemberName("load")] Load,
+    /// <summary>The route's length, depot to depot.</summary>
+    [JsonStringEnumMemberName("distance")] Distance,
+    /// <summary>When the route is back at the depot; needs travel times, service times or time windows.</summary>
+    [JsonStringEnumMemberName("duration")] Duration,
+}
+
+/// <summary>
+/// Weigh the busiest route against cost: the plan minimises its total cost plus
+/// <paramref name="Weight"/> × the largest workload of any route (<see cref="VrpSolution.Equity"/>).
+/// </summary>
+/// <param name="Quantity">What a route's workload counts.</param>
+/// <param name="Weight">Units of cost one unit of the largest workload is worth (<c>&gt;= 0</c>; <c>0</c> is cost alone).</param>
+public sealed record Balance(WorkloadQuantity Quantity, double Weight);
 
 /// <summary>
 /// A method and the settings it reads — the table the engine's refusal of a setting the
@@ -121,6 +143,8 @@ public sealed record VrpConfig
     public ulong? TimeLimitMs { get; init; }
     /// <summary>The most routes the plan may use; customers that fit in none are <see cref="VrpSolution.Unassigned"/>.</summary>
     public int? MaxVehicles { get; init; }
+    /// <summary>Weigh the busiest route against cost (every method reads it); <c>null</c> is cost alone.</summary>
+    public Balance? Balance { get; init; }
 }
 
 /// <summary>A routing problem: a depot, the customers, the fleet and how to solve it.</summary>
@@ -167,7 +191,9 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 /// lists the customers no route serves, so a partial plan does not read as a complete one.
 /// <see cref="StopReason"/> says why the method stopped. <see cref="TotalCost"/> sums, over the
 /// routes, the route's vehicle's <see cref="Vehicle.FixedCost"/> plus
-/// <see cref="Vehicle.CostPerDistance"/> × the route's distance.
+/// <see cref="Vehicle.CostPerDistance"/> × the route's distance. With a <see cref="VrpConfig.Balance"/>,
+/// <see cref="Equity"/> is the largest <see cref="RouteSummary.Workload"/> and <see cref="Objective"/>
+/// the total cost plus the balance's weight × <see cref="Equity"/>; both <c>null</c> without one.
 /// </summary>
 public sealed record VrpSolution(
     IReadOnlyList<IReadOnlyList<long>> Routes,
@@ -175,6 +201,8 @@ public sealed record VrpSolution(
     IReadOnlyList<RouteSummary> RouteSummaries,
     double TotalDistance,
     double TotalCost,
+    double? Equity,
+    double? Objective,
     int NumVehicles,
     RoutingMethod MethodUsed,
     double ComputationTimeMs,
@@ -190,7 +218,8 @@ public sealed record VrpSolution(
 /// one unit of time), waiting for time windows to open and service times. Equal to
 /// <paramref name="Distance"/> for a route with neither.
 /// </param>
-public sealed record RouteSummary(double Distance, long Load, double Cost, double Duration);
+/// <param name="Workload">What <see cref="VrpConfig.Balance"/> counts for this route; <c>null</c> without a balance.</param>
+public sealed record RouteSummary(double Distance, long Load, double Cost, double Duration, double? Workload);
 
 /// <summary>
 /// Why the method stopped — the run's own account of the plan it returned.
@@ -229,6 +258,10 @@ public sealed record VrpPlan(IReadOnlyList<IReadOnlyList<long>> Routes)
     public double? TotalDistance { get; init; }
     /// <summary>The total cost reported, or <c>null</c> to leave it unchecked.</summary>
     public double? TotalCost { get; init; }
+    /// <summary>The largest route workload reported (needs <see cref="VrpConfig.Balance"/>), or <c>null</c> to leave it unchecked.</summary>
+    public double? Equity { get; init; }
+    /// <summary>The objective reported (needs <see cref="VrpConfig.Balance"/>), or <c>null</c> to leave it unchecked.</summary>
+    public double? Objective { get; init; }
 
     /// <summary>The plan a solve returned, as a plan to check.</summary>
     public static VrpPlan Of(VrpSolution solution) => new(solution.Routes)
@@ -237,6 +270,8 @@ public sealed record VrpPlan(IReadOnlyList<IReadOnlyList<long>> Routes)
         Unassigned = solution.Unassigned,
         TotalDistance = solution.TotalDistance,
         TotalCost = solution.TotalCost,
+        Equity = solution.Equity,
+        Objective = solution.Objective,
     };
 }
 
@@ -264,6 +299,8 @@ public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Viola
 [JsonDerivedType(typeof(TooManyRoutes), "too_many_routes")]
 [JsonDerivedType(typeof(DistanceMismatch), "distance_mismatch")]
 [JsonDerivedType(typeof(CostMismatch), "cost_mismatch")]
+[JsonDerivedType(typeof(EquityMismatch), "equity_mismatch")]
+[JsonDerivedType(typeof(ObjectiveMismatch), "objective_mismatch")]
 public abstract record PlanViolation
 {
     private PlanViolation() { }
@@ -297,6 +334,10 @@ public abstract record PlanViolation
     public sealed record DistanceMismatch(double Reported, double Actual) : PlanViolation;
     /// <summary>The reported total cost differs from what the routes cost with their vehicles.</summary>
     public sealed record CostMismatch(double Reported, double Actual) : PlanViolation;
+    /// <summary>The reported equity differs from the routes' largest workload.</summary>
+    public sealed record EquityMismatch(double Reported, double Actual) : PlanViolation;
+    /// <summary>The reported objective differs from the routes' cost plus weight × their largest workload.</summary>
+    public sealed record ObjectiveMismatch(double Reported, double Actual) : PlanViolation;
 }
 
 /// <summary>Source-generated reading of results — no reflection, so trimmed and NativeAOT hosts work.</summary>
@@ -306,6 +347,7 @@ public abstract record PlanViolation
     RespectRequiredConstructorParameters = true)]
 [JsonSerializable(typeof(VrpSolution))]
 [JsonSerializable(typeof(RoutingMethod))]
+[JsonSerializable(typeof(WorkloadQuantity))]
 [JsonSerializable(typeof(IReadOnlyList<MethodInfo>))]
 [JsonSerializable(typeof(Codes))]
 [JsonSerializable(typeof(PlanCheck))]

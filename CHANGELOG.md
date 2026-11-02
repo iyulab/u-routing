@@ -8,6 +8,24 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- Workload balance: `config.balance: { quantity: "load" | "distance" | "duration", weight }` makes every method
+  minimise `total_cost` + `weight` × the largest workload of any route. The workload is the load as a share of the
+  route's vehicle's capacity, the route's length, or its return time. The largest workload is used because it is
+  monotone: lowering it never pays for lengthening a short route to look even, which the range and the variance
+  reward (Matl, Hartl & Vidal 2018). Every method ends on the same objective. Customers are relocated and exchanged
+  between routes while that lowers it, and every route keeps its vehicle's capacity, time windows and limits. When
+  several plans are made (one per vehicle kind), the objective chooses among them. The output carries each route's
+  `workload` and the plan's `equity` and `objective`, which are `null` without a balance. `check_vrp_solution`
+  recomputes a reported `equity` / `objective` (new violations `equity_mismatch`, `objective_mismatch`). Refusals:
+  an unknown `quantity` is `unknown_option`, a negative `weight` is `parameter_out_of_range` (`min: 0`), and
+  `"duration"` on a problem without travel times, service times or time windows is `invalid_option`. Without a
+  balance, or with weight 0, the plan is unchanged bit for bit. In Rust: `balance::{Balance, Quantity, improve}`.
+  .NET: `VrpConfig.Balance`, `RouteSummary.Workload`, `VrpSolution.Equity` / `Objective`, `VrpPlan.Equity` /
+  `Objective`. Measured on CVRPLIB X-n101 / X-n148 / X-n200 with `"distance"`: 0.4–2.4 % more cost for a 5–11 %
+  shorter longest route (example `cvrplib_balance`).
+
 ## [0.26.0] - 2026-11-02
 
 Depends on u-metaheur 0.19 and u-numflow 0.16. The .NET client is `URouting` 0.23.0.

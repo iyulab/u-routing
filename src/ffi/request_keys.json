@@ -7,6 +7,12 @@
           "properties": {
             "config": {
               "properties": {
+                "balance": {
+                  "properties": {
+                    "quantity": {},
+                    "weight": {}
+                  }
+                },
                 "elite_ratio": {},
                 "max_generations": {},
                 "max_iterations": {},
@@ -50,6 +56,8 @@
         },
         "solution": {
           "properties": {
+            "equity": {},
+            "objective": {},
             "route_vehicles": {},
             "routes": {},
             "total_cost": {},
@@ -63,6 +71,12 @@
       "properties": {
         "config": {
           "properties": {
+            "balance": {
+              "properties": {
+                "quantity": {},
+                "weight": {}
+              }
+            },
             "elite_ratio": {},
             "max_generations": {},
             "max_iterations": {},

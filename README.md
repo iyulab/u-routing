@@ -305,7 +305,7 @@ solve_vrp({
 
 **GA config** uses `population_size`, `max_generations`, `mutation_rate`, `elite_ratio`.
 **ALNS config** uses `max_iterations`. Both accept `seed` and `time_limit_ms`; every method reads
-`max_vehicles`. A setting the request's `method` does not read is refused
+`max_vehicles` and `balance`. A setting the request's `method` does not read is refused
 (`invalid_option`, naming the methods that do) rather than accepted and ignored.
 `available_methods()` returns that table, so a form can offer only the settings that
 change the chosen method's run:
@@ -314,9 +314,9 @@ change the chosen method's run:
 import { available_methods } from '@iyulab/u-routing';
 
 const methods = available_methods();
-// [{ name: "nn", reads: ["max_vehicles"] }, { name: "savings", reads: ["max_vehicles"] },
-//  { name: "ga", reads: ["population_size", "max_generations", "mutation_rate", "elite_ratio", "seed", "time_limit_ms", "max_vehicles"] },
-//  { name: "alns", reads: ["max_iterations", "seed", "time_limit_ms", "max_vehicles"] }]
+// [{ name: "nn", reads: ["max_vehicles", "balance"] }, { name: "savings", reads: ["max_vehicles", "balance"] },
+//  { name: "ga", reads: ["population_size", "max_generations", "mutation_rate", "elite_ratio", "seed", "time_limit_ms", "max_vehicles", "balance"] },
+//  { name: "alns", reads: ["max_iterations", "seed", "time_limit_ms", "max_vehicles", "balance"] }]
 const reads = (method, setting) =>
   methods.some((m) => m.name === method && m.reads.includes(setting));
 console.log(reads('ga', 'max_iterations')); // false -- leave the field out
@@ -419,6 +419,36 @@ if (out.num_vehicles > 2 || out.unassigned.length !== 2) throw new Error("fleet 
 In Rust the same step is `u_routing::fleet::limit_routes`, which takes any
 plan, a capacity per route and the limit.
 
+**Balance the routes: `config.balance`.** By default a plan minimises its cost alone, so it
+fills its vehicles to capacity and some routes run far longer than others. With
+`balance: { quantity, weight }` the plan minimises `total_cost` + `weight` × `equity`, where
+`equity` is the largest workload of any route — `quantity` says what a workload counts:
+`"load"` (the load as a share of the route's vehicle's capacity, so a small and a large vehicle
+are equally busy when equally full), `"distance"` (the route's length) or `"duration"` (when it
+is back at the depot; it needs travel times, service times or time windows, and is refused
+without them, `invalid_option`, since it would be the distance). `weight` (`>= 0`) is how many
+units of cost one unit of the busiest route's workload is worth; `0` is cost alone. The
+largest workload is the measure because it is monotone: lowering it never pays for lengthening
+a short route to look even, which the range (max − min) and the variance do (Matl, Hartl &
+Vidal 2018). Every method ends on the same objective — customers are moved and exchanged
+between routes while that lowers it and every route stays within its vehicle's capacity, time
+windows and limits — and the output reports each route's `workload`, the plan's `equity` and
+its `objective`.
+
+```js
+import { solve_vrp } from '@iyulab/u-routing';
+
+const customers = Array.from({ length: 24 }, (_, i) => ({
+  id: i + 1, x: (i * 37) % 100, y: (i * 61) % 100, demand: 1 + (i % 4),
+}));
+const problem = { depot: { x: 50, y: 50 }, customers, vehicles: [{ capacity: 15 }], method: "savings" };
+const cheapest = solve_vrp(problem);
+const longest = Math.max(...cheapest.route_summaries.map((r) => r.distance));
+const even = solve_vrp({ ...problem, config: { balance: { quantity: "distance", weight: 20 } } });
+console.log(longest, even.equity, even.total_cost - cheapest.total_cost);
+if (!(even.equity <= longest)) throw new Error("balance did not lower the longest route");
+```
+
 **Time windows.** `time_window: [ready, due]` is measured in distance units: a
 vehicle leaves the depot at time 0, travels one distance unit per time unit,
 waits if it arrives before `ready`, and must arrive by `due`; `service_time`
@@ -440,6 +470,7 @@ than being served late.
 | `seed` | Both | a whole number from 0 to 2^64 − 1 (optional) | random |
 | `time_limit_ms` | Both | a whole number of milliseconds, >= 1 (optional): the run returns the best plan found when it is spent | no limit |
 | `max_vehicles` | All | >= 1 (optional) | no limit |
+| `balance` | All | `{ quantity: "load" \| "distance" \| "duration", weight: >= 0 }` (optional) — an unknown `quantity` is `unknown_option`, a negative `weight` `parameter_out_of_range` (`min: 0`), `"duration"` on a problem without time `invalid_option` | cost alone |
 
 Counts, the seed and a customer's `id` are whole numbers. A negative one is
 refused by the same range check as a too-small one — `population_size: -1` is
@@ -493,11 +524,13 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
   "routes": [[1, 3, 5], [2, 4]],
   "route_vehicles": [0, 0],
   "route_summaries": [
-    { "distance": 25.5, "load": 14, "cost": 25.5, "duration": 25.5 },
-    { "distance": 17.0, "load": 9, "cost": 17.0, "duration": 17.0 }
+    { "distance": 25.5, "load": 14, "cost": 25.5, "duration": 25.5, "workload": null },
+    { "distance": 17.0, "load": 9, "cost": 17.0, "duration": 17.0, "workload": null }
   ],
   "total_distance": 42.5,
   "total_cost": 42.5,
+  "equity": null,
+  "objective": null,
   "num_vehicles": 2,
   "method_used": "ga",
   "computation_time_ms": 120.0,
@@ -524,8 +557,11 @@ route with its vehicle's `fixed_cost` and `cost_per_distance` (equal to
 (depot to depot), the `load` it carries, its `cost` (the vehicle's `fixed_cost` plus
 `cost_per_distance` × `distance`) and its `duration` — when it is back at the depot,
 leaving at time 0, with one unit of distance one unit of time, plus waiting for time
-windows to open and service times (equal to `distance` for a route with neither).
-`total_distance` is the sum of the `distance`s and `total_cost` of the `cost`s.
+windows to open and service times (equal to `distance` for a route with neither) —
+and, with `config.balance`, its `workload` (what `quantity` counts; `null` without a balance).
+`total_distance` is the sum of the `distance`s and `total_cost` of the `cost`s; `equity` is the
+largest `workload` and `objective` is `total_cost` + `weight` × `equity` (both `null` without a
+balance).
 
 #### `check_vrp_solution(problem, solution) -> CheckOutput`
 
@@ -533,8 +569,9 @@ Checks a plan against the problem it was solved for — the `solve_vrp` request,
 read the same way (the same refusals, and `method` decides whether each vehicle
 drives one route, `"nn"`, or is a type any number of routes use). The plan is in
 the shape `solve_vrp` returns: `routes`, `route_vehicles` (optional — `0` for
-every route), `unassigned` and, optionally, `total_distance` and `total_cost` —
-these five keys and no others (the rest of `solve_vrp`'s output says nothing a check reads, and
+every route), `unassigned` and, optionally, `total_distance`, `total_cost`, `equity` and
+`objective` (the last two need `config.balance`, which measures them — without it they are
+refused, `invalid_option`) — these seven keys and no others (the rest of `solve_vrp`'s output says nothing a check reads, and
 an unread key is refused rather than ignored). The plan can come from
 `solve_vrp` or from anywhere else (a hand edit, another solver). A plan that
 breaks the problem is a result, not an error:
@@ -579,6 +616,8 @@ request and plan name them):
 | `too_many_routes` | `routes`, `max_routes` | More routes than `config.max_vehicles` |
 | `distance_mismatch` | `reported`, `actual` | The reported `total_distance` differs from the routes' own (compared only when every route can be driven) |
 | `cost_mismatch` | `reported`, `actual` | The reported `total_cost` differs from what the routes cost with their vehicles (compared only when every route can be driven by a known vehicle) |
+| `equity_mismatch` | `reported`, `actual` | The reported `equity` differs from the largest workload of the routes, measured by `config.balance` (compared only when every route can be driven by a known vehicle) |
+| `objective_mismatch` | `reported`, `actual` | The reported `objective` differs from the routes' cost + `weight` × their largest workload |
 
 Refusals are those of `solve_vrp`, and `dimension_mismatch` when `route_vehicles`
 does not have one entry per route. The C library takes `{"problem": <the solve request>,
