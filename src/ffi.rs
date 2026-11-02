@@ -729,3 +729,9 @@ mod tests {
 
 #[cfg(test)]
 mod request_keys;
+
+#[cfg(test)]
+mod degenerate_inputs;
+
+#[cfg(test)]
+mod degenerate_problems;
