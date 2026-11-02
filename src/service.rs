@@ -2348,14 +2348,12 @@ fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, fleet: &[VehicleType]) 
     // Nearest neighbour drives each route with a vehicle of its own, taken in
     // the order of the fleet: a kind of `count` vehicles is that many in a row
     // (no more than there are customers to drive).
+    // Every copy keeps its kind's id -- its index in the fleet (`build_vehicles`)
+    // -- so a route's `vehicle_id` is the kind that drove it.
     let mut vehicles: Vec<Vehicle> = Vec::new();
-    let mut kind_of: Vec<usize> = Vec::new();
-    for (kind, t) in fleet.iter().enumerate() {
+    for t in fleet {
         let copies = t.count().unwrap_or(customers.len()).min(customers.len());
-        for _ in 0..copies {
-            vehicles.push(t.vehicle().clone());
-            kind_of.push(kind);
-        }
+        vehicles.extend(std::iter::repeat_n(t.vehicle().clone(), copies));
     }
     let solution = if has_time_windows(customers) {
         nearest_neighbor_tw(customers, dm, &vehicles)
@@ -2364,11 +2362,7 @@ fn solve_nn(customers: &[Customer], dm: &DistanceMatrix, fleet: &[VehicleType]) 
     };
     Plan {
         routes: solution.routes().iter().map(|r| r.customer_ids()).collect(),
-        vehicles: solution
-            .routes()
-            .iter()
-            .map(|r| kind_of[r.vehicle_id()])
-            .collect(),
+        vehicles: solution.routes().iter().map(|r| r.vehicle_id()).collect(),
         method: Method::NearestNeighbor,
         stop_reason: StopReason::Completed,
     }
@@ -5968,5 +5962,68 @@ mod balance_tests {
             })
             .collect();
         assert_eq!(codes, ["equity_mismatch", "objective_mismatch"]);
+    }
+}
+
+/// `"nn"` drives each route with a vehicle of its own, `count` copies per kind:
+/// every route must be reported with the kind of the vehicle that drove it.
+#[cfg(test)]
+mod nn_fleet_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nn_reports_the_kind_of_each_route_in_a_fleet_with_counts() {
+        let customers: Vec<InputCustomer> = (0..40_i64)
+            .map(|i| {
+                serde_json::from_value(json!({
+                    "id": i + 1,
+                    "x": ((i * 7) % 60 - 30) as f64,
+                    "y": ((i * 13) % 60 - 30) as f64,
+                    "demand": (200 + (i * 37) % 401) as f64,
+                }))
+                .expect("a customer")
+            })
+            .collect();
+        let vehicles: Vec<InputVehicle> = [(2500.0, 3), (3500.0, 2), (5000.0, 1)]
+            .iter()
+            .map(|&(capacity, count)| {
+                serde_json::from_value(json!({ "capacity": capacity, "count": count }))
+                    .expect("a vehicle")
+            })
+            .collect();
+        let problem = ProblemInput {
+            depot: (0.0, 0.0),
+            customers: &customers,
+            vehicles: &vehicles,
+            distances: None,
+            durations: None,
+        };
+        let config: InputConfig = serde_json::from_value(json!({})).expect("a config");
+        let out = solve(&problem, "nn", &config).expect("solves");
+        // Each route's load fits the kind it is reported with.
+        let capacity = [2500_i64, 3500, 5000];
+        for (summary, &kind) in out.route_summaries.iter().zip(&out.route_vehicles) {
+            assert!(
+                summary.load <= capacity[kind],
+                "load {} on kind {kind}",
+                summary.load
+            );
+        }
+        // The plan passes its own checker.
+        let plan: InputSolution = serde_json::from_value(json!({
+            "routes": out.routes,
+            "route_vehicles": out.route_vehicles,
+            "unassigned": out.unassigned,
+            "total_distance": out.total_distance,
+            "total_cost": out.total_cost,
+        }))
+        .expect("a plan");
+        let checked = check(&problem, "nn", &config, &plan).expect("checks");
+        assert!(
+            checked.feasible,
+            "{:?} (route_vehicles {:?})",
+            checked.violations, out.route_vehicles
+        );
     }
 }
