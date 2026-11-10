@@ -24,7 +24,7 @@ use u_metaheur::Deadline;
 
 use crate::constructive::{clarke_wright_savings, solomon_i1, sweep};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteLimits;
+use crate::evaluation::{effective_cost, has_soft_windows, RouteLimits};
 use crate::local_search::{minimize_routes, two_opt_improve};
 use crate::models::{Customer, Solution, Vehicle};
 
@@ -81,6 +81,8 @@ pub struct RoutingGaProblem {
     apply_local_search: bool,
     /// Whether any customer carries a time window.
     time_windows: bool,
+    /// Whether any window is soft: a route's lateness is then a cost in the fitness.
+    soft: bool,
     /// The vehicle's distance and duration limits on each route.
     limits: RouteLimits,
     /// Cost of each route in distance units (see [`Self::with_route_cost`]).
@@ -101,10 +103,36 @@ impl RoutingGaProblem {
     pub fn new(customers: Vec<Customer>, distances: DistanceMatrix, capacity: i32) -> Self {
         let n = customers.len();
         let time_windows = customers.iter().any(|c| c.time_window().is_some());
+        let soft = has_soft_windows(&customers);
         let farthest = (0..n)
             .flat_map(|i| (0..n).map(move |j| (i, j)))
             .map(|(i, j)| distances.get(i, j))
             .fold(0.0, f64::max);
+        // A complete solution may be late, and what that costs is not bounded by the distance:
+        // the penalty for an unserved customer has to outrank the most any lateness can cost.
+        // A customer is at most `max_ready` plus every other customer's travel and service
+        // late, at the dearest penalty, and there are n of them.
+        let lateness_bound = if soft {
+            let slowest = (0..n)
+                .flat_map(|i| (0..n).map(move |j| (i, j)))
+                .map(|(i, j)| distances.travel_time(i, j))
+                .fold(0.0, f64::max);
+            let service = customers
+                .iter()
+                .map(Customer::service_duration)
+                .fold(0.0, f64::max);
+            let ready = customers
+                .iter()
+                .filter_map(|c| c.time_window().map(|tw| tw.ready().max(tw.due())))
+                .fold(0.0, f64::max);
+            let penalty = customers
+                .iter()
+                .filter_map(Customer::lateness_penalty)
+                .fold(0.0, f64::max);
+            n as f64 * penalty * (ready + n as f64 * (slowest + service))
+        } else {
+            0.0
+        };
         Self {
             customers,
             distances,
@@ -112,9 +140,10 @@ impl RoutingGaProblem {
             vehicle: route_vehicle(capacity, &RouteLimits::NONE),
             apply_local_search: true,
             time_windows,
+            soft,
             limits: RouteLimits::NONE,
             route_cost: 0.0,
-            unserved_penalty: 2.0 * farthest * n as f64 + 1.0,
+            unserved_penalty: 2.0 * farthest * n as f64 + 1.0 + lateness_bound,
         }
     }
 
@@ -141,6 +170,12 @@ impl RoutingGaProblem {
     pub fn without_local_search(mut self) -> Self {
         self.apply_local_search = false;
         self
+    }
+
+    /// What each unserved customer adds to the fitness (for the tests).
+    #[cfg(test)]
+    pub(super) fn unserved_penalty(&self) -> f64 {
+        self.unserved_penalty
     }
 
     /// Returns the number of customers (excluding depot).
@@ -255,6 +290,20 @@ impl GaProblem for RoutingGaProblem {
 
         let served: usize = result.routes.iter().map(Vec::len).sum();
         let unserved = self.num_customers().saturating_sub(served);
+        if self.soft {
+            // The split already weighed the lateness; the fitness is the routes' distance plus
+            // their lateness cost (after 2-opt, which weighs it too).
+            let mut total = 0.0;
+            for route in &result.routes {
+                let route = if unserved == 0 && self.apply_local_search {
+                    two_opt_improve(route, 0, &self.distances, &self.customers, &self.limits).0
+                } else {
+                    route.clone()
+                };
+                total += effective_cost(&route, 0, &self.distances, &self.customers, &self.limits);
+            }
+            return total + routes_cost + self.unserved_penalty * unserved as f64;
+        }
         if unserved > 0 {
             return result.total_distance + routes_cost + self.unserved_penalty * unserved as f64;
         }

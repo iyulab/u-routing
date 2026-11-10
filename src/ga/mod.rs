@@ -9,6 +9,8 @@
 mod chromosome;
 mod educate;
 mod problem;
+#[cfg(test)]
+mod soft_tests;
 pub mod split;
 pub mod split_tw;
 

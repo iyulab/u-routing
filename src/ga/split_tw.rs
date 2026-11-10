@@ -96,6 +96,8 @@ pub fn split_tw(
         let mut load = 0i32;
         let mut route_dist = 0.0;
         let mut time = 0.0;
+        // What the segment's lateness at soft windows costs, in distance (0 for hard windows).
+        let mut late_cost = 0.0;
 
         for j in i..n {
             let cid = tour[j];
@@ -117,7 +119,11 @@ pub fn split_tw(
             // Check time window
             if let Some(tw) = customers[cid].time_window() {
                 if time > tw.due() {
-                    break;
+                    match customers[cid].lateness_penalty() {
+                        // A soft window: late is a cost on the arc, not the end of the segment.
+                        Some(penalty) => late_cost += penalty * (time - tw.due()),
+                        None => break,
+                    }
                 }
                 // Wait if early
                 time = time.max(tw.ready());
@@ -135,7 +141,7 @@ pub fn split_tw(
             if !limits.allow(total_route, time + distances.travel_time(cid, depot)) {
                 continue;
             }
-            let new_cost = cost[i] + route_cost + total_route;
+            let new_cost = cost[i] + route_cost + total_route + late_cost;
 
             if new_cost < cost[j + 1] {
                 cost[j + 1] = new_cost;
