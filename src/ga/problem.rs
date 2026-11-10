@@ -24,7 +24,7 @@ use u_metaheur::Deadline;
 
 use crate::constructive::{clarke_wright_savings, solomon_i1, sweep};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{effective_cost, has_soft_windows, RouteLimits};
+use crate::evaluation::{effective_cost, has_soft_windows, lateness_bound, RouteLimits};
 use crate::local_search::{minimize_routes, two_opt_improve};
 use crate::models::{Customer, Solution, Vehicle};
 
@@ -110,29 +110,7 @@ impl RoutingGaProblem {
             .fold(0.0, f64::max);
         // A complete solution may be late, and what that costs is not bounded by the distance:
         // the penalty for an unserved customer has to outrank the most any lateness can cost.
-        // A customer is at most `max_ready` plus every other customer's travel and service
-        // late, at the dearest penalty, and there are n of them.
-        let lateness_bound = if soft {
-            let slowest = (0..n)
-                .flat_map(|i| (0..n).map(move |j| (i, j)))
-                .map(|(i, j)| distances.travel_time(i, j))
-                .fold(0.0, f64::max);
-            let service = customers
-                .iter()
-                .map(Customer::service_duration)
-                .fold(0.0, f64::max);
-            let ready = customers
-                .iter()
-                .filter_map(|c| c.time_window().map(|tw| tw.ready().max(tw.due())))
-                .fold(0.0, f64::max);
-            let penalty = customers
-                .iter()
-                .filter_map(Customer::lateness_penalty)
-                .fold(0.0, f64::max);
-            n as f64 * penalty * (ready + n as f64 * (slowest + service))
-        } else {
-            0.0
-        };
+        let lateness_bound = lateness_bound(&customers, &distances);
         Self {
             customers,
             distances,

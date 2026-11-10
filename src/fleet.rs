@@ -24,7 +24,9 @@
 //!   Letters* 37(5), 333-338.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Vehicle};
 
 /// Whether inserting `customer_id` at `pos` of `route` keeps every customer
@@ -48,6 +50,27 @@ pub(crate) fn insertion_on_time(
     route_feasible(&candidate, 0, distances, customers, limits)
 }
 
+/// What inserting `customer_id` at `pos` of `route` adds to the route's priced distance (distance
+/// plus the cost of lateness at soft windows), where `route_value` is that of `route` as it stands;
+/// `None` when the route would no longer be allowed. For a problem with a soft window, where
+/// the change in distance of the edges alone says nothing of the lateness a detour causes.
+pub(crate) fn soft_insertion_cost(
+    route: &[usize],
+    route_value: f64,
+    pos: usize,
+    customer_id: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    limits: &RouteLimits,
+) -> Option<f64> {
+    let mut candidate = Vec::with_capacity(route.len() + 1);
+    candidate.extend_from_slice(&route[..pos]);
+    candidate.push(customer_id);
+    candidate.extend_from_slice(&route[pos..]);
+    let with = effective_cost(&candidate, 0, distances, customers, limits);
+    with.is_finite().then_some(with - route_value)
+}
+
 /// The cheapest position for `customer_id` across `routes`, as
 /// `(route_index, position, cost_increase)`, among positions that keep the
 /// route within `capacity_of(route_index)` and every customer on time.
@@ -66,6 +89,7 @@ pub fn cheapest_insertion(
     let depot = 0;
     let demand = customers[customer_id].demand();
     let mut best: Option<(usize, usize, f64)> = None;
+    let soft = has_soft_windows(customers);
 
     for (ri, route) in routes.iter().enumerate() {
         let load: i32 = route.iter().map(|&c| customers[c].demand()).sum();
@@ -73,6 +97,30 @@ pub fn cheapest_insertion(
             continue;
         }
         let limits = limits_of(ri);
+        if soft {
+            // The change in the route's distance plus lateness cost, evaluated whole.
+            let value = effective_cost(route, depot, distances, customers, &limits);
+            if !value.is_finite() {
+                continue;
+            }
+            for pos in 0..=route.len() {
+                let cost = soft_insertion_cost(
+                    route,
+                    value,
+                    pos,
+                    customer_id,
+                    distances,
+                    customers,
+                    &limits,
+                );
+                if let Some(cost) = cost {
+                    if best.as_ref().is_none_or(|b| cost < b.2) {
+                        best = Some((ri, pos, cost));
+                    }
+                }
+            }
+            continue;
+        }
         let constrained = route_checks_needed(customers, &limits);
         for pos in 0..=route.len() {
             let prev = if pos == 0 { depot } else { route[pos - 1] };

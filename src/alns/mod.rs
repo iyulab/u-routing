@@ -10,6 +10,8 @@ pub mod destroy;
 mod portfolio;
 mod problem;
 pub mod repair;
+#[cfg(test)]
+mod soft_tests;
 mod solution_repr;
 
 pub use portfolio::{Destroy, Repair};

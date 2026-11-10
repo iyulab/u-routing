@@ -23,6 +23,34 @@ pub fn has_soft_windows(customers: &[Customer]) -> bool {
         .any(|c| c.time_window().is_some() && c.lateness_penalty().is_some())
 }
 
+/// The most the lateness of any complete solution can cost, in distance: 0 when no window is soft.
+/// A customer is at most the latest window plus every other customer's travel and service late, at
+/// the dearest penalty, and there are n of them. The penalty a search puts on an unserved
+/// customer has to outrank this, or leaving a customer out would beat serving it late.
+pub(crate) fn lateness_bound(customers: &[Customer], distances: &DistanceMatrix) -> f64 {
+    if !has_soft_windows(customers) {
+        return 0.0;
+    }
+    let n = customers.len();
+    let slowest = (0..n)
+        .flat_map(|i| (0..n).map(move |j| (i, j)))
+        .map(|(i, j)| distances.travel_time(i, j))
+        .fold(0.0, f64::max);
+    let service = customers
+        .iter()
+        .map(Customer::service_duration)
+        .fold(0.0, f64::max);
+    let ready = customers
+        .iter()
+        .filter_map(|c| c.time_window().map(|tw| tw.ready().max(tw.due())))
+        .fold(0.0, f64::max);
+    let penalty = customers
+        .iter()
+        .filter_map(Customer::lateness_penalty)
+        .fold(0.0, f64::max);
+    n as f64 * penalty * (ready + n as f64 * (slowest + service))
+}
+
 /// What a vehicle allows one route besides its capacity: how far it may
 /// travel and how long it may take, depot to depot -- the limits
 /// [`RouteEvaluator::build_route`] reports as violations.
