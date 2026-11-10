@@ -41,6 +41,8 @@ pub struct Route {
     total_distance: f64,
     total_duration: f64,
     total_load: i32,
+    total_lateness: f64,
+    lateness_cost: f64,
 }
 
 impl Route {
@@ -52,6 +54,8 @@ impl Route {
             total_distance: 0.0,
             total_duration: 0.0,
             total_load: 0,
+            total_lateness: 0.0,
+            lateness_cost: 0.0,
         }
     }
 
@@ -99,6 +103,25 @@ impl Route {
     /// Total load served by this route.
     pub fn total_load(&self) -> i32 {
         self.total_load
+    }
+
+    /// Time the vehicle is late, summed over the visits whose time window it
+    /// misses at a customer with a soft window (set by evaluator). Zero when
+    /// every window is met or hard.
+    pub fn total_lateness(&self) -> f64 {
+        self.total_lateness
+    }
+
+    /// What that lateness costs: each customer's lateness times its
+    /// `lateness_penalty`, summed (set by evaluator).
+    pub fn lateness_cost(&self) -> f64 {
+        self.lateness_cost
+    }
+
+    /// Sets the total lateness and its cost (used by evaluator).
+    pub fn set_lateness(&mut self, total_lateness: f64, lateness_cost: f64) {
+        self.total_lateness = total_lateness;
+        self.lateness_cost = lateness_cost;
     }
 
     /// Sets the total distance (used by evaluator).

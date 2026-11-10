@@ -1593,6 +1593,10 @@ pub(crate) fn check(
                 }
                 // Each route's distance was set to its own above.
                 ViolationType::DistanceMismatch { .. } => return None,
+                // No input carries a lateness penalty yet, so every route's own lateness
+                // cost is 0 and the plan reports none.  TODO(soft time windows, transports):
+                // set each route's lateness to its own here, as the distance is above.
+                ViolationType::LatenessMismatch { .. } => return None,
             })
         })
         .collect();

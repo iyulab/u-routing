@@ -102,6 +102,15 @@ pub enum ViolationType {
         /// The route's distance, depot to depot.
         actual: f64,
     },
+    /// A route's reported lateness cost differs from its own.
+    LatenessMismatch {
+        /// Route index.
+        route_index: usize,
+        /// The lateness cost reported.
+        reported: f64,
+        /// The route's own: each soft window's lateness times its penalty, summed.
+        actual: f64,
+    },
 }
 
 /// A constraint violation in a solution.

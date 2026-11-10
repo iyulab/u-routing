@@ -55,6 +55,8 @@ impl<'a> RouteEvaluator<'a> {
         let mut current_time = 0.0;
         let mut current_load: i32 = 0;
         let mut total_distance = 0.0;
+        let mut total_lateness = 0.0;
+        let mut lateness_cost = 0.0;
         let mut prev = depot_id;
 
         for &cid in customer_ids {
@@ -66,12 +68,22 @@ impl<'a> RouteEvaluator<'a> {
             // Check time window
             let service_start = if let Some(tw) = customer.time_window() {
                 if tw.is_violated(arrival) {
-                    violations.push(Violation::new(ViolationType::TimeWindowViolated {
-                        route_index: 0,
-                        customer_id: cid,
-                        arrival,
-                        due: tw.due(),
-                    }));
+                    match customer.lateness_penalty() {
+                        // A soft window: late is allowed and costs.
+                        Some(penalty) => {
+                            let late = tw.lateness(arrival);
+                            total_lateness += late;
+                            lateness_cost += penalty * late;
+                        }
+                        None => {
+                            violations.push(Violation::new(ViolationType::TimeWindowViolated {
+                                route_index: 0,
+                                customer_id: cid,
+                                arrival,
+                                due: tw.due(),
+                            }))
+                        }
+                    }
                 }
                 arrival + tw.waiting_time(arrival)
             } else {
@@ -98,6 +110,7 @@ impl<'a> RouteEvaluator<'a> {
 
         route.set_total_distance(total_distance);
         route.set_total_duration(total_duration);
+        route.set_lateness(total_lateness, lateness_cost);
 
         // Check capacity
         if current_load > self.vehicle.capacity() {

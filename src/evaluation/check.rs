@@ -147,6 +147,14 @@ pub fn check_solution(
                 actual,
             });
         }
+        let (reported, actual) = (route.lateness_cost(), timed.lateness_cost());
+        if (reported - actual).abs() > DISTANCE_TOLERANCE * actual.abs() {
+            push(ViolationType::LatenessMismatch {
+                route_index,
+                reported,
+                actual,
+            });
+        }
     }
 
     let mut reported_unassigned = vec![false; customers.len()];
@@ -365,5 +373,41 @@ mod tests {
             k.last(),
             Some(ViolationType::DistanceMismatch { route_index: 0, reported, .. }) if *reported == 1.0
         ));
+    }
+
+    #[test]
+    fn a_late_arrival_is_a_violation_only_at_a_hard_window() {
+        let (mut c, dm) = four();
+        // Customer 2 is reached at 2 (via customer 1), due at 1: one unit late.
+        let window = TimeWindow::new(0.0, 1.0).expect("valid");
+        c[2] = c[2].clone().with_time_window(window);
+        let vehicles = [Vehicle::new(0, 100)];
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: None,
+        };
+        let mut late = route(0, &[1, 2], &dm);
+        let s = plan(vec![late.clone(), route(0, &[3, 4], &dm)], &[]);
+        assert!(matches!(
+            kinds(&check_solution(&c, &dm, &fleet, &s))[..],
+            [ViolationType::TimeWindowViolated { customer_id: 2, .. }]
+        ));
+
+        // Soft: the arrival is allowed, and the route has to say what it costs.
+        c[2] = c[2].clone().with_lateness_penalty(3.0).expect("valid");
+        let s = plan(vec![late.clone(), route(0, &[3, 4], &dm)], &[]);
+        let found = check_solution(&c, &dm, &fleet, &s);
+        assert!(
+            matches!(
+                kinds(&found)[..],
+                [ViolationType::LatenessMismatch { route_index: 0, reported, actual }]
+                    if *reported == 0.0 && (*actual - 3.0).abs() < 1e-12
+            ),
+            "{found:?}"
+        );
+        late.set_lateness(1.0, 3.0);
+        let s = plan(vec![late, route(0, &[3, 4], &dm)], &[]);
+        assert!(check_solution(&c, &dm, &fleet, &s).is_empty());
     }
 }

@@ -62,6 +62,12 @@ impl TimeWindow {
     pub fn is_violated(&self, arrival: f64) -> bool {
         arrival > self.due
     }
+
+    /// How long after the window closes an arrival at `arrival` is: zero
+    /// within or before the window.
+    pub fn lateness(&self, arrival: f64) -> f64 {
+        (arrival - self.due).max(0.0)
+    }
 }
 
 /// A customer (or depot) in a routing problem.
@@ -90,6 +96,7 @@ pub struct Customer {
     demand: i32,
     service_duration: f64,
     time_window: Option<TimeWindow>,
+    lateness_penalty: Option<f64>,
 }
 
 impl Customer {
@@ -102,6 +109,7 @@ impl Customer {
             demand,
             service_duration,
             time_window: None,
+            lateness_penalty: None,
         }
     }
 
@@ -114,6 +122,22 @@ impl Customer {
     pub fn with_time_window(mut self, tw: TimeWindow) -> Self {
         self.time_window = Some(tw);
         self
+    }
+
+    /// Makes the end of this customer's time window soft: a vehicle may
+    /// arrive after `due`, and each unit of time it is late costs `penalty`
+    /// (linear in the lateness). Without a penalty the window is hard -- a late
+    /// arrival makes a route infeasible. The opening of the window stays hard
+    /// either way (an early vehicle waits), and a penalty on a customer without
+    /// a time window has no effect.
+    ///
+    /// Returns `None` if `penalty` is negative or not finite.
+    pub fn with_lateness_penalty(mut self, penalty: f64) -> Option<Self> {
+        if !penalty.is_finite() || penalty < 0.0 {
+            return None;
+        }
+        self.lateness_penalty = Some(penalty);
+        Some(self)
     }
 
     /// Customer ID (0 = depot).
@@ -144,6 +168,12 @@ impl Customer {
     /// Time window constraint, if any.
     pub fn time_window(&self) -> Option<&TimeWindow> {
         self.time_window.as_ref()
+    }
+
+    /// The cost of one unit of lateness, if the end of the time window is soft
+    /// (see [`Customer::with_lateness_penalty`]).
+    pub fn lateness_penalty(&self) -> Option<f64> {
+        self.lateness_penalty
     }
 
     /// Euclidean distance to another customer.
@@ -237,5 +267,30 @@ mod tests {
         let a = Customer::new(0, 1.0, 2.0, 0, 0.0);
         let b = Customer::new(1, 4.0, 6.0, 0, 0.0);
         assert!((a.distance_to(&b) - b.distance_to(&a)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn a_time_window_measures_its_lateness() {
+        let tw = TimeWindow::new(10.0, 20.0).expect("valid");
+        assert_eq!(tw.lateness(5.0), 0.0);
+        assert_eq!(tw.lateness(20.0), 0.0);
+        assert!((tw.lateness(23.5) - 3.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_lateness_penalty_is_a_finite_cost_that_is_not_negative() {
+        let c = Customer::new(1, 0.0, 0.0, 1, 0.0);
+        assert_eq!(c.lateness_penalty(), None);
+        assert_eq!(
+            c.clone()
+                .with_lateness_penalty(2.5)
+                .expect("valid")
+                .lateness_penalty(),
+            Some(2.5)
+        );
+        assert!(c.clone().with_lateness_penalty(0.0).is_some());
+        assert!(c.clone().with_lateness_penalty(-1.0).is_none());
+        assert!(c.clone().with_lateness_penalty(f64::NAN).is_none());
+        assert!(c.with_lateness_penalty(f64::INFINITY).is_none());
     }
 }
