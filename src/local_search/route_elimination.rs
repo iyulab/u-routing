@@ -29,8 +29,9 @@
 //! Windows, Part II: Metaheuristics", *Transportation Science* 39(1), 119-139.
 
 use super::gain_floor;
+use super::soft::effective_cost;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Vehicle};
 
 use super::route_distance;
@@ -50,13 +51,26 @@ pub(crate) fn eliminate_routes(
     let constrained = route_checks_needed(customers, &limits);
     let fixed = vehicle.fixed_cost_in_distance();
     let load = |route: &[usize]| route.iter().map(|&c| customers[c].demand()).sum::<i32>();
+    // With a soft window a route is worth its distance plus the cost of its lateness, and a
+    // customer put into a route costs the change in that, evaluated whole.
+    let soft = has_soft_windows(customers);
+    let worth = |route: &[usize]| {
+        if soft {
+            effective_cost(route, depot, distances, customers, &limits)
+        } else {
+            route_distance(route, depot, distances)
+        }
+    };
 
     'search: loop {
         routes.retain(|r| !r.is_empty());
         let mut order: Vec<usize> = (0..routes.len()).collect();
         order.sort_by_key(|&r| routes[r].len());
         for r in order {
-            let saved = route_distance(&routes[r], depot, distances) + fixed;
+            let saved = worth(&routes[r]) + fixed;
+            if !saved.is_finite() {
+                continue;
+            }
             let mut rest: Vec<Vec<usize>> = routes
                 .iter()
                 .enumerate()
@@ -77,11 +91,22 @@ pub(crate) fn eliminate_routes(
                     if loads[k] + customers[c].demand() > vehicle.capacity() {
                         continue;
                     }
+                    let current = if soft { worth(route) } else { 0.0 };
                     for pos in 0..=route.len() {
-                        let prev = if pos == 0 { depot } else { route[pos - 1] };
-                        let next = route.get(pos).copied().unwrap_or(depot);
-                        let cost = distances.get(prev, c) + distances.get(c, next)
-                            - distances.get(prev, next);
+                        let cost = if soft {
+                            let mut trial = route.clone();
+                            trial.insert(pos, c);
+                            worth(&trial) - current
+                        } else {
+                            let prev = if pos == 0 { depot } else { route[pos - 1] };
+                            let next = route.get(pos).copied().unwrap_or(depot);
+                            distances.get(prev, c) + distances.get(c, next)
+                                - distances.get(prev, next)
+                        };
+                        // Not allowed (or the route already was not): no candidate.
+                        if soft && !cost.is_finite() {
+                            continue;
+                        }
                         candidates.push((cost, k, pos));
                     }
                 }

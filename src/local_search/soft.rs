@@ -433,4 +433,56 @@ mod tests {
             "the searches rarely moved: {relocated} {exchanged}"
         );
     }
+
+    #[test]
+    fn route_elimination_weighs_lateness_and_the_pool_leaves_soft_routes_alone() {
+        let mut state = 0x1405_7b7e_f767_814f_u64;
+        let mut next = move |bound: f64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64 * bound
+        };
+        let mut merged_some = 0;
+        for _ in 0..40 {
+            let (customers, dm) = three_routes(&mut next);
+            let start = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+            let count = |routes: &[Vec<usize>], fixed: f64| {
+                total_cost(routes, &customers, &dm) + fixed * routes.len() as f64
+            };
+            for fixed in [0.0, 5.0, 1.0e6] {
+                let vehicle = Vehicle::new(0, 1000).with_fixed_cost(fixed);
+                let kept = super::super::eliminate_routes(start.clone(), &customers, &dm, &vehicle);
+                assert!(
+                    count(&kept, fixed) <= count(&start, fixed) + 1e-9,
+                    "elimination made it dearer (fixed {fixed})"
+                );
+                let mut served: Vec<usize> = kept.iter().flatten().copied().collect();
+                served.sort_unstable();
+                assert_eq!(served, vec![1, 2, 3, 4, 5, 6]);
+                if fixed == 1.0e6 {
+                    assert_eq!(
+                        kept.len(),
+                        1,
+                        "a fixed cost nothing outweighs leaves one route"
+                    );
+                    merged_some += 1;
+                }
+            }
+            // The ejection pool does not plan for soft windows: it returns the routes as they are.
+            let mut rng = u_numflow::random::create_rng(7);
+            let vehicle = Vehicle::new(0, 1000).with_fixed_cost(1.0e6);
+            let pooled = super::super::minimize_routes(
+                start.clone(),
+                &customers,
+                &dm,
+                &vehicle,
+                50,
+                &mut rng,
+                &u_metaheur::Deadline::start(None),
+            );
+            assert_eq!(pooled, start);
+        }
+        assert_eq!(merged_some, 40);
+    }
 }
