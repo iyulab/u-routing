@@ -47,7 +47,7 @@ fn new_route_cost(
     if has_soft_windows(customers) {
         // A route of its own is late where the customer cannot be reached in time, and that costs.
         let alone = effective_cost(&[customer_id], 0, distances, customers, limits);
-        return alone.is_finite().then(|| route_cost + alone);
+        return alone.is_finite().then_some(route_cost + alone);
     }
     open_route(customer_id, distances, customers, limits)
         .then(|| route_cost + distances.get(0, customer_id) + distances.get(customer_id, 0))
