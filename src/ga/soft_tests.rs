@@ -136,3 +136,60 @@ fn an_unserved_customer_outranks_the_costliest_complete_solution() {
         }
     }
 }
+
+/// The note's oracle: a penalty so large that lateness is never worth it makes a soft window a hard
+/// one, wherever the hard problem can serve everyone. The split is exact, so its cost is.
+#[test]
+fn a_huge_penalty_is_the_hard_window_on_a_problem_the_hard_window_can_serve() {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move |bound: f64| {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64 * bound
+    };
+    let mut compared = 0;
+    for round in 0..60 {
+        // Windows wide enough that every customer is reachable on time by a route of its own (the
+        // farthest is under 22 away, due is 22 or later), and tight enough that one route for all
+        // is late: the hard problem serves everyone only by cutting the tour.
+        let mut hard = vec![Customer::depot(0.0, 0.0)];
+        for id in 1..=7 {
+            let ready = next(8.0);
+            hard.push(
+                Customer::new(id, next(30.0) - 15.0, next(30.0) - 15.0, 1, next(3.0))
+                    .with_time_window(
+                        TimeWindow::new(ready, ready + 22.0 + next(30.0)).expect("valid"),
+                    ),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&hard);
+        // Every customer reachable on time by a route of its own: the hard problem serves all.
+        if !(1..=7)
+            .all(|c| crate::evaluation::route_feasible(&[c], 0, &dm, &hard, &RouteLimits::NONE))
+        {
+            continue;
+        }
+        let soft: Vec<Customer> = hard
+            .iter()
+            .map(|c| {
+                if c.time_window().is_some() {
+                    c.clone().with_lateness_penalty(1.0e9).expect("valid")
+                } else {
+                    c.clone()
+                }
+            })
+            .collect();
+        let tour: Vec<usize> = (1..=7).collect();
+        let route_cost = [0.0, 2.0, 15.0][round % 3];
+        let by_hard = split_tw(&tour, &hard, &dm, 100, &RouteLimits::NONE, route_cost);
+        let by_soft = split_tw(&tour, &soft, &dm, 100, &RouteLimits::NONE, route_cost);
+        assert_eq!(by_hard.routes, by_soft.routes, "round {round}");
+        assert!((by_hard.total_distance - by_soft.total_distance).abs() < 1e-9);
+        compared += 1;
+    }
+    assert!(
+        compared > 10,
+        "too few problems the hard window could serve: {compared}"
+    );
+}
