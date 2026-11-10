@@ -21,7 +21,8 @@ use crate::balance::{self, Balance, Quantity, RouteFigures};
 use crate::constructive::{clarke_wright_savings, nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
-    has_time_windows, route_checks_needed, route_feasible, RouteEvaluator, RouteLimits,
+    has_soft_windows, has_time_windows, route_checks_needed, route_eval, route_feasible,
+    RouteEvaluator, RouteLimits,
 };
 use crate::fleet::{cheapest_insertion, limit_routes};
 use crate::ga::RoutingGaProblem;
@@ -477,6 +478,15 @@ pub(crate) struct InputCustomer {
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number] | null"))]
     time_window: Option<[f64; 2]>,
+    /// What each unit of time a vehicle is late costs, in units of distance, making the end of the
+    /// `time_window` soft: a route may arrive after `due`, and is priced at its distance plus
+    /// this times the lateness (`route_summaries[].lateness_cost`). Absent or `null`: the window
+    /// is hard -- a late arrival is not allowed. At least 0; has no effect on a customer
+    /// without a `time_window`.
+    #[serde(default)]
+    #[cfg_attr(feature = "wasm", tsify(optional))]
+    #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
+    lateness_penalty: Option<f64>,
 }
 
 impl InputCustomer {
@@ -655,12 +665,19 @@ pub(crate) struct RouteSummary {
     pub(crate) distance: f64,
     /// The demand the route carries: the sum of its customers' demands.
     pub(crate) load: i64,
-    /// The route's vehicle's `fixed_cost` plus `cost_per_distance` × `distance`.
+    /// The route's vehicle's `fixed_cost` plus `cost_per_distance` × (`distance` + `lateness_cost`):
+    /// a route's lateness is priced like distance.
     pub(crate) cost: f64,
     /// When the route is back at the depot, leaving it at time 0: travel
     /// (one unit of distance is one unit of time), waiting for time windows to
     /// open and service times. Equal to `distance` for a route with neither.
     pub(crate) duration: f64,
+    /// How late the route is, summed over its customers with a soft window (`lateness_penalty`):
+    /// each one's arrival after its `due`. `0` when every window is met or hard.
+    pub(crate) lateness: f64,
+    /// What that lateness costs, in units of distance: each customer's lateness times its
+    /// `lateness_penalty`, summed. `0` without a soft window.
+    pub(crate) lateness_cost: f64,
     /// What `config.balance.quantity` counts for this route; `null` without
     /// `config.balance`.
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
@@ -684,8 +701,8 @@ pub(crate) struct VrpOutput {
     pub(crate) route_summaries: Vec<RouteSummary>,
     pub(crate) total_distance: f64,
     /// What the plan costs: over its routes, the route's vehicle's
-    /// `fixed_cost` plus `cost_per_distance` × the route's distance. Equal to
-    /// `total_distance` with the default costs.
+    /// `fixed_cost` plus `cost_per_distance` × (the route's distance plus its `lateness_cost`).
+    /// Equal to `total_distance` with the default costs and no soft window.
     pub(crate) total_cost: f64,
     /// The largest `workload` of any route (`0` for a plan without routes);
     /// `null` without `config.balance`.
@@ -1086,7 +1103,7 @@ pub(crate) fn solve(
             .routes
             .iter()
             .zip(&plan.vehicles)
-            .map(|(r, &v)| vehicles[v].route_cost(route_distance(r, &dm)))
+            .map(|(r, &v)| vehicles[v].route_cost(priced_distance(r, &dm, &customers)))
             .sum();
         let cost = match balance {
             Some(b) => {
@@ -1120,8 +1137,10 @@ pub(crate) fn solve(
             RouteSummary {
                 distance,
                 load: built.total_load().into(),
-                cost: vehicles[v].route_cost(distance),
+                cost: vehicles[v].route_cost(priced_distance(route, &dm, &customers)),
                 duration: built.total_duration(),
+                lateness: built.total_lateness(),
+                lateness_cost: built.lateness_cost(),
                 workload: balance.map(|b| {
                     RouteFigures::of(route, &dm, &customers).workload(b.quantity, &vehicles[v])
                 }),
@@ -1476,9 +1495,14 @@ pub(crate) fn check(
             }
             d += dm.get(prev, 0);
             route.set_total_distance(d);
+            // The lateness at soft windows is the route's own, like the distance: the plan reports
+            // only a total cost, compared below.
+            let lateness = route_eval(&internal_ids, 0, &dm, &customers, &RouteLimits::NONE)
+                .map_or((0.0, 0.0), |e| (e.lateness, e.lateness_cost));
+            route.set_lateness(lateness.0, lateness.1);
             actual_total = actual_total.map(|t| t + d);
             actual_cost = match (actual_cost, vehicles.get(vehicle)) {
-                (Some(c), Some(v)) => Some(c + v.route_cost(d)),
+                (Some(c), Some(v)) => Some(c + v.route_cost(d + lateness.1)),
                 _ => None,
             };
             actual_equity = match (actual_equity, vehicles.get(vehicle), balance) {
@@ -1593,9 +1617,7 @@ pub(crate) fn check(
                 }
                 // Each route's distance was set to its own above.
                 ViolationType::DistanceMismatch { .. } => return None,
-                // No input carries a lateness penalty yet, so every route's own lateness
-                // cost is 0 and the plan reports none.  TODO(soft time windows, transports):
-                // set each route's lateness to its own here, as the distance is above.
+                // Each route's lateness cost was set to its own above, like its distance.
                 ViolationType::LatenessMismatch { .. } => return None,
             })
         })
@@ -1723,6 +1745,21 @@ fn build_customers(
                 )
             })?;
             c = c.with_time_window(tw);
+        }
+        if let Some(penalty) = ic.lateness_penalty {
+            // A penalty is a number of at least 0; the model refuses what is not (a NaN from a
+            // caller that did not come through the bindings' finiteness check included).
+            c = c.with_lateness_penalty(penalty).ok_or_else(|| {
+                let mut fields = json!({
+                    "parameter": "lateness_penalty", "id": id, "index": position, "got": penalty,
+                });
+                Bounds::of(0.0..).insert_into(&mut fields);
+                ServiceError::new(
+                    Code::ParameterOutOfRange,
+                    format!("customer {id}: lateness_penalty {penalty} must be at least 0"),
+                    fields,
+                )
+            })?;
         }
         if demand <= largest_load {
             id_map.push(id);
@@ -2004,6 +2041,17 @@ fn map_routes(routes: &[Vec<usize>], id_map: &[usize]) -> Vec<Vec<usize>> {
         .collect()
 }
 
+/// What a route is priced at: its distance plus the cost of its lateness at soft windows (the
+/// distance alone when every window is hard).
+fn priced_distance(route: &[usize], dm: &DistanceMatrix, customers: &[Customer]) -> f64 {
+    if has_soft_windows(customers) {
+        if let Some(eval) = route_eval(route, 0, dm, customers, &RouteLimits::NONE) {
+            return eval.priced_distance();
+        }
+    }
+    route_distance(route, dm)
+}
+
 /// Depot, `route`'s customers in order, depot: the length of the round trip.
 fn route_distance(route: &[usize], dm: &DistanceMatrix) -> f64 {
     let mut prev = 0;
@@ -2255,6 +2303,7 @@ fn assign_fleet(
             load: route.iter().map(|&c| customers[c].demand()).sum(),
             distance: route_distance(route, dm),
             duration: built.total_duration(),
+            lateness_cost: built.lateness_cost(),
         }
     };
     let assign = |routes: &[Vec<usize>]| -> Vec<Option<usize>> {
@@ -5258,6 +5307,108 @@ mod tests {
         };
         let result = solve_ga(&customers, &dm, &Vehicle::new(0, 100), 0, &cfg);
         assert!(result.is_ok(), "GA with 2 customers should succeed");
+    }
+
+    // ---- soft time windows ----
+
+    fn far_customer(penalty: Option<f64>) -> Vec<InputCustomer> {
+        // 20 away and due at 5: late by 15 whatever is done.
+        vec![customer(serde_json::json!({
+            "id": 1, "x": 20.0, "y": 0.0, "demand": 1.0, "time_window": [0.0, 5.0],
+            "lateness_penalty": penalty,
+        }))]
+    }
+
+    fn problem<'a>(
+        customers: &'a [InputCustomer],
+        vehicles: &'a [InputVehicle],
+    ) -> ProblemInput<'a> {
+        ProblemInput {
+            depot: (0.0, 0.0),
+            customers,
+            vehicles,
+            distances: None,
+            durations: None,
+        }
+    }
+
+    #[test]
+    fn a_soft_window_is_served_late_and_the_lateness_is_priced_like_distance() {
+        let vehicles = fleet(&[10.0]);
+        for method in ["nn", "savings", "ga", "alns"] {
+            let customers = far_customer(Some(2.0));
+            let out = solve(&problem(&customers, &vehicles), method, &quick(method)).expect(method);
+            assert!(out.unassigned.is_empty(), "{method} left the customer out");
+            let route = &out.route_summaries[0];
+            assert_eq!(
+                (route.distance, route.lateness, route.lateness_cost),
+                (40.0, 15.0, 30.0)
+            );
+            // A vehicle at 1 per distance: 40 + 30.
+            assert_eq!(
+                (route.cost, out.total_cost, out.total_distance),
+                (70.0, 70.0, 40.0),
+                "{method}"
+            );
+        }
+        // The same customer with a hard window cannot be reached in time.
+        let customers = far_customer(None);
+        let out = solve(
+            &problem(&customers, &vehicles),
+            "savings",
+            &quick("savings"),
+        )
+        .expect("solves");
+        assert_eq!(out.unassigned, vec![1]);
+    }
+
+    #[test]
+    fn a_lateness_penalty_below_zero_is_refused_at_its_customer() {
+        let customers = far_customer(Some(-1.0));
+        let vehicles = fleet(&[10.0]);
+        let err = solve(
+            &problem(&customers, &vehicles),
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect_err("a negative penalty is refused");
+        assert_eq!(err.code(), "parameter_out_of_range");
+        assert_eq!(err.fields["parameter"], "lateness_penalty");
+        assert_eq!(
+            (err.fields["id"].as_i64(), err.fields["index"].as_i64()),
+            (Some(1), Some(0))
+        );
+        assert_eq!(err.fields["got"].as_f64(), Some(-1.0));
+        assert_eq!(err.fields["min"].as_f64(), Some(0.0));
+    }
+
+    #[test]
+    fn a_plan_is_checked_at_its_priced_cost() {
+        let customers = far_customer(Some(2.0));
+        let vehicles = fleet(&[10.0]);
+        let check_with = |total_cost: f64| {
+            let plan: InputSolution = serde_json::from_value(serde_json::json!({
+                "routes": [[1]], "total_cost": total_cost,
+            }))
+            .expect("valid plan");
+            check(
+                &problem(&customers, &vehicles),
+                "nn",
+                &InputConfig::default(),
+                &plan,
+            )
+            .expect("checks")
+        };
+        // 40 of distance and 15 late at 2 a unit.
+        assert!(check_with(70.0).violations.is_empty());
+        // The distance alone is not what the plan costs.
+        assert_eq!(
+            check_with(40.0).violations,
+            vec![PlanViolation::CostMismatch {
+                reported: 40.0,
+                actual: 70.0
+            }]
+        );
     }
 }
 

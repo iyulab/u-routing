@@ -92,13 +92,21 @@ public sealed record Codes(IReadOnlyList<RefusalCode> Refusals, IReadOnlyList<Vi
 public readonly record struct TimeWindow(double Ready, double Due);
 
 /// <summary>A customer to visit. <see cref="Id"/> is yours and comes back in the routes.</summary>
+/// <remarks>
+/// <paramref name="LatenessPenalty"/> makes the end of the <paramref name="TimeWindow"/> soft: what each
+/// unit of time a vehicle is late costs, in units of distance (<c>&gt;= 0</c>). A route may then arrive after
+/// <see cref="TimeWindow.Due"/> and is priced at its distance plus this times the lateness
+/// (<see cref="RouteSummary.LatenessCost"/>); <c>null</c> is a hard window, where a late arrival is not
+/// allowed. It has no effect on a customer without a time window.
+/// </remarks>
 public sealed record Customer(
     long Id,
     double X,
     double Y,
     double Demand = 0,
     double ServiceTime = 0,
-    TimeWindow? TimeWindow = null);
+    TimeWindow? TimeWindow = null,
+    double? LatenessPenalty = null);
 
 /// <summary>
 /// A vehicle. <see cref="Capacity"/> <c>null</c> means effectively unlimited; a
@@ -212,14 +220,16 @@ public sealed record VrpSolution(
 /// <summary>One route's figures, as the engine evaluates the route with its vehicle.</summary>
 /// <param name="Distance">The route's length, depot to depot.</param>
 /// <param name="Load">The demand the route carries.</param>
-/// <param name="Cost">The vehicle's fixed cost plus its cost per distance × <paramref name="Distance"/>.</param>
+/// <param name="Cost">The vehicle's fixed cost plus its cost per distance × (<paramref name="Distance"/> plus <paramref name="LatenessCost"/>).</param>
 /// <param name="Duration">
 /// When the route is back at the depot, leaving it at time 0: travel (one unit of distance is
 /// one unit of time), waiting for time windows to open and service times. Equal to
 /// <paramref name="Distance"/> for a route with neither.
 /// </param>
+/// <param name="Lateness">How late the route is, summed over its customers with a soft window (<see cref="Customer.LatenessPenalty"/>); <c>0</c> when every window is met or hard.</param>
+/// <param name="LatenessCost">What that lateness costs, in units of distance: each customer's lateness times its penalty, summed.</param>
 /// <param name="Workload">What <see cref="VrpConfig.Balance"/> counts for this route; <c>null</c> without a balance.</param>
-public sealed record RouteSummary(double Distance, long Load, double Cost, double Duration, double? Workload);
+public sealed record RouteSummary(double Distance, long Load, double Cost, double Duration, double Lateness, double LatenessCost, double? Workload);
 
 /// <summary>
 /// Why the method stopped — the run's own account of the plan it returned.

@@ -60,17 +60,26 @@ pub struct RouteFigures {
     pub distance: f64,
     pub duration: f64,
     pub load: i64,
+    /// What the route's lateness at soft windows costs, in units of distance (0 when every window
+    /// is hard); the route is priced at [`RouteFigures::priced_distance`].
+    pub lateness_cost: f64,
 }
 
 impl RouteFigures {
     pub fn of(route: &[usize], dm: &DistanceMatrix, customers: &[Customer]) -> Self {
         let (mut time, mut distance, mut load, mut prev) = (0.0, 0.0, 0_i64, 0);
+        let mut lateness_cost = 0.0;
         for &c in route {
             distance += dm.get(prev, c);
             let arrival = time + dm.travel_time(prev, c);
             let customer = &customers[c];
             let start = match customer.time_window() {
-                Some(tw) => arrival + tw.waiting_time(arrival),
+                Some(tw) => {
+                    if let Some(penalty) = customer.lateness_penalty() {
+                        lateness_cost += penalty * tw.lateness(arrival);
+                    }
+                    arrival + tw.waiting_time(arrival)
+                }
                 None => arrival,
             };
             time = start + customer.service_duration();
@@ -81,7 +90,13 @@ impl RouteFigures {
             distance: distance + dm.get(prev, 0),
             duration: time + dm.travel_time(prev, 0),
             load,
+            lateness_cost,
         }
+    }
+
+    /// The distance the route is priced at: its distance plus the cost of its lateness.
+    pub fn priced_distance(&self) -> f64 {
+        self.distance + self.lateness_cost
     }
 
     /// The workload `quantity` counts, on a route driven by `vehicle`.
@@ -141,7 +156,7 @@ impl State<'_> {
             return None;
         }
         Some((
-            vehicle.route_cost(fig.distance),
+            vehicle.route_cost(fig.priced_distance()),
             fig.workload(self.balance.quantity, vehicle),
             fig.load,
         ))
@@ -276,7 +291,7 @@ pub fn improve(
     for r in 0..state.routes.len() {
         let fig = RouteFigures::of(&state.routes[r], dm, customers);
         let vehicle = &vehicles[state.kinds[r]];
-        state.cost.push(vehicle.route_cost(fig.distance));
+        state.cost.push(vehicle.route_cost(fig.priced_distance()));
         state.work.push(fig.workload(balance.quantity, vehicle));
         state.load.push(fig.load);
     }
