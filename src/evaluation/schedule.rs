@@ -67,14 +67,13 @@ impl Label {
 /// hard window closes before the service can start, or the break cannot start by its `latest`.
 fn serve(
     label: &Label,
-    prev: usize,
+    travel: f64,
     cid: usize,
     index: usize,
     rest: Option<&VehicleBreak>,
-    distances: &DistanceMatrix,
     customers: &[Customer],
 ) -> Option<Label> {
-    let arrival = label.time + distances.travel_time(prev, cid);
+    let arrival = label.time + travel;
     let (ready, taken) = match rest {
         Some(b) => {
             let start = arrival.max(b.earliest());
@@ -143,19 +142,20 @@ impl<'a> BreakClock<'a> {
         distances: &DistanceMatrix,
         customers: &[Customer],
     ) -> bool {
-        let (prev, index, rest) = (self.prev, self.index, self.rest);
+        let (index, rest) = (self.index, self.rest);
+        let travel = distances.travel_time(self.prev, cid);
         let skipped = self
             .before
             .as_ref()
-            .and_then(|l| serve(l, prev, cid, index, None, distances, customers));
+            .and_then(|l| serve(l, travel, cid, index, None, customers));
         let here = self
             .before
             .as_ref()
-            .and_then(|l| serve(l, prev, cid, index, Some(rest), distances, customers));
+            .and_then(|l| serve(l, travel, cid, index, Some(rest), customers));
         let carried = self
             .after
             .as_ref()
-            .and_then(|l| serve(l, prev, cid, index, None, distances, customers));
+            .and_then(|l| serve(l, travel, cid, index, None, customers));
         self.before = skipped;
         self.after = Label::earlier(carried, here);
         self.prev = cid;
