@@ -339,4 +339,37 @@ mod tests {
         let result = split_tw(&[1, 2, 3], &customers, &dm, 25, &RouteLimits::NONE, 0.0);
         assert!(result.routes.len() >= 2);
     }
+
+    /// A driver's break lengthens the route the stops after it feel: a tour that is one route
+    /// without the break is cut into routes that each keep their windows with it.
+    #[test]
+    fn a_drivers_break_cuts_the_tour_where_the_windows_after_it_would_close() {
+        use crate::evaluation::route_feasible;
+        use crate::models::{TimeWindow, VehicleBreak};
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for i in 1..=4 {
+            customers.push(
+                Customer::new(i, 10.0 * i as f64, 0.0, 1, 2.0)
+                    .with_time_window(TimeWindow::new(0.0, 60.0).expect("window")),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let tour = [1, 2, 3, 4];
+        let free = split_tw(&tour, &customers, &dm, 10, &RouteLimits::NONE, 0.0);
+        assert_eq!(free.routes.len(), 1, "stops at 10, 22, 34, 46: one route");
+        // The break is due from 5 and takes 20: the first stop's service waits for it.
+        let limits = RouteLimits {
+            rest: Some(VehicleBreak::new(5.0, 40.0, 20.0)),
+            ..RouteLimits::NONE
+        };
+        let cut = split_tw(&tour, &customers, &dm, 10, &limits, 0.0);
+        assert!(cut.routes.len() > 1, "{:?}", cut.routes);
+        for route in &cut.routes {
+            assert!(
+                route_feasible(route, 0, &dm, &customers, &limits),
+                "{route:?}"
+            );
+        }
+        assert_eq!(cut.routes.concat(), tour);
+    }
 }

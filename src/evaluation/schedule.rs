@@ -307,7 +307,10 @@ mod tests {
         let s = schedule(&[1, 2, 3], 0, &dm, &customers, &b).expect("feasible");
         // Break before the second stop (arrival 22 >= 20): 22 + 5 + 2 -> leaves 29, 3rd at 39, +2, +30.
         assert_eq!(s.rest, Some((1, 22.0)));
-        assert_eq!(s.duration, 10.0 + 2.0 + 10.0 + 5.0 + 2.0 + 10.0 + 2.0 + 30.0);
+        assert_eq!(
+            s.duration,
+            10.0 + 2.0 + 10.0 + 5.0 + 2.0 + 10.0 + 2.0 + 30.0
+        );
     }
 
     #[test]
@@ -388,7 +391,10 @@ mod tests {
                     // places are a tie, not an error).
                     let at = g.rest.map(|r| r.0);
                     let (e, c) = simulate(&route, &customers, &dm, &b, at).expect("a place");
-                    assert!((e - end).abs() < 1e-9 && (c - cost).abs() < 1e-9, "{route:?} {b:?}");
+                    assert!(
+                        (e - end).abs() < 1e-9 && (c - cost).abs() < 1e-9,
+                        "{route:?} {b:?}"
+                    );
                     with_break += usize::from(at.is_some());
                 }
                 (g, w) => panic!("{route:?} {b:?}: got {g:?}, oracle {w:?}"),

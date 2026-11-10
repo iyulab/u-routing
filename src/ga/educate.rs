@@ -142,4 +142,17 @@ mod tests {
         let after = split_tw(&educated, &customers, &dm, 4, &limits, 0.0).total_distance;
         assert!(after < before - 1e-9, "{after} !< {before}");
     }
+
+    #[test]
+    fn the_vehicle_of_a_route_keeps_the_drivers_break() {
+        let rest = crate::models::VehicleBreak::new(5.0, 40.0, 20.0);
+        let limits = RouteLimits {
+            max_duration: Some(100.0),
+            rest: Some(rest),
+            ..RouteLimits::NONE
+        };
+        let vehicle = route_vehicle(10, &limits);
+        assert_eq!(vehicle.rest(), Some(rest));
+        assert_eq!(RouteLimits::of(&vehicle), limits);
+    }
 }

@@ -112,7 +112,8 @@ pub fn nearest_neighbor(
                 if limits.rest.is_some() {
                     // A driver's break is placed on the whole route: ask the route's clock.
                     route_customers.push(i);
-                    let fits = route_feasible(&route_customers, depot, distances, customers, &limits);
+                    let fits =
+                        route_feasible(&route_customers, depot, distances, customers, &limits);
                     route_customers.pop();
                     if !fits {
                         continue;

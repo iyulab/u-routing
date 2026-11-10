@@ -4640,8 +4640,8 @@ mod tests {
             .customers;
         let dm = DistanceMatrix::from_customers(&internal);
         // Built from the numbers, not from the code under test.
-        let oracle = Vehicle::new(0, 1000)
-            .with_break(crate::models::VehicleBreak::new(5.0, 15.0, 30.0));
+        let oracle =
+            Vehicle::new(0, 1000).with_break(crate::models::VehicleBreak::new(5.0, 15.0, 30.0));
         let mut routes_with_break = 0;
         for max_vehicles in [None, Some(2)] {
             for method in ["nn", "savings", "ga", "alns"] {
@@ -4656,8 +4656,8 @@ mod tests {
                     distances: None,
                     durations: None,
                 };
-                let out = solve(&problem, method, &config)
-                    .unwrap_or_else(|e| panic!("{method}: {e:?}"));
+                let out =
+                    solve(&problem, method, &config).unwrap_or_else(|e| panic!("{method}: {e:?}"));
                 let evaluator = crate::evaluation::RouteEvaluator::new(&internal, &dm, &oracle);
                 for route in &out.routes {
                     let (timed, violations) = evaluator.build_route(route);
@@ -4671,7 +4671,10 @@ mod tests {
                 assert_eq!(served + out.unassigned.len(), 9, "{method} lost a customer");
             }
         }
-        assert!(routes_with_break > 0, "no route was long enough to need the break");
+        assert!(
+            routes_with_break > 0,
+            "no route was long enough to need the break"
+        );
     }
 
     /// A plan the break cannot be placed on is a result: `break_not_placeable`, and one that
@@ -4724,9 +4727,18 @@ mod tests {
     #[test]
     fn a_break_that_cannot_exist_is_refused_with_its_parameter() {
         for (spec, parameter) in [
-            (json!({ "earliest": -1.0, "latest": 5.0, "duration": 1.0 }), "break.earliest"),
-            (json!({ "earliest": 5.0, "latest": 4.0, "duration": 1.0 }), "break.latest"),
-            (json!({ "earliest": 1.0, "latest": 4.0, "duration": 0.0 }), "break.duration"),
+            (
+                json!({ "earliest": -1.0, "latest": 5.0, "duration": 1.0 }),
+                "break.earliest",
+            ),
+            (
+                json!({ "earliest": 5.0, "latest": 4.0, "duration": 1.0 }),
+                "break.latest",
+            ),
+            (
+                json!({ "earliest": 1.0, "latest": 4.0, "duration": 0.0 }),
+                "break.duration",
+            ),
         ] {
             let vehicles = vec![vehicle(json!({ "capacity": 10.0, "break": spec }))];
             let err = solve(
