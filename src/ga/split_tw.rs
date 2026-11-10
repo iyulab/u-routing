@@ -23,7 +23,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteLimits;
+use crate::evaluation::{BreakClock, RouteLimits};
 use crate::models::Customer;
 
 use super::split::SplitResult;
@@ -98,6 +98,11 @@ pub fn split_tw(
         let mut time = 0.0;
         // What the segment's lateness at soft windows costs, in distance (0 for hard windows).
         let mut late_cost = 0.0;
+        // With a driver's break the clock is the two-label one, grown a stop at a time.
+        let mut clock = limits
+            .rest
+            .as_ref()
+            .map(|rest| BreakClock::new(rest, depot));
 
         for j in i..n {
             let cid = tour[j];
@@ -114,6 +119,27 @@ pub fn split_tw(
             } else {
                 route_dist += distances.get(tour[j - 1], cid);
                 time += distances.travel_time(tour[j - 1], cid);
+            }
+
+            if let Some(clock) = clock.as_mut() {
+                // No placement of the break keeps the stops so far: no longer segment does.
+                if !clock.push(cid, distances, customers) {
+                    break;
+                }
+                let total_route = route_dist + distances.get(cid, depot);
+                let Some(done) = clock.finish(total_route, depot, distances) else {
+                    continue;
+                };
+                if !limits.allow(total_route, done.duration) {
+                    continue;
+                }
+                let new_cost = cost[i] + route_cost + total_route + done.lateness_cost;
+                if new_cost < cost[j + 1] {
+                    cost[j + 1] = new_cost;
+                    dist[j + 1] = dist[i] + total_route;
+                    pred[j + 1] = i;
+                }
+                continue;
             }
 
             // Check time window

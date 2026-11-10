@@ -40,6 +40,9 @@ pub(crate) fn route_vehicle(capacity: i32, limits: &RouteLimits) -> Vehicle {
     if let Some(max) = limits.max_duration {
         vehicle = vehicle.with_max_duration(max);
     }
+    if let Some(rest) = limits.rest {
+        vehicle = vehicle.with_break(rest);
+    }
     vehicle
 }
 

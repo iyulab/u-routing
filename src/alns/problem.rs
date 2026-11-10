@@ -97,8 +97,12 @@ impl AlnsProblem for RoutingAlnsProblem {
                     Some(d) => v.with_max_distance(d),
                     None => v,
                 };
-                match self.limits.max_duration {
+                let v = match self.limits.max_duration {
                     Some(t) => v.with_max_duration(t),
+                    None => v,
+                };
+                match self.limits.rest {
+                    Some(rest) => v.with_break(rest),
                     None => v,
                 }
             })

@@ -43,6 +43,13 @@ pub enum ViolationType {
         /// Maximum allowed duration.
         max_duration: f64,
     },
+    /// The driver's break ([`crate::models::VehicleBreak`]) cannot be placed: the vehicle is still
+    /// out when the break is due and no stop of the route lets it start by its latest time without
+    /// closing a hard window behind it.
+    BreakNotPlaceable {
+        /// Route index.
+        route_index: usize,
+    },
     /// A route visits something that is not a customer of the problem: an id
     /// past the last customer, or the depot.
     UnknownCustomer {

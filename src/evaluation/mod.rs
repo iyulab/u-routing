@@ -2,12 +2,14 @@
 
 mod check;
 mod evaluator;
+mod schedule;
 
 pub use check::{check_solution, Fleet};
 pub use evaluator::RouteEvaluator;
+pub(crate) use schedule::BreakClock;
 
 use crate::distance::DistanceMatrix;
-use crate::models::{Customer, Vehicle};
+use crate::models::{Customer, Vehicle, VehicleBreak};
 
 /// Whether any customer carries a time window.
 pub fn has_time_windows(customers: &[Customer]) -> bool {
@@ -60,6 +62,8 @@ pub struct RouteLimits {
     pub max_distance: Option<f64>,
     /// Latest return to the depot, on the clock that starts at 0.
     pub max_duration: Option<f64>,
+    /// The break the driver takes during the route ([`VehicleBreak`]).
+    pub rest: Option<VehicleBreak>,
 }
 
 impl RouteLimits {
@@ -67,6 +71,7 @@ impl RouteLimits {
     pub const NONE: RouteLimits = RouteLimits {
         max_distance: None,
         max_duration: None,
+        rest: None,
     };
 
     /// The limits `vehicle` sets.
@@ -74,12 +79,13 @@ impl RouteLimits {
         RouteLimits {
             max_distance: vehicle.max_distance(),
             max_duration: vehicle.max_duration(),
+            rest: vehicle.rest(),
         }
     }
 
-    /// Whether neither limit is set.
+    /// Whether nothing is set: no limit, no break.
     pub fn is_unlimited(&self) -> bool {
-        self.max_distance.is_none() && self.max_duration.is_none()
+        self.max_distance.is_none() && self.max_duration.is_none() && self.rest.is_none()
     }
 
     /// Whether a route that travels `distance` in all and is back at the depot
@@ -113,6 +119,10 @@ pub fn route_feasible(
     customers: &[Customer],
     limits: &RouteLimits,
 ) -> bool {
+    if let Some(rest) = &limits.rest {
+        return schedule::schedule(route, depot, distances, customers, rest)
+            .is_some_and(|s| limits.allow(s.distance, s.duration));
+    }
     let mut time = 0.0;
     let mut distance = 0.0;
     let mut prev = depot;
@@ -151,6 +161,10 @@ pub struct RouteEval {
     pub lateness: f64,
     /// That lateness times each customer's penalty, summed.
     pub lateness_cost: f64,
+    /// Where the driver's break goes ([`VehicleBreak`]): the index in the route of the stop it comes
+    /// before the service of, and when it starts. `None` without a break, or when the vehicle
+    /// is back at the depot by the break's `earliest`.
+    pub rest: Option<(usize, f64)>,
 }
 
 impl RouteEval {
@@ -187,6 +201,16 @@ pub fn route_eval(
     customers: &[Customer],
     limits: &RouteLimits,
 ) -> Option<RouteEval> {
+    if let Some(rest) = &limits.rest {
+        let s = schedule::schedule(route, depot, distances, customers, rest)?;
+        return limits.allow(s.distance, s.duration).then_some(RouteEval {
+            distance: s.distance,
+            duration: s.duration,
+            lateness: s.lateness,
+            lateness_cost: s.lateness_cost,
+            rest: s.rest,
+        });
+    }
     let mut time = 0.0;
     let mut distance = 0.0;
     let mut lateness = 0.0;
@@ -218,6 +242,7 @@ pub fn route_eval(
         duration,
         lateness,
         lateness_cost,
+        rest: None,
     })
 }
 

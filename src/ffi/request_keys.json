@@ -44,6 +44,13 @@
             "vehicles": {
               "items": {
                 "properties": {
+                  "break": {
+                    "properties": {
+                      "duration": {},
+                      "earliest": {},
+                      "latest": {}
+                    }
+                  },
                   "capacity": {},
                   "cost_per_distance": {},
                   "count": {},
@@ -116,6 +123,13 @@
         "vehicles": {
           "items": {
             "properties": {
+              "break": {
+                "properties": {
+                  "duration": {},
+                  "earliest": {},
+                  "latest": {}
+                }
+              },
               "capacity": {},
               "cost_per_distance": {},
               "count": {},

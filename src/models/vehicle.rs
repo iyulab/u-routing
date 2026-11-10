@@ -23,6 +23,48 @@ pub struct Vehicle {
     fixed_cost: f64,
     max_distance: Option<f64>,
     max_duration: Option<f64>,
+    rest: Option<VehicleBreak>,
+}
+
+/// A rest a driver has to take during a route: `duration` long, starting at some time in
+/// `[earliest, latest]`, at the stop the vehicle has just reached (before the stop's service, so
+/// the rest can overlap the wait for a time window to open).
+///
+/// A route has to contain the break unless the vehicle is back at the depot by `earliest`
+/// (a shift that ends before the break is due). The break is placed where the route finishes
+/// earliest; it is not a stop, and it is not a cost -- it makes the route longer, which a
+/// `max_duration` and the time windows after it feel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehicleBreak {
+    earliest: f64,
+    latest: f64,
+    duration: f64,
+}
+
+impl VehicleBreak {
+    /// A break of `duration` that starts no earlier than `earliest` and no later than `latest`.
+    pub fn new(earliest: f64, latest: f64, duration: f64) -> Self {
+        Self {
+            earliest,
+            latest,
+            duration,
+        }
+    }
+
+    /// The first time the break may start.
+    pub fn earliest(&self) -> f64 {
+        self.earliest
+    }
+
+    /// The last time the break may start.
+    pub fn latest(&self) -> f64 {
+        self.latest
+    }
+
+    /// How long the break takes.
+    pub fn duration(&self) -> f64 {
+        self.duration
+    }
 }
 
 impl Vehicle {
@@ -39,6 +81,7 @@ impl Vehicle {
             fixed_cost: 0.0,
             max_distance: None,
             max_duration: None,
+            rest: None,
         }
     }
 
@@ -69,6 +112,12 @@ impl Vehicle {
     /// Sets maximum route duration.
     pub fn with_max_duration(mut self, max: f64) -> Self {
         self.max_duration = Some(max);
+        self
+    }
+
+    /// Gives the driver a break ([`VehicleBreak`]) during every route.
+    pub fn with_break(mut self, rest: VehicleBreak) -> Self {
+        self.rest = Some(rest);
         self
     }
 
@@ -122,6 +171,11 @@ impl Vehicle {
     /// Maximum duration limit, if any.
     pub fn max_duration(&self) -> Option<f64> {
         self.max_duration
+    }
+
+    /// The driver's break, if any.
+    pub fn rest(&self) -> Option<VehicleBreak> {
+        self.rest
     }
 }
 

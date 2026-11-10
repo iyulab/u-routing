@@ -13,7 +13,7 @@
 //! quality is typically 15-25% above optimal, it provides a fast baseline.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{RouteEvaluator, RouteLimits};
+use crate::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Route, Solution, Vehicle};
 
 /// The vehicle of `route` in `vehicles` (by id; the first when the id is not
@@ -109,7 +109,15 @@ pub fn nearest_neighbor(
                 }
                 let d = distances.get(current, i);
                 let back = distances.get(i, depot);
-                if !limits.allow(
+                if limits.rest.is_some() {
+                    // A driver's break is placed on the whole route: ask the route's clock.
+                    route_customers.push(i);
+                    let fits = route_feasible(&route_customers, depot, distances, customers, &limits);
+                    route_customers.pop();
+                    if !fits {
+                        continue;
+                    }
+                } else if !limits.allow(
                     travelled + d + back,
                     clock
                         + distances.travel_time(current, i)

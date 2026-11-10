@@ -134,7 +134,8 @@ pub fn check_solution(
                 ViolationType::CapacityExceeded { route_index: r, .. }
                 | ViolationType::TimeWindowViolated { route_index: r, .. }
                 | ViolationType::MaxDistanceExceeded { route_index: r, .. }
-                | ViolationType::MaxDurationExceeded { route_index: r, .. } => *r = route_index,
+                | ViolationType::MaxDurationExceeded { route_index: r, .. }
+                | ViolationType::BreakNotPlaceable { route_index: r } => *r = route_index,
                 _ => {}
             }
             push(v.kind);
