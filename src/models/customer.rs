@@ -140,6 +140,12 @@ impl Customer {
         Some(self)
     }
 
+    /// This customer with a hard time window again: the end of the window is not soft any more.
+    pub fn without_lateness_penalty(mut self) -> Self {
+        self.lateness_penalty = None;
+        self
+    }
+
     /// Customer ID (0 = depot).
     pub fn id(&self) -> usize {
         self.id

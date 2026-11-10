@@ -1049,12 +1049,31 @@ pub(crate) fn solve(
         .flatten();
     let config = shared.as_ref().unwrap_or(config);
     let mut chosen: Option<(Plan, usize, f64)> = None;
-    for &planner in &templates {
+    // The one-pass methods are greedy, and what greed does with a soft window is no better than
+    // what it does with a hard one by rule: a soft problem has every plan of the hard one and more,
+    // so its plan must not cost more. They plan the problem as given and with every window
+    // hard, and the cheaper plan (priced with the soft windows) stands, as with the planning kinds.
+    let hardened: Option<Vec<Customer>> = (has_soft_windows(&customers)
+        && matches!(method, Method::NearestNeighbor | Method::Savings))
+    .then(|| {
+        customers
+            .iter()
+            .cloned()
+            .map(Customer::without_lateness_penalty)
+            .collect()
+    });
+    let mut sets: Vec<&[Customer]> = vec![&customers];
+    sets.extend(hardened.as_deref());
+    let attempts: Vec<(usize, &[Customer])> = templates
+        .iter()
+        .flat_map(|&planner| sets.iter().map(move |&set| (planner, set)))
+        .collect();
+    for (planner, set) in attempts {
         let plan = match method {
-            Method::NearestNeighbor => solve_nn(&customers, &dm, &fleet),
-            Method::Savings => solve_savings(&customers, &dm, &vehicles[planner], planner),
-            Method::Genetic => solve_ga(&customers, &dm, &vehicles[planner], planner, config)?,
-            Method::Alns => solve_alns(&customers, &dm, &vehicles[planner], planner, config)?,
+            Method::NearestNeighbor => solve_nn(set, &dm, &fleet),
+            Method::Savings => solve_savings(set, &dm, &vehicles[planner], planner),
+            Method::Genetic => solve_ga(set, &dm, &vehicles[planner], planner, config)?,
+            Method::Alns => solve_alns(set, &dm, &vehicles[planner], planner, config)?,
         };
         // A fixed fleet is kept by every method alike: `"nn"` cannot exceed its
         // vehicle list, but it can exceed a smaller `max_vehicles`.
@@ -5409,6 +5428,51 @@ mod tests {
                 actual: 70.0
             }]
         );
+    }
+
+    #[test]
+    fn a_soft_problem_costs_no_more_than_the_hard_one_for_the_one_pass_methods() {
+        let mut state = 0x1234_5678_9abc_def0_u64;
+        let mut next = move |bound: f64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64 * bound
+        };
+        let vehicles = fleet(&[60.0]);
+        for _ in 0..12 {
+            let raw: Vec<(f64, f64, f64, f64)> = (0..30)
+                .map(|_| (next(100.0), next(100.0), next(200.0), 50.0 + next(80.0)))
+                .collect();
+            let build = |soft: bool| -> Vec<InputCustomer> {
+                raw.iter()
+                    .enumerate()
+                    .map(|(i, &(x, y, ready, width))| {
+                        customer(serde_json::json!({
+                            "id": i + 1, "x": x, "y": y, "demand": 3.0, "service_time": 5.0,
+                            "time_window": [ready, ready + width],
+                            "lateness_penalty": soft.then_some(2.0),
+                        }))
+                    })
+                    .collect()
+            };
+            for method in ["nn", "savings"] {
+                let run = |soft: bool| {
+                    let customers = build(soft);
+                    solve(&problem(&customers, &vehicles), method, &quick(method)).expect(method)
+                };
+                let (hard, soft) = (run(false), run(true));
+                assert!(soft.unassigned.len() <= hard.unassigned.len(), "{method}");
+                if soft.unassigned.len() == hard.unassigned.len() {
+                    assert!(
+                        soft.total_cost <= hard.total_cost + 1e-9,
+                        "{method}: soft {} against hard {}",
+                        soft.total_cost,
+                        hard.total_cost
+                    );
+                }
+            }
+        }
     }
 }
 

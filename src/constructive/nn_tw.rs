@@ -17,7 +17,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{RouteEvaluator, RouteLimits};
+use crate::evaluation::{effective_cost, has_soft_windows, RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRPTW solution using a time-window-aware nearest-neighbor.
@@ -67,6 +67,7 @@ pub fn nearest_neighbor_tw(
     let mut visited = vec![false; n];
     visited[0] = true; // depot
 
+    let soft = has_soft_windows(customers);
     let mut solution = Solution::new();
     let mut vehicle_idx = 0;
 
@@ -127,6 +128,19 @@ pub fn nearest_neighbor_tw(
                     start + customers[i].service_duration() + distances.travel_time(i, depot),
                 ) {
                     continue;
+                }
+
+                // With a soft window a route is not carried on to a customer it would cost more
+                // to reach than a route of its own would: the lateness a vehicle has piled up
+                // is not paid again by starting afresh, so the greedy has to see it. (At the
+                // start of a route the step is the route of its own.)
+                if soft && !route_customers.is_empty() {
+                    let marginal = travel + distances.get(i, depot) - distances.get(current, depot)
+                        + penalty.unwrap_or(0.0) * late;
+                    let alone = effective_cost(&[i], depot, distances, customers, &limits);
+                    if marginal >= alone + vehicle.fixed_cost_in_distance() {
+                        continue;
+                    }
                 }
 
                 // Among feasible customers, pick nearest -- the step plus what its lateness
@@ -308,5 +322,26 @@ mod tests {
         // So only customer 1 is served
         assert_eq!(sol.num_served(), 1);
         assert_eq!(sol.routes()[0].customer_ids(), vec![1]);
+    }
+
+    #[test]
+    fn a_soft_route_is_not_carried_on_to_a_customer_a_route_of_its_own_reaches_on_time() {
+        // Two customers 10 either side of the depot, each due at 15 with a steep penalty. After
+        // one the other is 20 further, 15 late: a route of its own is on time.
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for (id, x) in [(1usize, 10.0), (2, -10.0)] {
+            customers.push(
+                Customer::new(id, x, 0.0, 1, 0.0)
+                    .with_time_window(TimeWindow::new(0.0, 15.0).expect("valid"))
+                    .with_lateness_penalty(100.0)
+                    .expect("valid"),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let vehicles = vec![Vehicle::new(0, 10), Vehicle::new(1, 10)];
+        let solution = nearest_neighbor_tw(&customers, &dm, &vehicles);
+        assert_eq!(solution.num_routes(), 2);
+        assert!(solution.routes().iter().all(|r| r.total_lateness() == 0.0));
+        assert_eq!(solution.total_cost(), 40.0);
     }
 }
