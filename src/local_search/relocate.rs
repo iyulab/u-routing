@@ -18,8 +18,9 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use super::gain_floor;
+use super::soft::effective_cost;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A relocate move: move customer from one route to another.
@@ -100,6 +101,9 @@ struct Relocations<'a> {
     vehicle: &'a Vehicle,
     limits: RouteLimits,
     constrained: bool,
+    /// Whether a customer has a soft window: a move's gain is then the change in the
+    /// routes' distance plus lateness cost, evaluated whole (see `best_between_soft`).
+    soft: bool,
     /// The least gain that counts (see [`gain_floor`]).
     floor: f64,
     loads: Vec<i32>,
@@ -144,6 +148,7 @@ impl<'a> Relocations<'a> {
             distances,
             vehicle,
             constrained: route_checks_needed(customers, &limits),
+            soft: has_soft_windows(customers),
             floor: gain_floor(distances),
             limits,
             loads: routes.iter().map(|r| Self::load(customers, r)).collect(),
@@ -281,6 +286,9 @@ impl<'a> Relocations<'a> {
         if from_r == to_r {
             return None;
         }
+        if self.soft {
+            return self.best_between_soft(routes, from_r, to_r);
+        }
         let depot = self.vehicle.depot_id();
         let distances = self.distances;
         // A route's fixed cost, in distance units: saved when a move empties
@@ -356,6 +364,65 @@ impl<'a> Relocations<'a> {
                 delta,
             });
             break;
+        }
+        best
+    }
+}
+
+impl Relocations<'_> {
+    /// [`Self::best_between`] when a customer has a soft window. The O(1) insertion and removal
+    /// deltas of the distance are not the change in the cost any more -- a customer added in
+    /// front of a late one makes it later -- so every move is evaluated whole, on both routes:
+    /// the change in distance plus lateness cost of the giving route and of the receiving one,
+    /// and the fixed cost saved or paid. A route already outside its limits is not moved
+    /// into or out of. The same best (least delta, the first in position order among equals).
+    fn best_between_soft(
+        &self,
+        routes: &[Vec<usize>],
+        from_r: usize,
+        to_r: usize,
+    ) -> Option<RelocateMove> {
+        let depot = self.vehicle.depot_id();
+        let eval = |route: &[usize]| {
+            effective_cost(route, depot, self.distances, self.customers, &self.limits)
+        };
+        let fixed = self.vehicle.fixed_cost_in_distance();
+        let (from_route, to_route) = (&routes[from_r], &routes[to_r]);
+        let (old_from, old_to) = (eval(from_route), eval(to_route));
+        if !old_from.is_finite() || !old_to.is_finite() {
+            return None;
+        }
+        let mut best: Option<RelocateMove> = None;
+        for from_pos in 0..from_route.len() {
+            let cid = from_route[from_pos];
+            if self.loads[to_r] + self.customers[cid].demand() > self.vehicle.capacity() {
+                continue;
+            }
+            let mut giving = from_route.clone();
+            giving.remove(from_pos);
+            let from_delta = eval(&giving) - old_from - if giving.is_empty() { fixed } else { 0.0 };
+            if !from_delta.is_finite() {
+                continue;
+            }
+            let mut receiving = to_route.clone();
+            receiving.insert(0, cid);
+            for to_pos in 0..=to_route.len() {
+                if to_pos > 0 {
+                    receiving.swap(to_pos - 1, to_pos);
+                }
+                let to_delta =
+                    eval(&receiving) - old_to + if to_route.is_empty() { fixed } else { 0.0 };
+                let delta = from_delta + to_delta;
+                if delta < -self.floor && best.as_ref().is_none_or(|b| delta < b.delta) {
+                    best = Some(RelocateMove {
+                        from_route: from_r,
+                        from_pos,
+                        to_route: to_r,
+                        to_pos,
+                        delta,
+                    });
+                }
+            }
         }
         best
     }

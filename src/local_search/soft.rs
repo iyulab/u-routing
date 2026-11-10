@@ -314,4 +314,123 @@ mod tests {
             "the searches never moved: {improved_some}"
         );
     }
+
+    use crate::evaluation::RouteEvaluator;
+    use crate::models::{Solution, Vehicle};
+
+    fn plan(
+        routes: &[Vec<usize>],
+        customers: &[Customer],
+        dm: &DistanceMatrix,
+        vehicle: &Vehicle,
+    ) -> Solution {
+        let evaluator = RouteEvaluator::new(customers, dm, vehicle);
+        let mut solution = Solution::new();
+        for route in routes.iter().filter(|r| !r.is_empty()) {
+            solution.add_route(evaluator.build_route(route).0);
+        }
+        solution.price(|_| vehicle);
+        solution
+    }
+
+    fn total_cost(routes: &[Vec<usize>], customers: &[Customer], dm: &DistanceMatrix) -> f64 {
+        routes
+            .iter()
+            .map(|r| effective_cost(r, 0, dm, customers, &RouteLimits::NONE))
+            .sum()
+    }
+
+    /// Three routes of two customers each, every window soft.
+    fn three_routes(next: &mut dyn FnMut(f64) -> f64) -> (Vec<Customer>, DistanceMatrix) {
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for id in 1..=6 {
+            let mut c = Customer::new(id, next(30.0) - 15.0, next(30.0) - 15.0, 1, next(4.0));
+            let ready = next(15.0);
+            c = c
+                .with_time_window(TimeWindow::new(ready, ready + next(15.0)).expect("valid"))
+                .with_lateness_penalty(next(6.0))
+                .expect("valid");
+            customers.push(c);
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        (customers, dm)
+    }
+
+    #[test]
+    fn the_inter_route_searches_end_where_no_single_move_gains_and_never_end_worse() {
+        let mut state = 0x853c_49e6_748f_ea9b_u64;
+        let mut next = move |bound: f64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64 * bound
+        };
+        let vehicle = Vehicle::new(0, 1000);
+        let (mut relocated, mut exchanged) = (0, 0);
+        for _ in 0..40 {
+            let (customers, dm) = three_routes(&mut next);
+            let floor = gain_floor(&dm);
+            let start = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+            let before = total_cost(&start, &customers, &dm);
+            let solution = plan(&start, &customers, &dm, &vehicle);
+
+            // Relocation: no customer into any position of any other route gains.
+            let after = super::super::relocate_improve(&solution, &customers, &dm, &vehicle);
+            let routes: Vec<Vec<usize>> = after.routes().iter().map(|r| r.customer_ids()).collect();
+            let cost = total_cost(&routes, &customers, &dm);
+            assert!(
+                cost <= before + 1e-9,
+                "relocation ended worse: {cost} > {before}"
+            );
+            relocated += usize::from(cost < before - 1e-9);
+            for a in 0..routes.len() {
+                for pos in 0..routes[a].len() {
+                    for b in (0..routes.len()).filter(|&b| b != a) {
+                        for to in 0..=routes[b].len() {
+                            let mut moved = routes.clone();
+                            let c = moved[a].remove(pos);
+                            moved[b].insert(to, c);
+                            let gain = cost - total_cost(&moved, &customers, &dm);
+                            assert!(gain <= floor + 1e-9, "a relocation still gains {gain}");
+                        }
+                    }
+                }
+            }
+            // The solution's price is distance plus lateness cost, a vehicle at 1 per distance.
+            let priced: f64 = after
+                .routes()
+                .iter()
+                .map(|r| r.total_distance() + r.lateness_cost())
+                .sum();
+            assert!((after.total_cost() - priced).abs() < 1e-9);
+
+            // Tail exchange: no pair of cuts of any two routes gains.
+            let after = super::super::exchange_improve(&solution, &customers, &dm, &vehicle);
+            let routes: Vec<Vec<usize>> = after.routes().iter().map(|r| r.customer_ids()).collect();
+            let cost = total_cost(&routes, &customers, &dm);
+            assert!(cost <= before + 1e-9, "the exchange ended worse");
+            exchanged += usize::from(cost < before - 1e-9);
+            for r1 in 0..routes.len() {
+                for r2 in r1 + 1..routes.len() {
+                    for cut1 in 1..=routes[r1].len() {
+                        for cut2 in 1..=routes[r2].len() {
+                            let mut swapped = routes.clone();
+                            let (tail1, tail2) =
+                                (routes[r1][cut1..].to_vec(), routes[r2][cut2..].to_vec());
+                            swapped[r1].truncate(cut1);
+                            swapped[r1].extend(tail2);
+                            swapped[r2].truncate(cut2);
+                            swapped[r2].extend(tail1);
+                            let gain = cost - total_cost(&swapped, &customers, &dm);
+                            assert!(gain <= floor + 1e-9, "an exchange still gains {gain}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            relocated > 5 && exchanged > 5,
+            "the searches rarely moved: {relocated} {exchanged}"
+        );
+    }
 }

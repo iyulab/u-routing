@@ -204,14 +204,16 @@ impl Solution {
     }
 
     /// Sets the total cost to the sum of [`Vehicle::route_cost`] over the
-    /// routes, each priced with the vehicle `vehicle_of` gives it.
+    /// routes, each priced with the vehicle `vehicle_of` gives it. A route's
+    /// lateness is priced like distance: its cost (each soft window's lateness
+    /// times its penalty, in units of distance) is added to the distance.
     ///
     /// [`Vehicle::route_cost`]: crate::models::Vehicle::route_cost
     pub fn price<'v>(&mut self, vehicle_of: impl Fn(&Route) -> &'v crate::models::Vehicle) {
         self.total_cost = self
             .routes
             .iter()
-            .map(|r| vehicle_of(r).route_cost(r.total_distance()))
+            .map(|r| vehicle_of(r).route_cost(r.total_distance() + r.lateness_cost()))
             .sum();
     }
 
