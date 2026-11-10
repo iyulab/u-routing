@@ -116,7 +116,8 @@ public sealed record Customer(
 /// its distance (defaults 0 and 1); every method minimizes the plan's total cost, so a fixed
 /// cost trades distance for fewer routes. A vehicle stands for a <em>kind</em>:
 /// <see cref="Count"/> says how many vehicles of it there are (at least 1); <c>null</c> is as many as the
-/// plan needs. A fleet may mix kinds that differ in capacity, costs and limits.
+/// plan needs. A fleet may mix kinds that differ in capacity, costs and limits -- but not in
+/// <see cref="Break"/>: every kind has the same one, or none.
 /// </summary>
 public sealed record Vehicle(
     double? Capacity = null,
@@ -124,7 +125,18 @@ public sealed record Vehicle(
     double? MaxDuration = null,
     double? FixedCost = null,
     double? CostPerDistance = null,
-    int? Count = null);
+    int? Count = null,
+    VehicleBreak? Break = null);
+
+/// <summary>
+/// A rest the driver takes during every route of a vehicle: <see cref="Duration"/> long, starting
+/// at some time in [<see cref="Earliest"/>, <see cref="Latest"/>] (on the clock that starts at 0)
+/// at the stop the vehicle has just reached, before that stop's service -- so it can overlap the
+/// wait for a time window to open. A route has to contain it unless the vehicle is back at the
+/// depot by <see cref="Earliest"/>. It costs nothing itself; it lengthens the route, which
+/// <see cref="Vehicle.MaxDuration"/> and the windows after it feel.
+/// </summary>
+public sealed record VehicleBreak(double Earliest, double Latest, double Duration);
 
 /// <summary>
 /// Solver settings; a <c>null</c> takes the engine's default. Each method reads the ones that
@@ -300,6 +312,7 @@ public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Viola
 [JsonDerivedType(typeof(TimeWindowViolated), "time_window_violated")]
 [JsonDerivedType(typeof(MaxDistanceExceeded), "max_distance_exceeded")]
 [JsonDerivedType(typeof(MaxDurationExceeded), "max_duration_exceeded")]
+[JsonDerivedType(typeof(BreakNotPlaceable), "break_not_placeable")]
 [JsonDerivedType(typeof(UnknownCustomer), "unknown_customer")]
 [JsonDerivedType(typeof(CustomerVisitedTwice), "customer_visited_twice")]
 [JsonDerivedType(typeof(CustomerMissing), "customer_missing")]
@@ -323,6 +336,11 @@ public abstract record PlanViolation
     public sealed record MaxDistanceExceeded(int Route, double Distance, double MaxDistance) : PlanViolation;
     /// <summary>The route returns later than its vehicle's <see cref="Vehicle.MaxDuration"/>.</summary>
     public sealed record MaxDurationExceeded(int Route, double Duration, double MaxDuration) : PlanViolation;
+    /// <summary>
+    /// The vehicle's <see cref="Vehicle.Break"/> cannot be placed on the route: the vehicle is still out
+    /// when the break is due and no stop lets it start by its latest time without closing a hard window.
+    /// </summary>
+    public sealed record BreakNotPlaceable(int Route) : PlanViolation;
     /// <summary>The route visits an id no customer of the request has.</summary>
     public sealed record UnknownCustomer(int Route, long Customer) : PlanViolation;
     /// <summary>The customer is visited a second time, on this route.</summary>

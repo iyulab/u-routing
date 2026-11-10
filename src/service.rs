@@ -2185,7 +2185,7 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, S
     if input_vehicles.is_empty() {
         return Ok(vec![VehicleType::new(Vehicle::new(0, i32::MAX), None)]);
     }
-    input_vehicles
+    let types: Vec<VehicleType> = input_vehicles
         .iter()
         .enumerate()
         .map(|(i, v)| {
@@ -2291,7 +2291,20 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, S
                 count,
             ))
         })
-        .collect()
+        .collect::<Result<_, ServiceError>>()?;
+    // A route is timed once and then given to the kind that carries it cheapest
+    // (`assign_fleet`): that is sound only when every kind keeps the same clock.
+    if types
+        .windows(2)
+        .any(|w| w[0].vehicle().rest() != w[1].vehicle().rest())
+    {
+        return Err(ServiceError::new(
+            Code::InvalidOption,
+            "every vehicle kind must have the same break (or none): a route is timed once and then given to the kind that carries it cheapest".to_string(),
+            json!({ "parameter": "vehicles[].break" }),
+        ));
+    }
+    Ok(types)
 }
 
 /// The kind of vehicle the methods that plan every route alike plan with: the
@@ -4720,6 +4733,57 @@ mod tests {
         // The window reaches the arrival: the break goes there.
         let out = run(&problem(2.0, 12.0));
         assert!(out.feasible, "{:?}", out.violations);
+    }
+
+    /// Kinds that differ in their break are refused: a route is timed once and then given to the
+    /// cheapest kind that carries it, which only holds when they keep one clock.
+    #[test]
+    fn vehicle_kinds_with_different_breaks_are_refused() {
+        let b = json!({ "earliest": 5.0, "latest": 40.0, "duration": 20.0 });
+        let other = json!({ "earliest": 5.0, "latest": 40.0, "duration": 25.0 });
+        for (a, c) in [
+            (
+                json!({ "capacity": 10.0, "break": b }),
+                json!({ "capacity": 20.0 }),
+            ),
+            (
+                json!({ "capacity": 10.0, "break": b }),
+                json!({ "capacity": 20.0, "break": other }),
+            ),
+        ] {
+            let vehicles = vec![vehicle(a), vehicle(c)];
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &[customer(json!({ "id": 1, "x": 1.0, "y": 0.0 }))],
+                    vehicles: &vehicles,
+                    distances: None,
+                    durations: None,
+                },
+                "nn",
+                &InputConfig::default(),
+            )
+            .expect_err("refused");
+            assert_eq!(err.code(), "invalid_option", "{err:?}");
+            assert_eq!(err.fields["parameter"], "vehicles[].break");
+        }
+        // The same break on every kind is a fleet.
+        let vehicles = vec![
+            vehicle(json!({ "capacity": 10.0, "break": b })),
+            vehicle(json!({ "capacity": 20.0, "break": b })),
+        ];
+        solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &[customer(json!({ "id": 1, "x": 1.0, "y": 0.0 }))],
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect("a fleet that shares one break");
     }
 
     /// A break is refused where it cannot mean anything: before time 0, ending before it starts,

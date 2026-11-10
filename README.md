@@ -394,7 +394,9 @@ can overlap the wait for a time window to open. A route that is back at the depo
 none. The rest costs nothing itself; it lengthens the route, which `max_duration` and the windows
 after it feel, and it is placed where the route finishes earliest. Every method keeps it as it
 keeps `max_duration` (one test of a route's feasibility), and `check_vrp_solution` reports a route
-that cannot place it as `break_not_placeable`. At most one break per vehicle kind; with soft windows the break is placed
+that cannot place it as `break_not_placeable`. At most one break per vehicle, and a fleet of several kinds has
+the same break on every kind (or none): a route is timed once and then given to the kind that carries it
+cheapest, so kinds with different breaks are refused (`invalid_option`, `vehicles[].break`). With soft windows the break is placed
 to finish the route earliest, and the lateness follows. Left out (or `null`), no break.
 
 ```js
