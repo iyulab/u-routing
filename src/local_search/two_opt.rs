@@ -22,8 +22,9 @@
 //! *Operations Research* 6(6), 791-812.
 
 use super::gain_floor;
+use super::soft::{self, Neighbourhood};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies 2-opt improvement to a single route (given as a sequence of customer IDs).
@@ -75,6 +76,17 @@ pub fn two_opt_improve(
             distances.get(depot, route[0]) + distances.get(route[0], depot)
         };
         return (route.to_vec(), dist);
+    }
+
+    if has_soft_windows(customers) {
+        return soft::improve(
+            route,
+            depot,
+            distances,
+            customers,
+            limits,
+            Neighbourhood::Reverse,
+        );
     }
 
     let constrained = route_checks_needed(customers, limits);

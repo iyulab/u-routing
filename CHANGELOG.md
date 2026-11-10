@@ -10,13 +10,12 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ### Added
 
-- Soft ends of time windows, in the Rust model (the first of five steps; no transport carries it yet and no method
-  optimises it yet): `Customer::with_lateness_penalty(penalty)` lets a vehicle arrive after a customer's `due`, each unit
+- Soft ends of time windows, in the Rust model (steps 1 and 3a of five; no transport carries it yet, and only the intra-route searches optimise it so far): `Customer::with_lateness_penalty(penalty)` lets a vehicle arrive after a customer's `due`, each unit
   of time late costing `penalty` (linear; without a penalty the window stays hard, and the opening of the window stays hard
   either way). `TimeWindow::lateness`, `evaluation::route_eval` (distance, duration, lateness and its cost of an allowed
   route, or `None` — the same allowed set as `route_feasible`, which now admits a late arrival at a soft window),
   `Route::total_lateness` / `Route::lateness_cost`, and `check_solution` compares a route's reported lateness cost with its own
-  (`LatenessMismatch`). With no penalty set every figure is what it was: a hard window is violated exactly when it was.
+  (`LatenessMismatch`). `two_opt_improve`, `or_opt_improve` and `three_opt_improve` weigh the lateness cost against the distance when a customer has a soft window (steepest descent over the whole route's distance plus lateness cost, `route_eval` per neighbour) and are unchanged without one. With no penalty set every figure is what it was: a hard window is violated exactly when it was.
 
 ### Changed
 

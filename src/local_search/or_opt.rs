@@ -19,8 +19,9 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use super::gain_floor;
+use super::soft::{self, Neighbourhood};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies Or-opt improvement to a single route.
@@ -69,6 +70,17 @@ pub fn or_opt_improve(
             distances.get(depot, route[0]) + distances.get(route[0], depot)
         };
         return (route.to_vec(), dist);
+    }
+
+    if has_soft_windows(customers) {
+        return soft::improve(
+            route,
+            depot,
+            distances,
+            customers,
+            limits,
+            Neighbourhood::Relocate,
+        );
     }
 
     let constrained = route_checks_needed(customers, limits);

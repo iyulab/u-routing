@@ -21,9 +21,10 @@
 
 use super::gain_floor;
 use super::or_opt::route_distance;
+use super::soft::{self, Neighbourhood};
 use super::two_opt::reversal_delta;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
 use crate::models::Customer;
 
 /// Applies 3-opt improvement to a single route.
@@ -68,6 +69,17 @@ pub fn three_opt_improve(
         // 3-opt needs at least 4 customers to have 3 non-adjacent edges
         let dist = route_distance(route, depot, distances);
         return (route.to_vec(), dist);
+    }
+
+    if has_soft_windows(customers) {
+        return soft::improve(
+            route,
+            depot,
+            distances,
+            customers,
+            limits,
+            Neighbourhood::Reconnect,
+        );
     }
 
     let constrained = route_checks_needed(customers, limits);

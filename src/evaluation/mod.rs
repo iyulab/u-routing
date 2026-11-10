@@ -14,6 +14,15 @@ pub fn has_time_windows(customers: &[Customer]) -> bool {
     customers.iter().any(|c| c.time_window().is_some())
 }
 
+/// Whether any customer has a time window whose end is soft
+/// ([`Customer::with_lateness_penalty`]) -- the case where a route's lateness is a cost the
+/// searches have to weigh, not a limit they check.
+pub fn has_soft_windows(customers: &[Customer]) -> bool {
+    customers
+        .iter()
+        .any(|c| c.time_window().is_some() && c.lateness_penalty().is_some())
+}
+
 /// What a vehicle allows one route besides its capacity: how far it may
 /// travel and how long it may take, depot to depot -- the limits
 /// [`RouteEvaluator::build_route`] reports as violations.
