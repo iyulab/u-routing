@@ -22,10 +22,11 @@
 //! Society* 46(12), 1433-1446.
 
 use super::gain_floor;
-use super::soft::effective_cost;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
-use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Applies inter-route 2-opt* (tail exchange) improvement.

@@ -29,9 +29,10 @@
 //! Windows, Part II: Metaheuristics", *Transportation Science* 39(1), 119-139.
 
 use super::gain_floor;
-use super::soft::effective_cost;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Vehicle};
 
 use super::route_distance;

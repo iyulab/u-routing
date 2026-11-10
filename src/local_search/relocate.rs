@@ -18,9 +18,10 @@
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
 use super::gain_floor;
-use super::soft::effective_cost;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{has_soft_windows, route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A relocate move: move customer from one route to another.

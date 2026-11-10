@@ -125,6 +125,27 @@ pub struct RouteEval {
     pub lateness_cost: f64,
 }
 
+impl RouteEval {
+    /// The distance the route is priced at: its distance plus the cost of its lateness (the
+    /// penalty is in units of distance, so a late arrival is a detour not taken).
+    pub fn priced_distance(&self) -> f64 {
+        self.distance + self.lateness_cost
+    }
+}
+
+/// What the searches minimise on one route: its [`priced distance`](RouteEval::priced_distance),
+/// infinite if the route is not allowed ([`route_eval`] is `None`).
+pub(crate) fn effective_cost(
+    route: &[usize],
+    depot: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    limits: &RouteLimits,
+) -> f64 {
+    route_eval(route, depot, distances, customers, limits)
+        .map_or(f64::INFINITY, |e| e.priced_distance())
+}
+
 /// The distance, duration and lateness of a route `depot → route[0] → … →
 /// depot`, or `None` if it is not allowed: a late arrival at a hard window, or a
 /// limit of `limits` broken. The clock and the allowed set are those of

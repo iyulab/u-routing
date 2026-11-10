@@ -108,10 +108,13 @@ pub fn nearest_neighbor_tw(
                 let travel = distances.get(current, i);
                 let arrival = current_time + distances.travel_time(current, i);
 
-                if let Some(tw) = customers[i].time_window() {
-                    if arrival > tw.due() {
-                        continue; // cannot arrive before window closes
-                    }
+                // A late arrival is out at a hard window and a cost at a soft one.
+                let late = customers[i]
+                    .time_window()
+                    .map_or(0.0, |tw| tw.lateness(arrival));
+                let penalty = customers[i].lateness_penalty();
+                if late > 0.0 && penalty.is_none() {
+                    continue; // cannot arrive before window closes
                 }
 
                 // ...and still get back to the depot within the vehicle's limits.
@@ -126,8 +129,9 @@ pub fn nearest_neighbor_tw(
                     continue;
                 }
 
-                // Among feasible customers, pick nearest
-                let d = distances.get(current, i);
+                // Among feasible customers, pick nearest -- the step plus what its lateness
+                // costs, in distance (nothing at a hard window or on time).
+                let d = distances.get(current, i) + penalty.unwrap_or(0.0) * late;
                 if best.is_none_or(|(_, best_d)| d < best_d) {
                     best = Some((i, d));
                 }

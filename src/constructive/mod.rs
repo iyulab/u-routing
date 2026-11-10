@@ -9,6 +9,8 @@
 mod clarke_wright;
 mod nearest_neighbor;
 mod nn_tw;
+#[cfg(test)]
+mod soft_tests;
 mod solomon_i1;
 mod sweep;
 

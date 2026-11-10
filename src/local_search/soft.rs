@@ -14,7 +14,7 @@
 use super::gain_floor;
 use super::or_opt::route_distance;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_eval, RouteLimits};
+use crate::evaluation::{effective_cost, RouteLimits};
 use crate::models::Customer;
 
 /// Which neighbourhood a search moves in.
@@ -26,19 +26,6 @@ pub(crate) enum Neighbourhood {
     Relocate,
     /// Cut at three edges and reconnect the four pieces in every other way.
     Reconnect,
-}
-
-/// What the searches minimise on one route: its distance plus the cost of its lateness, infinite
-/// if the route is not allowed.
-pub(crate) fn effective_cost(
-    route: &[usize],
-    depot: usize,
-    distances: &DistanceMatrix,
-    customers: &[Customer],
-    limits: &RouteLimits,
-) -> f64 {
-    route_eval(route, depot, distances, customers, limits)
-        .map_or(f64::INFINITY, |e| e.distance + e.lateness_cost)
 }
 
 /// Steepest descent in `which` over the effective cost. Returns the route and its distance -- the
@@ -169,6 +156,7 @@ fn push_piece(buffer: &mut Vec<usize>, piece: &[usize], reversed: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluation::route_eval;
     use crate::models::TimeWindow;
 
     /// Customer 1 far out at 10 with a soft window closing at 10; customers 2 and 3 close to the

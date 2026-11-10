@@ -25,7 +25,9 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// A savings value for merging two customers' routes.
@@ -120,6 +122,7 @@ pub fn clarke_wright_savings(
     // unassigned rather than served late or over the limit.
     let limits = &RouteLimits::of(vehicle);
     let constrained = route_checks_needed(customers, limits);
+    let soft = has_soft_windows(customers);
     for i in 1..n {
         route_of[i] = i;
         route_load[i] = customers[i].demand();
@@ -184,6 +187,28 @@ pub fn clarke_wright_savings(
             }
             if !route_feasible(&candidate, depot, distances, customers, limits) {
                 continue;
+            }
+            // The saving is in distance; with a soft window the merged route may be late where
+            // the two were not, so it is merged only if it costs less than the two apart (and
+            // the vehicle the merge saves).
+            if soft {
+                let apart = effective_cost(
+                    &route_members[merge_into],
+                    depot,
+                    distances,
+                    customers,
+                    limits,
+                ) + effective_cost(
+                    &route_members[merge_from],
+                    depot,
+                    distances,
+                    customers,
+                    limits,
+                );
+                let merged = effective_cost(&candidate, depot, distances, customers, limits);
+                if merged >= apart + fixed {
+                    continue;
+                }
             }
         }
         let mut from_members = std::mem::take(&mut route_members[merge_from]);
