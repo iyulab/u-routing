@@ -8,6 +8,7 @@
 //! the depot's own sub-problem, so a problem with one depot is answered exactly
 //! as the heuristic alone answers it.
 
+use super::nearest_neighbor::fleet_vehicle;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
 use crate::models::{num_depots, Customer, Solution, Vehicle};
@@ -153,6 +154,7 @@ where
     for c in left {
         plan.add_unassigned(c);
     }
+    plan.price(|r| fleet_vehicle(vehicles, r));
     plan
 }
 
@@ -247,13 +249,20 @@ mod tests {
     #[test]
     fn each_customer_goes_to_its_nearest_depot() {
         let (customers, dm) = line(&[10.0, 20.0, 90.0, 80.0], 5);
-        let vehicles = vec![Vehicle::new(0, 20), Vehicle::new(1, 20).with_depot(1)];
+        let vehicles = vec![
+            Vehicle::new(0, 20).with_fixed_cost(7.0),
+            Vehicle::new(1, 20)
+                .with_depot(1)
+                .with_cost_per_distance(2.0),
+        ];
         let plan = construct_by_depot(&customers, &dm, &vehicles, nn);
         assert_eq!(
             routes_of(&plan),
             [(0, vec![2, 3]), (1, vec![4, 5])],
             "{plan:?}"
         );
+        // Priced with each route's own vehicle: 7 + 40, and 2 x 40.
+        assert!((plan.total_cost() - 127.0).abs() < 1e-9, "{plan:?}");
         // 0 -> 10 -> 20 -> 0 and 100 -> 90 -> 80 -> 100: 40 each.
         assert!((plan.total_distance() - 80.0).abs() < 1e-9);
         assert_eq!(plan.num_unassigned(), 0);
