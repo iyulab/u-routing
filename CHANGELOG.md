@@ -28,6 +28,13 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   has one break on every kind or none (`invalid_option`, `vehicles[].break`): a route is timed once and then given to the kind
   that carries it cheapest.
 
+- Several depots, in the Rust model (the first piece): `Customer::depot_at(id, x, y)` makes a depot of a table's leading entries,
+  `Customer::is_depot` and `models::num_depots(locations)` read them back (entry 0 is a depot however it was made), and
+  `check_solution` takes the leading `D` entries as the depots -- they are no customers to visit, and none of them is reported
+  missing -- and judges each route from its vehicle's depot (`Vehicle::with_depot`, which has to name one of them). The route
+  measures (`RouteEvaluator::build_route`, `route_feasible`, `route_eval`) already ran out of the vehicle's depot. The
+  construction heuristics, the searches and the requests still plan with one depot.
+
 ### Changed
 
 - **Breaking** (Rust API): `ViolationType` gains the variants `LatenessMismatch` and `BreakNotPlaceable`; an exhaustive `match` over it needs an arm. `RouteLimits` gains the field `rest`, `RouteEval` the field `rest` and `Vehicle` the field of `with_break` (a struct literal of the first two needs it).

@@ -85,7 +85,9 @@ impl Vehicle {
         }
     }
 
-    /// Sets the depot for this vehicle.
+    /// Sets the depot for this vehicle: the table index of the depot its routes
+    /// start from and end at, one of the first [`num_depots`](super::num_depots)
+    /// entries of the problem's locations (default 0).
     pub fn with_depot(mut self, depot_id: usize) -> Self {
         self.depot_id = depot_id;
         self

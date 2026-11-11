@@ -10,7 +10,7 @@ mod route;
 mod solution;
 mod vehicle;
 
-pub use customer::{Customer, TimeWindow};
+pub use customer::{num_depots, Customer, TimeWindow};
 pub use problem::RoutingProblem;
 pub use route::{Route, Visit};
 pub use solution::{Solution, Violation, ViolationType};

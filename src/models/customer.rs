@@ -72,8 +72,11 @@ impl TimeWindow {
 
 /// A customer (or depot) in a routing problem.
 ///
-/// Customer 0 is conventionally the depot. Customers have a location
-/// (coordinates), a demand, an optional time window, and a service duration.
+/// A problem lists its locations in one table: the depots first, then the
+/// customers, each entry's `id` its index in the table. With one depot, entry
+/// 0 is it; with several, entries `0..D` are, and [`num_depots`] counts them.
+/// Customers have a location (coordinates), a demand, an optional time window,
+/// and a service duration.
 ///
 /// # Examples
 ///
@@ -97,6 +100,7 @@ pub struct Customer {
     service_duration: f64,
     time_window: Option<TimeWindow>,
     lateness_penalty: Option<f64>,
+    depot: bool,
 }
 
 impl Customer {
@@ -110,12 +114,29 @@ impl Customer {
             service_duration,
             time_window: None,
             lateness_penalty: None,
+            depot: false,
         }
     }
 
-    /// Creates a depot at the given coordinates (id=0, demand=0).
+    /// Creates a depot at the given coordinates (id=0, demand=0): the only
+    /// depot of a problem, or the first of several.
     pub fn depot(x: f64, y: f64) -> Self {
-        Self::new(0, x, y, 0, 0.0)
+        Self::depot_at(0, x, y)
+    }
+
+    /// Creates a depot at the given coordinates and table index `id`, for a
+    /// problem with several depots: the depots are the first entries of the
+    /// table, so `id` is below the number of depots (see [`num_depots`]).
+    pub fn depot_at(id: usize, x: f64, y: f64) -> Self {
+        Self {
+            depot: true,
+            ..Self::new(id, x, y, 0, 0.0)
+        }
+    }
+
+    /// Whether this entry is a depot, not a customer to visit.
+    pub fn is_depot(&self) -> bool {
+        self.depot
     }
 
     /// Sets a time window for this customer.
@@ -146,7 +167,8 @@ impl Customer {
         self
     }
 
-    /// Customer ID (0 = depot).
+    /// Customer ID: its index in the problem's table (a depot's is below
+    /// the number of depots).
     pub fn id(&self) -> usize {
         self.id
     }
@@ -188,6 +210,35 @@ impl Customer {
         let dy = self.y - other.y;
         (dx * dx + dy * dy).sqrt()
     }
+}
+
+/// The number of depots in a problem's table of locations: its leading entries
+/// made by [`Customer::depot`] or [`Customer::depot_at`], and at least one --
+/// entry 0 is a depot however it was made. The customers are the entries from
+/// this index on.
+///
+/// A depot after the first customer is not counted: the depots are a prefix.
+///
+/// # Complexity
+/// O(D) for D depots -- count once, not in an inner loop.
+///
+/// # Examples
+///
+/// ```
+/// use u_routing::models::{num_depots, Customer};
+///
+/// let one = vec![Customer::depot(0.0, 0.0), Customer::new(1, 3.0, 4.0, 5, 0.0)];
+/// assert_eq!(num_depots(&one), 1);
+///
+/// let two = vec![
+///     Customer::depot_at(0, 0.0, 0.0),
+///     Customer::depot_at(1, 10.0, 0.0),
+///     Customer::new(2, 3.0, 4.0, 5, 0.0),
+/// ];
+/// assert_eq!(num_depots(&two), 2);
+/// ```
+pub fn num_depots(locations: &[Customer]) -> usize {
+    locations.iter().take_while(|c| c.is_depot()).count().max(1)
 }
 
 #[cfg(test)]
@@ -251,6 +302,33 @@ mod tests {
         assert_eq!(d.id(), 0);
         assert_eq!(d.demand(), 0);
         assert_eq!(d.service_duration(), 0.0);
+    }
+
+    #[test]
+    fn the_depots_are_the_leading_entries_and_entry_zero_always_is_one() {
+        let customer = |id| Customer::new(id, 0.0, 0.0, 1, 0.0);
+        // One depot made either way; an empty table still has its one.
+        assert_eq!(num_depots(&[]), 1);
+        assert_eq!(num_depots(&[Customer::depot(0.0, 0.0), customer(1)]), 1);
+        assert_eq!(num_depots(&[customer(0), customer(1)]), 1);
+        let two = [
+            Customer::depot_at(0, 0.0, 0.0),
+            Customer::depot_at(1, 5.0, 0.0),
+            customer(2),
+            customer(3),
+        ];
+        assert_eq!(num_depots(&two), 2);
+        assert!(two[1].is_depot() && !two[2].is_depot());
+        assert_eq!((two[1].id(), two[1].demand()), (1, 0));
+        // Only a prefix counts: a depot after a customer is not one more.
+        let late = [
+            Customer::depot(0.0, 0.0),
+            customer(1),
+            Customer::depot_at(2, 1.0, 1.0),
+        ];
+        assert_eq!(num_depots(&late), 1);
+        // A depot is a clone of a depot.
+        assert!(two[1].clone().is_depot());
     }
 
     #[test]
