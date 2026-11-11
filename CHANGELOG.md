@@ -36,7 +36,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   searches and the requests still plan with one depot. `constructive::construct_by_depot(customers, distances, vehicles, construct)`
   builds a plan for several depots with any of the single-depot constructions: each customer goes to the nearest depot that has a
   vehicle, each depot's customers are routed from that depot by `construct` (run unchanged on the depot's own sub-problem, so one depot
-  is answered exactly as the heuristic alone answers it), and a customer a depot cannot serve is offered to its next-nearest depot.
+  is answered exactly as the heuristic alone answers it), and a customer a depot cannot serve is offered to its next-nearest depot. `local_search::cross_depot_improve(solution, customers, distances, vehicles)` then lets
+  customers change depots: best-improvement relocate and swap between the routes of different depots, each route judged by its own
+  vehicle (capacity, windows, limits, break) and priced with it (a route a move empties gives back its fixed cost).
 
 ### Changed
 

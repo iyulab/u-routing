@@ -460,3 +460,174 @@ fn a_depots_share_is_what_the_heuristic_makes_of_it_alone() {
         }
     }
 }
+
+// ── Moves between depots ──────────────────────────────────────────────────
+
+use u_routing::local_search::cross_depot_improve;
+
+/// What a route of `ids` costs with `vehicle`, measured by the evaluator that builds routes:
+/// `None` when it is not allowed (any violation), 0 when empty.
+fn built_cost(
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+    vehicle: &Vehicle,
+    ids: &[usize],
+) -> Option<f64> {
+    if ids.is_empty() {
+        return Some(0.0);
+    }
+    let (route, violations) = RouteEvaluator::new(customers, dm, vehicle).build_route(ids);
+    violations
+        .is_empty()
+        .then(|| vehicle.route_cost(route.total_distance() + route.lateness_cost()))
+}
+
+/// Vehicles for each depot with capacities, costs and limits of their own.
+fn mixed_fleet_for(r: &mut Lcg, depots: usize, n: usize) -> Vec<Vehicle> {
+    let mut vehicles = Vec::new();
+    for d in 0..depots {
+        let capacity = 12 + r.below(30) as i32;
+        let fixed = if r.next() < 0.5 {
+            r.range(0.0, 60.0)
+        } else {
+            0.0
+        };
+        let per = r.range(0.8, 1.5);
+        for _ in 0..n {
+            let mut v = Vehicle::new(vehicles.len(), capacity)
+                .with_depot(d)
+                .with_fixed_cost(fixed)
+                .with_cost_per_distance(per);
+            if r.next() < 0.3 {
+                v = v.with_max_distance(r.range(200.0, 700.0));
+            }
+            vehicles.push(v);
+        }
+    }
+    vehicles
+}
+
+#[test]
+fn moves_between_depots_never_cost_and_leave_no_single_move_that_gains() {
+    let mut r = Lcg(1111);
+    let (mut improved, mut cases, mut swaps_or_moves_left) = (0, 0, 0);
+    for case in 0..800 {
+        let mut p = problem(&mut r);
+        let depots = num_depots(&p.customers);
+        if depots < 2 {
+            continue;
+        }
+        let n = p.customers.len() - depots;
+        p.vehicles = mixed_fleet_for(&mut r, depots, n);
+        let dm = DistanceMatrix::from_customers(&p.customers);
+        // Start from a plan built with the customers handed to depots in a poor way: all to
+        // the farthest depot that has a vehicle would be ideal, but a depot's construction
+        // is the library's own -- use the nearest-depot plan and a shuffled variant of it.
+        let plan = construct_by_depot(&p.customers, &dm, &p.vehicles, |c, d, v| {
+            nearest_neighbor_tw(c, d, v)
+        });
+        let counts: Vec<Option<usize>> = Vec::new();
+        let fleet = Fleet {
+            vehicles: &p.vehicles,
+            counts: &counts,
+            max_routes: None,
+        };
+        let input_clean = check_solution(&p.customers, &dm, &fleet, &plan).is_empty();
+        let after = cross_depot_improve(&plan, &p.customers, &dm, &p.vehicles);
+        cases += 1;
+
+        // Never costs, serves the same customers, stays allowed.
+        assert!(
+            after.total_cost() <= plan.total_cost() + 1e-9 * (1.0 + plan.total_cost()),
+            "case {case}: {} > {}",
+            after.total_cost(),
+            plan.total_cost()
+        );
+        improved += (after.total_cost() < plan.total_cost() - 1e-9) as usize;
+        let ids = |s: &Solution| {
+            let mut all: Vec<usize> = s.routes().iter().flat_map(|r| r.customer_ids()).collect();
+            all.sort_unstable();
+            all
+        };
+        assert_eq!(ids(&after), ids(&plan), "case {case}: served");
+        assert_eq!(
+            after.unassigned(),
+            plan.unassigned(),
+            "case {case}: unassigned"
+        );
+        if input_clean {
+            let v = check_solution(&p.customers, &dm, &fleet, &after);
+            assert!(v.is_empty(), "case {case}: {v:?}");
+        }
+
+        // No relocation or swap between routes of different depots gains, tried one by one.
+        let routes: Vec<(usize, Vec<usize>)> = after
+            .routes()
+            .iter()
+            .map(|r| (r.vehicle_id(), r.customer_ids()))
+            .collect();
+        let cost_of = |v: usize, ids: &[usize]| built_cost(&p.customers, &dm, &p.vehicles[v], ids);
+        let base: Vec<f64> = routes
+            .iter()
+            .map(|(v, ids)| {
+                let route = RouteEvaluator::new(&p.customers, &dm, &p.vehicles[*v])
+                    .build_route(ids)
+                    .0;
+                p.vehicles[*v].route_cost(route.total_distance() + route.lateness_cost())
+            })
+            .collect();
+        let tolerance = -1e-7 * (1.0 + after.total_cost());
+        for a in 0..routes.len() {
+            for b in 0..routes.len() {
+                let (va, ia) = &routes[a];
+                let (vb, ib) = &routes[b];
+                if a == b || p.vehicles[*va].depot_id() == p.vehicles[*vb].depot_id() {
+                    continue;
+                }
+                for pos in 0..ia.len() {
+                    let mut rest = ia.clone();
+                    let c = rest.remove(pos);
+                    let Some(cost_a) = cost_of(*va, &rest) else {
+                        continue;
+                    };
+                    for at in 0..=ib.len() {
+                        let mut into = ib.clone();
+                        into.insert(at, c);
+                        if let Some(cost_b) = cost_of(*vb, &into) {
+                            let delta = cost_a + cost_b - base[a] - base[b];
+                            assert!(
+                                delta >= tolerance,
+                                "case {case}: relocate {c} {a}->{b} gains {delta}"
+                            );
+                            swaps_or_moves_left += 1;
+                        }
+                    }
+                }
+                if a < b {
+                    for pa in 0..ia.len() {
+                        for pb in 0..ib.len() {
+                            let (mut x, mut y) = (ia.clone(), ib.clone());
+                            std::mem::swap(&mut x[pa], &mut y[pb]);
+                            if let (Some(cost_a), Some(cost_b)) =
+                                (cost_of(*va, &x), cost_of(*vb, &y))
+                            {
+                                let delta = cost_a + cost_b - base[a] - base[b];
+                                assert!(
+                                    delta >= tolerance,
+                                    "case {case}: swap {a}<->{b} gains {delta}"
+                                );
+                                swaps_or_moves_left += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(cases > 300, "{cases} multi-depot problems");
+    assert!(improved > 10, "only {improved} improved");
+    assert!(
+        swaps_or_moves_left > 5000,
+        "{swaps_or_moves_left} moves tried"
+    );
+}
