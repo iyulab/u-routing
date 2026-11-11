@@ -261,7 +261,7 @@ pub fn check_vrp_solution(
     let config = input.config.unwrap_or_default();
     let output = service::check(
         &service::ProblemInput {
-            depot: (input.depot.x, input.depot.y),
+            depots: &[(input.depot.x, input.depot.y)],
             customers: &input.customers,
             vehicles: &input.vehicles,
             distances: input.distances.as_deref(),
@@ -341,7 +341,7 @@ pub fn solve_vrp(
     let start = web_time();
     let mut output = service::solve(
         &service::ProblemInput {
-            depot: (input.depot.x, input.depot.y),
+            depots: &[(input.depot.x, input.depot.y)],
             customers: &input.customers,
             vehicles: &input.vehicles,
             distances: input.distances.as_deref(),
@@ -467,7 +467,7 @@ mod path_tests {
         let input: super::VrpInput = super::from_json(problem, "problem")?;
         crate::service::solve(
             &crate::service::ProblemInput {
-                depot: (input.depot.x, input.depot.y),
+                depots: &[(input.depot.x, input.depot.y)],
                 customers: &input.customers,
                 vehicles: &input.vehicles,
                 distances: input.distances.as_deref(),

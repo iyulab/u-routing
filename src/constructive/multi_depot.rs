@@ -13,12 +13,119 @@ use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
 use crate::models::{num_depots, Customer, Solution, Vehicle};
 
-/// What one depot's construction made: its routes (original vehicle index and
-/// customer ids) and the customers it could not serve (original ids).
+/// What one depot's planner made, in the numbering of the depot's own
+/// sub-problem: its routes (position in the depot's fleet, customer ids of its
+/// table) and the customers it could not serve (ids of its table).
 #[derive(Default)]
-struct Built {
-    routes: Vec<(usize, Vec<usize>)>,
-    unassigned: Vec<usize>,
+pub(crate) struct Share {
+    pub(crate) routes: Vec<(usize, Vec<usize>)>,
+    pub(crate) unassigned: Vec<usize>,
+}
+
+/// What a depot made, in the numbering of the whole problem: its routes
+/// (index into the fleet, customer ids) and the customers it left out.
+#[derive(Default)]
+pub(crate) struct Built {
+    pub(crate) routes: Vec<(usize, Vec<usize>)>,
+    pub(crate) unassigned: Vec<usize>,
+}
+
+/// Gives every customer to a depot and has `plan` make each depot's routes,
+/// offering what a depot could not serve to the customer's next-nearest depot
+/// (see [`construct_by_depot`], which is this with a construction heuristic as
+/// `plan`).
+///
+/// `fleet_depots[i]` is the depot the vehicle `i` starts from (an entry that
+/// is no depot is not used). `plan(depot, table, distances, fleet)` is given
+/// the depot's sub-problem -- the table of the depot (entry 0) and its
+/// customers, their distances, and `fleet`, the indices of the vehicles of
+/// the depot -- and answers in the sub-problem's numbering, naming a vehicle
+/// by its position in `fleet`.
+///
+/// Returns, for each depot, what it made, in the numbering of the whole
+/// problem, and the customers no depot has a vehicle for.
+pub(crate) fn by_depot<E>(
+    customers: &[Customer],
+    distances: &DistanceMatrix,
+    fleet_depots: &[usize],
+    mut plan: impl FnMut(usize, &[Customer], &DistanceMatrix, &[usize]) -> Result<Share, E>,
+) -> Result<(Vec<Built>, Vec<usize>), E> {
+    let depots = num_depots(customers);
+    let n = customers.len();
+
+    // The vehicles of each depot, as indices into the fleet.
+    let mut fleet: Vec<Vec<usize>> = vec![Vec::new(); depots];
+    for (i, &d) in fleet_depots.iter().enumerate() {
+        if d < depots {
+            fleet[d].push(i);
+        }
+    }
+
+    // The depots each customer may go to, nearest first.
+    let mut candidates: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (c, list) in candidates.iter_mut().enumerate().skip(depots) {
+        *list = (0..depots).filter(|&d| !fleet[d].is_empty()).collect();
+        list.sort_by(|&a, &b| {
+            distances
+                .get(a, c)
+                .total_cmp(&distances.get(b, c))
+                .then(a.cmp(&b))
+        });
+    }
+    let mut attempt = vec![0usize; n];
+    let mut built: Vec<Built> = (0..depots).map(|_| Built::default()).collect();
+    let mut dirty = vec![true; depots];
+
+    loop {
+        for d in 0..depots {
+            if !std::mem::take(&mut dirty[d]) {
+                continue;
+            }
+            let members: Vec<usize> = (depots..n)
+                .filter(|&c| candidates[c].get(attempt[c]) == Some(&d))
+                .collect();
+            built[d] = if members.is_empty() {
+                Built::default()
+            } else {
+                let mut rows = Vec::with_capacity(members.len() + 1);
+                rows.push(d);
+                rows.extend_from_slice(&members);
+                let table: Vec<Customer> = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &r)| customers[r].placed(k, k == 0))
+                    .collect();
+                let share = plan(d, &table, &distances.restricted(&rows), &fleet[d])?;
+                Built {
+                    routes: share
+                        .routes
+                        .into_iter()
+                        .map(|(k, ids)| (fleet[d][k], ids.into_iter().map(|id| rows[id]).collect()))
+                        .collect(),
+                    unassigned: share.unassigned.into_iter().map(|id| rows[id]).collect(),
+                }
+            };
+        }
+        // Offer what a depot could not serve to the customer's next depot.
+        let mut moved = false;
+        for d in 0..depots {
+            for k in 0..built[d].unassigned.len() {
+                let c = built[d].unassigned[k];
+                if attempt[c] + 1 < candidates[c].len() {
+                    attempt[c] += 1;
+                    dirty[d] = true;
+                    dirty[candidates[c][attempt[c]]] = true;
+                    moved = true;
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    // Customers no depot has a vehicle for were never anyone's.
+    let nobody: Vec<usize> = (depots..n).filter(|&c| candidates[c].is_empty()).collect();
+    Ok((built, nobody))
 }
 
 /// Builds a plan for a problem with several depots by running `construct` --
@@ -73,68 +180,36 @@ pub fn construct_by_depot<F>(
 where
     F: Fn(&[Customer], &DistanceMatrix, &[Vehicle]) -> Solution,
 {
-    let depots = num_depots(customers);
-    if depots == 1 {
+    if num_depots(customers) == 1 {
         return construct(customers, distances, vehicles);
     }
-    let n = customers.len();
-
-    // The vehicles of each depot, as indices into `vehicles`.
-    let mut fleet: Vec<Vec<usize>> = vec![Vec::new(); depots];
-    for (i, v) in vehicles.iter().enumerate() {
-        if v.depot_id() < depots {
-            fleet[v.depot_id()].push(i);
-        }
-    }
-
-    // The depots each customer may go to, nearest first.
-    let mut candidates: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (c, list) in candidates.iter_mut().enumerate().skip(depots) {
-        *list = (0..depots).filter(|&d| !fleet[d].is_empty()).collect();
-        list.sort_by(|&a, &b| {
-            distances
-                .get(a, c)
-                .total_cmp(&distances.get(b, c))
-                .then(a.cmp(&b))
-        });
-    }
-    let mut attempt = vec![0usize; n];
-    let mut built: Vec<Built> = (0..depots).map(|_| Built::default()).collect();
-    let mut dirty = vec![true; depots];
-
-    loop {
-        for d in 0..depots {
-            if !std::mem::take(&mut dirty[d]) {
-                continue;
-            }
-            let members: Vec<usize> = (depots..n)
-                .filter(|&c| candidates[c].get(attempt[c]) == Some(&d))
+    let fleet_depots: Vec<usize> = vehicles.iter().map(Vehicle::depot_id).collect();
+    let planned = by_depot(
+        customers,
+        distances,
+        &fleet_depots,
+        |_, table, sub_distances, fleet| -> Result<Share, std::convert::Infallible> {
+            // The depot's vehicles as its own table sees them: its depot is entry 0.
+            let sub_vehicles: Vec<Vehicle> = fleet
+                .iter()
+                .enumerate()
+                .map(|(k, &i)| vehicles[i].placed(k, 0))
                 .collect();
-            built[d] = if members.is_empty() {
-                Built::default()
-            } else {
-                build_depot(
-                    d, &members, &fleet[d], customers, distances, vehicles, &construct,
-                )
-            };
-        }
-        // Offer what a depot could not serve to the customer's next depot.
-        let mut moved = false;
-        for d in 0..depots {
-            for k in 0..built[d].unassigned.len() {
-                let c = built[d].unassigned[k];
-                if attempt[c] + 1 < candidates[c].len() {
-                    attempt[c] += 1;
-                    dirty[d] = true;
-                    dirty[candidates[c][attempt[c]]] = true;
-                    moved = true;
-                }
-            }
-        }
-        if !moved {
-            break;
-        }
-    }
+            let plan = construct(table, sub_distances, &sub_vehicles);
+            Ok(Share {
+                routes: plan
+                    .routes()
+                    .iter()
+                    .map(|r| (r.vehicle_id(), r.customer_ids()))
+                    .collect(),
+                unassigned: plan.unassigned().to_vec(),
+            })
+        },
+    );
+    let (built, nobody) = match planned {
+        Ok(done) => done,
+        Err(never) => match never {},
+    };
 
     let mut plan = Solution::new();
     for b in &built {
@@ -148,56 +223,13 @@ where
         .iter()
         .flat_map(|b| b.unassigned.iter().copied())
         .collect();
-    // Customers no depot has a vehicle for were never anyone's.
-    left.extend((depots..n).filter(|&c| candidates[c].is_empty()));
+    left.extend(nobody);
     left.sort_unstable();
     for c in left {
         plan.add_unassigned(c);
     }
     plan.price(|r| fleet_vehicle(vehicles, r));
     plan
-}
-
-/// One depot's construction, on the table of the depot and `members`.
-fn build_depot<F>(
-    depot: usize,
-    members: &[usize],
-    fleet: &[usize],
-    customers: &[Customer],
-    distances: &DistanceMatrix,
-    vehicles: &[Vehicle],
-    construct: &F,
-) -> Built
-where
-    F: Fn(&[Customer], &DistanceMatrix, &[Vehicle]) -> Solution,
-{
-    let mut rows = Vec::with_capacity(members.len() + 1);
-    rows.push(depot);
-    rows.extend_from_slice(members);
-    let table: Vec<Customer> = rows
-        .iter()
-        .enumerate()
-        .map(|(k, &r)| customers[r].placed(k, k == 0))
-        .collect();
-    let sub_vehicles: Vec<Vehicle> = fleet
-        .iter()
-        .enumerate()
-        .map(|(k, &i)| vehicles[i].placed(k, 0))
-        .collect();
-    let plan = construct(&table, &distances.restricted(&rows), &sub_vehicles);
-    Built {
-        routes: plan
-            .routes()
-            .iter()
-            .map(|r| {
-                (
-                    fleet[r.vehicle_id()],
-                    r.customer_ids().into_iter().map(|id| rows[id]).collect(),
-                )
-            })
-            .collect(),
-        unassigned: plan.unassigned().iter().map(|&id| rows[id]).collect(),
-    }
 }
 
 #[cfg(test)]

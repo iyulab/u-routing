@@ -21,6 +21,8 @@ mod sweep;
 
 pub use clarke_wright::clarke_wright_savings;
 pub use multi_depot::construct_by_depot;
+#[cfg(any(feature = "wasm", feature = "ffi"))]
+pub(crate) use multi_depot::{by_depot, Share};
 pub(crate) use nearest_neighbor::fleet_vehicle;
 pub use nearest_neighbor::nearest_neighbor;
 pub use nn_tw::nearest_neighbor_tw;

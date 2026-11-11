@@ -345,6 +345,15 @@
             "null"
           ]
         },
+        "depot": {
+          "default": null,
+          "description": "The depot this vehicle starts from and returns to: its index in `depots`\n(a whole number from 0). Absent or `null`: the first.",
+          "format": "int128",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "fixed_cost": {
           "default": 0.0,
           "description": "Cost of using this vehicle for a route, whatever its length (`>= 0`,\ndefault 0). Every method minimizes the plan's `total_cost`, so a fixed\ncost trades distance for fewer routes.",

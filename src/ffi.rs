@@ -162,7 +162,7 @@ pub unsafe extern "C" fn urouting_solve_vrp(
         let start = Instant::now();
         match service::solve(
             &service::ProblemInput {
-                depot: (input.depot_x, input.depot_y),
+                depots: &[(input.depot_x, input.depot_y)],
                 customers: &input.customers,
                 vehicles: &input.vehicles,
                 distances: input.distances.as_deref(),
@@ -207,7 +207,7 @@ pub unsafe extern "C" fn urouting_check_solution(
         let config = problem.config.unwrap_or_default();
         match service::check(
             &service::ProblemInput {
-                depot: (problem.depot_x, problem.depot_y),
+                depots: &[(problem.depot_x, problem.depot_y)],
                 customers: &problem.customers,
                 vehicles: &problem.vehicles,
                 distances: problem.distances.as_deref(),

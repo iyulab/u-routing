@@ -54,6 +54,7 @@
                   "capacity": {},
                   "cost_per_distance": {},
                   "count": {},
+                  "depot": {},
                   "fixed_cost": {},
                   "max_distance": {},
                   "max_duration": {}
@@ -133,6 +134,7 @@
               "capacity": {},
               "cost_per_distance": {},
               "count": {},
+              "depot": {},
               "fixed_cost": {},
               "max_distance": {},
               "max_duration": {}
