@@ -51,17 +51,24 @@ if (solution.Unassigned.Count > 0)
     Console.WriteLine($"not served: {string.Join(", ", solution.Unassigned)}");
 ```
 
-`VrpSolution` carries `Routes` (customer ids per route, the depot implied at both ends),
+`VrpSolution` carries `Routes` (customer ids per route, the route's depot — its vehicle's — implied at both ends),
 `TotalDistance`, `NumVehicles`, `MethodUsed`, `ComputationTimeMs` and `Unassigned` — the
 customers no route serves within capacities, time windows, each vehicle's `MaxDistance` /
 `MaxDuration` and `VrpConfig.MaxVehicles`.
 
 Lengths are the Euclidean distance between the coordinates unless `VrpRequest.Distances` gives
-them: one row per point, the depot first and then `Customers` in order — a road network's
+them: one row per point, the depots first and then `Customers` in order — a road network's
 distances, for instance. It replaces the coordinates for every length and travel time, and may differ
 by direction (a one-way street). `VrpRequest.Durations`, laid out the same way, gives travel
 times of their own: time windows and `MaxDuration` are kept on it, lengths and costs stay the
 distances.
+
+Several depots: `VrpRequest.Depots` lists them and `Vehicle.Depot` names the one a vehicle starts from
+(an index, the first by default; `RoutingException` with `parameter_out_of_range` and `Parameter == "depot"`
+if it is none). A route's depot is its vehicle's: `Routes[i]` is driven by `Vehicles[RouteVehicles[i]]`.
+Each depot is planned alone and customers then change depots where that lowers the cost;
+`VrpConfig.MaxVehicles` and `VrpConfig.Balance` span every route and are refused with several
+depots (`invalid_option`).
 
 Each method reads only some `VrpConfig` settings — the GA ones by `Genetic`,
 `MaxIterations` by `Alns`, `Seed` and `TimeLimitMs` by both, `MaxVehicles` and `Balance` by all — and a setting the
