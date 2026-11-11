@@ -415,7 +415,7 @@ a vehicle starts from, and returns to, the one its `depot` names -- an index int
 method plans each depot alone -- each customer goes to the nearest depot that has a vehicle, and
 what that depot cannot take (a load no vehicle of it carries, a window it cannot reach in time) is
 offered to the customer's next-nearest -- and the plans are then improved by moving customers
-between the routes of different depots (relocate and swap, each route priced and allowed by its own
+between the routes of different depots (relocate, swap and tail exchange, each route priced and allowed by its own
 vehicle). A kind's `count` is its number of vehicles at its depot. Left out, `vehicles` is one
 kind of unlimited capacity and number at every depot. `distances` and `durations` give a row and a
 column for each depot first, then each customer. `config.max_vehicles` and `config.balance` span

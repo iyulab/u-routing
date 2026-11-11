@@ -46,11 +46,19 @@ struct Instance {
 fn parse(name: &str, text: &str) -> Option<Instance> {
     let rows: Vec<Vec<f64>> = text
         .lines()
-        .map(|l| l.split_whitespace().filter_map(|t| t.parse().ok()).collect())
+        .map(|l| {
+            l.split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect()
+        })
         .filter(|r: &Vec<f64>| !r.is_empty())
         .collect();
     let head = rows.first()?;
-    let (per_depot, n, t) = (*head.get(1)? as usize, *head.get(2)? as usize, *head.get(3)? as usize);
+    let (per_depot, n, t) = (
+        *head.get(1)? as usize,
+        *head.get(2)? as usize,
+        *head.get(3)? as usize,
+    );
     let limits: Vec<(f64, f64)> = rows
         .get(1..=t)?
         .iter()
@@ -148,7 +156,8 @@ fn main() {
             .iter()
             .enumerate()
             .map(|(depot, &(duration, capacity))| {
-                let mut kind = json!({ "capacity": capacity, "count": inst.per_depot, "depot": depot });
+                let mut kind =
+                    json!({ "capacity": capacity, "count": inst.per_depot, "depot": depot });
                 if duration > 0.0 {
                     kind["max_duration"] = json!(duration);
                 }
@@ -180,7 +189,10 @@ fn main() {
             let (status, solution) = call(urouting_solve_vrp, &request);
             let ms = started.elapsed().as_millis();
             if status != 0 {
-                println!("{},{method},refused,,,,{ms},,{}", inst.name, solution["code"]);
+                println!(
+                    "{},{method},refused,,,,{ms},,{}",
+                    inst.name, solution["code"]
+                );
                 continue;
             }
             let (_, check) = call(

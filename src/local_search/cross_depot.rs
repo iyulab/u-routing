@@ -2,10 +2,15 @@
 //!
 //! # Algorithm
 //!
-//! Best improvement over two moves between every pair of routes whose vehicles
+//! Best improvement over three moves between every pair of routes whose vehicles
 //! start from different depots: relocate (a customer moves to its best position
-//! in the other route) and swap (two customers change routes, each into the
-//! other's place). A move counts when both routes it makes are allowed by
+//! in the other route), swap (two customers change routes, each into the
+//! other's place) and tail exchange, 2-opt* (the routes are cut after a
+//! customer each and swap what follows -- so a whole stretch of customers
+//! changes depots at once, which one relocation or swap at a time cannot do
+//! when capacities are tight or a vehicle's fixed cost keeps a route open; a
+//! cut at the end of one route and the start of the other moves a whole route
+//! into the other). A move counts when both routes it makes are allowed by
 //! their own vehicle -- capacity, time windows, limits, break -- and the two
 //! routes cost less than before, a route priced with its own vehicle (fixed
 //! cost + cost per distance x distance, lateness priced as distance), so that
@@ -21,7 +26,8 @@
 //! # Complexity
 //!
 //! O(R² L³) per scan and O(R² L³) per move taken for R routes of up to L
-//! customers (a route is evaluated in O(L)), and each move lowers the cost.
+//! customers (a route is evaluated in O(L); tail exchange tries O(L²) cuts per
+//! pair), and each move lowers the cost.
 
 use super::gain_floor;
 use crate::constructive::fleet_vehicle;
@@ -53,6 +59,14 @@ enum Move {
         b: usize,
         pb: usize,
     },
+    /// `a` keeps its first `i` customers and takes the customers of `b` from `j` on, and `b`
+    /// keeps its first `j` and takes the customers of `a` from `i` on.
+    Tails {
+        a: usize,
+        i: usize,
+        b: usize,
+        j: usize,
+    },
 }
 
 /// What a route of `ids` costs with `vehicle`, or `None` when the vehicle
@@ -74,6 +88,18 @@ fn priced(
         &RouteLimits::of(vehicle),
     )
     .map(|e| vehicle.route_cost(e.priced_distance()))
+}
+
+/// The load of the first `k` customers of `route`, for `k` from 0 to its length.
+fn prefix_loads(route: &[usize], customers: &[Customer]) -> Vec<i32> {
+    let mut loads = Vec::with_capacity(route.len() + 1);
+    let mut sum = 0;
+    loads.push(0);
+    for &c in route {
+        sum += customers[c].demand();
+        loads.push(sum);
+    }
+    loads
 }
 
 /// Moves customers between routes that start from different depots while that
@@ -157,6 +183,13 @@ pub fn cross_depot_improve(
                 let (c1, c2) = (routes[a].ids[pa], routes[b].ids[pb]);
                 routes[a].ids[pa] = c2;
                 routes[b].ids[pb] = c1;
+                (a, b)
+            }
+            Move::Tails { a, i, b, j } => {
+                let tail_a = routes[a].ids.split_off(i);
+                let tail_b = routes[b].ids.split_off(j);
+                routes[a].ids.extend(tail_b);
+                routes[b].ids.extend(tail_a);
                 (a, b)
             }
         };
@@ -261,6 +294,40 @@ fn best_move(
                         offer(
                             cost_a + cost_b - before,
                             Move::Swap { a, pa, b, pb },
+                            cost_a,
+                            cost_b,
+                        );
+                    }
+                }
+                // Tail exchange: cut after `i` customers of `a` and after `j` of `b`.
+                let prefix_a = prefix_loads(&ra.ids, customers);
+                let prefix_b = prefix_loads(&rb.ids, customers);
+                for (i, &head_a) in prefix_a.iter().enumerate() {
+                    for (j, &head_b) in prefix_b.iter().enumerate() {
+                        // Nothing moves when both cut at the end.
+                        if i == ra.ids.len() && j == rb.ids.len() {
+                            continue;
+                        }
+                        let load_a = head_a + (rb.load - head_b);
+                        let load_b = head_b + (ra.load - head_a);
+                        if load_a > ra.vehicle.capacity() || load_b > rb.vehicle.capacity() {
+                            continue;
+                        }
+                        buf_a.clear();
+                        buf_a.extend_from_slice(&ra.ids[..i]);
+                        buf_a.extend_from_slice(&rb.ids[j..]);
+                        buf_b.clear();
+                        buf_b.extend_from_slice(&rb.ids[..j]);
+                        buf_b.extend_from_slice(&ra.ids[i..]);
+                        let (Some(cost_a), Some(cost_b)) = (
+                            priced(buf_a, ra.vehicle, distances, customers),
+                            priced(buf_b, rb.vehicle, distances, customers),
+                        ) else {
+                            continue;
+                        };
+                        offer(
+                            cost_a + cost_b - before,
+                            Move::Tails { a, i, b, j },
                             cost_a,
                             cost_b,
                         );
@@ -430,6 +497,83 @@ mod tests {
             routes_of(&cross_depot_improve(&before, &c, &dm, &free)),
             routes_of(&before)
         );
+    }
+
+    #[test]
+    fn a_whole_route_moves_when_no_single_customer_gains_by_moving() {
+        // Customers at 48, 52 and 53, between the depots at 0 and 100. The vehicle at depot 1
+        // costs 100 to use and drives 52 and 53; depot 0's drives 48. Moving one of the two
+        // customers to depot 0 only adds distance (the route from depot 1 stays open and keeps its
+        // 100), but handing depot 0's vehicle both -- cutting the routes at the end of the one and
+        // the start of the other -- gains 292 - 106 = 186, more than the 88 of the best single
+        // relocation (48 into depot 1's route), so the whole route moves.
+        let (c, dm) = line(&[(48.0, 1), (52.0, 1), (53.0, 1)]);
+        let vehicles = [
+            Vehicle::new(0, 10),
+            Vehicle::new(1, 10).with_depot(1).with_fixed_cost(100.0),
+        ];
+        let before = plan(&c, &dm, &vehicles, &[(0, &[2]), (1, &[3, 4])]);
+        assert!((before.total_cost() - 292.0).abs() < 1e-9);
+        let after = cross_depot_improve(&before, &c, &dm, &vehicles);
+        assert_eq!(routes_of(&after), [(0, vec![2, 3, 4])], "{after:?}");
+        assert!((after.total_cost() - 106.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_stretch_that_overloads_a_vehicle_by_one_is_not_moved() {
+        // The merge of the previous test with capacities of 2, where the merged route would carry
+        // 3 and no single customer fits the other route: into the vehicle from depot 0
+        // (customer 2 on its route, 3 and 4 coming)...
+        let (c, dm) = line(&[(48.0, 1), (52.0, 1), (53.0, 1)]);
+        let vehicles = [
+            Vehicle::new(0, 2),
+            Vehicle::new(1, 2).with_depot(1).with_fixed_cost(100.0),
+        ];
+        let before = plan(&c, &dm, &vehicles, &[(0, &[2]), (1, &[3, 4])]);
+        let after = cross_depot_improve(&before, &c, &dm, &vehicles);
+        assert_eq!(routes_of(&after), routes_of(&before), "{after:?}");
+        // ... and into the vehicle from depot 1 (3 and 4 on its route, 2 coming), whose
+        // depot-0 counterpart now costs 100 to use.
+        let vehicles = [
+            Vehicle::new(0, 2).with_fixed_cost(100.0),
+            Vehicle::new(1, 2).with_depot(1),
+        ];
+        let before = plan(&c, &dm, &vehicles, &[(0, &[2]), (1, &[3, 4])]);
+        let after = cross_depot_improve(&before, &c, &dm, &vehicles);
+        assert_eq!(routes_of(&after), routes_of(&before), "{after:?}");
+    }
+
+    #[test]
+    fn stretches_of_customers_change_depots_when_capacity_blocks_one_at_a_time() {
+        // Capacity 3 holds each route full. A holds [2, 3, 6] with 3 (x = 90) and 6 (x = 88)
+        // far from depot 0; B holds [5, 4, 7] with 4 (x = 20) and 7 (x = 22) far from depot 1.
+        // Cutting after the first customer of each gives [2, 4, 7] and [5, 3, 6].
+        let (c, dm) = line(&[
+            (10.0, 1),
+            (90.0, 1),
+            (20.0, 1),
+            (95.0, 1),
+            (88.0, 1),
+            (22.0, 1),
+        ]);
+        // ids: 2 -> 10, 3 -> 90, 4 -> 20, 5 -> 95, 6 -> 88, 7 -> 22
+        let vehicles = two_vehicles(3);
+        let before = plan(&c, &dm, &vehicles, &[(0, &[2, 3, 6]), (1, &[5, 4, 7])]);
+        let after = cross_depot_improve(&before, &c, &dm, &vehicles);
+        assert!(
+            after.total_cost() < before.total_cost() - 100.0,
+            "{after:?}"
+        );
+        // Every customer is in a route from the depot beside it.
+        for r in after.routes() {
+            let near_zero = r.vehicle_id() == 0;
+            assert!(
+                r.customer_ids()
+                    .iter()
+                    .all(|&id| (c[id].x() < 50.0) == near_zero),
+                "{after:?}"
+            );
+        }
     }
 
     #[test]

@@ -604,6 +604,26 @@ fn moves_between_depots_never_cost_and_leave_no_single_move_that_gains() {
                     }
                 }
                 if a < b {
+                    // Tail exchange: cut after `i` of the first and `j` of the second.
+                    for i in 0..=ia.len() {
+                        for j in 0..=ib.len() {
+                            if i == ia.len() && j == ib.len() {
+                                continue;
+                            }
+                            let x: Vec<usize> = ia[..i].iter().chain(&ib[j..]).copied().collect();
+                            let y: Vec<usize> = ib[..j].iter().chain(&ia[i..]).copied().collect();
+                            if let (Some(cost_a), Some(cost_b)) =
+                                (cost_of(*va, &x), cost_of(*vb, &y))
+                            {
+                                let delta = cost_a + cost_b - base[a] - base[b];
+                                assert!(
+                                    delta >= tolerance,
+                                    "case {case}: tails {a}|{i} {b}|{j} gains {delta}"
+                                );
+                                swaps_or_moves_left += 1;
+                            }
+                        }
+                    }
                     for pa in 0..ia.len() {
                         for pb in 0..ib.len() {
                             let (mut x, mut y) = (ia.clone(), ib.clone());
