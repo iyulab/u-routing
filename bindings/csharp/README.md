@@ -33,7 +33,7 @@ using URouting;
 
 using var routing = new RoutingClient();
 
-VrpSolution solution = routing.SolveVrp(new VrpRequest(DepotX: 0, DepotY: 0,
+VrpSolution solution = routing.SolveVrp(new VrpRequest(Depots: [new(0, 0)],
 [
     new Customer(1, 10, 5, Demand: 10),
     new Customer(2, -4, 8, Demand: 15),

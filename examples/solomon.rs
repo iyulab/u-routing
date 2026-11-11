@@ -157,7 +157,7 @@ fn main() {
                 json!({ "max_vehicles": inst.vehicles })
             };
             let request = json!({
-                "depot_x": inst.depot.0, "depot_y": inst.depot.1,
+                "depots": [{ "x": inst.depot.0, "y": inst.depot.1 }],
                 "customers": inst.customers, "vehicles": vehicles, "method": method,
                 "config": config,
             });

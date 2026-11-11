@@ -26,7 +26,7 @@ public class RoutingClientTests
     [Fact]
     public void A_plan_is_checked_and_the_check_carries_exactly_what_the_engine_sent()
     {
-        var request = new VrpRequest(0, 0, Customers) { Vehicles = [new(30), new(30)] };
+        var request = new VrpRequest([new(0, 0)], Customers) { Vehicles = [new(30), new(30)] };
         var solution = _client.SolveVrp(request);
         Assert.Equal(solution.Routes.Count, solution.RouteVehicles.Count);
         var clean = _client.CheckSolution(request, VrpPlan.Of(solution));
@@ -84,7 +84,7 @@ public class RoutingClientTests
     {
         string? raw = null;
         _client.ResponseObserver = body => raw = body;
-        var request = new VrpRequest(0, 0, Customers)
+        var request = new VrpRequest([new(0, 0)], Customers)
         {
             Vehicles = method == RoutingMethod.NearestNeighbor ? [new(30), new(30)] : [new(30)],
             Method = method,
@@ -116,7 +116,7 @@ public class RoutingClientTests
     [Fact]
     public void A_balanced_plan_checks_against_its_balance()
     {
-        var request = new VrpRequest(0, 0, Customers)
+        var request = new VrpRequest([new(0, 0)], Customers)
         {
             Vehicles = [new(30)],
             Method = RoutingMethod.Savings,
@@ -134,7 +134,7 @@ public class RoutingClientTests
     [Fact]
     public void A_time_limit_ends_a_search_and_says_so()
     {
-        var request = new VrpRequest(0, 0, Customers)
+        var request = new VrpRequest([new(0, 0)], Customers)
         {
             Vehicles = [new(30)],
             Method = RoutingMethod.Alns,
@@ -150,7 +150,7 @@ public class RoutingClientTests
     {
         // The far customer cannot be reached within the vehicle's distance limit.
         Customer[] customers = [new(1, 3, 4), new(2, 300, 400)];
-        var solution = _client.SolveVrp(new VrpRequest(0, 0, customers)
+        var solution = _client.SolveVrp(new VrpRequest([new(0, 0)], customers)
         {
             Vehicles = [new(MaxDistance: 50)],
             Method = RoutingMethod.Savings,
@@ -158,7 +158,7 @@ public class RoutingClientTests
         Assert.Equal([2L], solution.Unassigned);
 
         // A window that closes before the vehicle can arrive.
-        var late = _client.SolveVrp(new VrpRequest(0, 0, [new(1, 30, 40, TimeWindow: new(0, 10))]));
+        var late = _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 30, 40, TimeWindow: new(0, 10))]));
         Assert.Equal([1L], late.Unassigned);
     }
 
@@ -166,7 +166,7 @@ public class RoutingClientTests
     public void A_soft_window_is_served_late_and_the_lateness_is_priced_like_distance()
     {
         // 50 away and due at 10: late by 40 whatever is done, at 2 a unit of time.
-        var solution = _client.SolveVrp(new VrpRequest(0, 0,
+        var solution = _client.SolveVrp(new VrpRequest([new(0, 0)],
             [new(1, 30, 40, TimeWindow: new(0, 10), LatenessPenalty: 2)]));
         Assert.Empty(solution.Unassigned);
         var route = Assert.Single(solution.RouteSummaries);
@@ -181,7 +181,7 @@ public class RoutingClientTests
     public void A_lateness_penalty_below_zero_is_refused_at_its_customer()
     {
         var refusal = Assert.Throws<RoutingException>(() =>
-            _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1, TimeWindow: new(0, 10), LatenessPenalty: -1)])));
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1, TimeWindow: new(0, 10), LatenessPenalty: -1)])));
         Assert.Equal("parameter_out_of_range", refusal.ErrorCode);
         Assert.Equal("lateness_penalty", refusal.Parameter);
         Assert.Equal(0, refusal.Index);
@@ -190,7 +190,7 @@ public class RoutingClientTests
     [Fact]
     public void A_fixed_fleet_is_kept()
     {
-        var solution = _client.SolveVrp(new VrpRequest(0, 0, Customers)
+        var solution = _client.SolveVrp(new VrpRequest([new(0, 0)], Customers)
         {
             Vehicles = [new(20)],
             Method = RoutingMethod.Savings,
@@ -201,9 +201,47 @@ public class RoutingClientTests
     }
 
     [Fact]
+    public void A_request_with_two_depots_is_planned_from_each_vehicles_depot()
+    {
+        // Depots at 0 and 100 on a line, a customer by each: 10 and 90.
+        var solution = _client.SolveVrp(new VrpRequest([new(0, 0), new(100, 0)],
+            [new(1, 10, 0, Demand: 1), new(2, 90, 0, Demand: 1)])
+        {
+            Vehicles = [new(Capacity: 5), new(Capacity: 5, Depot: 1)],
+            Method = RoutingMethod.Savings,
+        });
+        Assert.Empty(solution.Unassigned);
+        Assert.Equal(2, solution.Routes.Count);
+        Assert.Equal(40.0, solution.TotalDistance, 9);
+        // Each route is driven by the vehicle at the depot beside its customer.
+        for (var r = 0; r < solution.Routes.Count; r++)
+            Assert.Equal(solution.Routes[r][0] == 1 ? 0 : 1, solution.RouteVehicles[r]);
+    }
+
+    [Fact]
+    public void A_fixed_fleet_with_several_depots_and_a_depot_that_is_none_are_refused_by_name()
+    {
+        var two = new List<Depot> { new(0, 0), new(100, 0) };
+        var x = Assert.Throws<RoutingException>(() => _client.SolveVrp(new VrpRequest(two, Customers)
+        {
+            Method = RoutingMethod.Savings,
+            Config = new VrpConfig { MaxVehicles = 2 },
+        }));
+        Assert.Equal("invalid_option", x.ErrorCode);
+        Assert.Equal("config.max_vehicles", x.Details!.Value.GetProperty("parameter").GetString());
+        var y = Assert.Throws<RoutingException>(() => _client.SolveVrp(new VrpRequest(two, Customers)
+        {
+            Vehicles = [new(Capacity: 5, Depot: 2)],
+        }));
+        Assert.Equal("parameter_out_of_range", y.ErrorCode);
+        Assert.Equal("depot", y.Parameter);
+        Assert.Equal(0, y.Index);
+    }
+
+    [Fact]
     public void A_setting_the_method_does_not_read_is_refused()
     {
-        var x = Assert.Throws<RoutingException>(() => _client.SolveVrp(new VrpRequest(0, 0, Customers)
+        var x = Assert.Throws<RoutingException>(() => _client.SolveVrp(new VrpRequest([new(0, 0)], Customers)
         {
             Method = RoutingMethod.NearestNeighbor,
             Config = new VrpConfig { PopulationSize = 10 },
@@ -217,14 +255,14 @@ public class RoutingClientTests
     public void A_non_finite_value_is_refused_where_it_sits()
     {
         var x = Assert.Throws<RoutingException>(() =>
-            _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1), new(2, double.NaN, 1)])));
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1), new(2, double.NaN, 1)])));
         Assert.Equal("value_not_finite", x.ErrorCode);
         Assert.Equal("customers[1].x", x.Details!.Value.GetProperty("parameter").GetString());
         Assert.Equal("customers[1].x", x.Parameter);
         Assert.Null(x.Index);
 
         var window = Assert.Throws<RoutingException>(() =>
-            _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1, TimeWindow: new(0, double.PositiveInfinity))])));
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1, TimeWindow: new(0, double.PositiveInfinity))])));
         Assert.Equal("customers[0].time_window", window.Details!.Value.GetProperty("parameter").GetString());
         Assert.Equal(1, window.Details!.Value.GetProperty("index").GetInt32());
         Assert.Equal(1, window.Index);
@@ -235,7 +273,7 @@ public class RoutingClientTests
     {
         // Two customers on the depot: by coordinates every length is 0, by the matrix the
         // round trip is 4 + 3 + 6.
-        var request = new VrpRequest(0, 0, [new(1, 0, 0, Demand: 1), new(2, 0, 0, Demand: 1)])
+        var request = new VrpRequest([new(0, 0)], [new(1, 0, 0, Demand: 1), new(2, 0, 0, Demand: 1)])
         {
             Distances = [[0, 4, 6], [4, 0, 3], [6, 3, 0]],
         };
@@ -263,7 +301,7 @@ public class RoutingClientTests
     public void The_engine_still_names_what_it_refuses()
     {
         var e = Assert.Throws<RoutingException>(() =>
-            _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1), new(1, 2, 2)])));
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1), new(1, 2, 2)])));
         Assert.Equal("duplicate_id", e.ErrorCode);
         Assert.Equal(1, e.Details!.Value.GetProperty("id").GetInt64());
     }

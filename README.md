@@ -233,7 +233,7 @@ const result = solve_vrp({
     { id: 2, x: 3.0, y: 4.0, demand: 15 },
   ],
   vehicles: [{ capacity: 100 }],
-  depot: { x: 0.0, y: 0.0 },
+  depots: [{ x: 0.0, y: 0.0 }],
   method: "nn"
 });
 ```
@@ -270,7 +270,7 @@ all of which keep time windows (see below).
     { "id": 1, "x": 1.0, "y": 2.0, "demand": 10, "service_time": 0.5, "time_window": [8.0, 12.0] }
   ],
   "vehicles": [{ "capacity": 100 }],
-  "depot": { "x": 0.0, "y": 0.0 },
+  "depots": [{ "x": 0.0, "y": 0.0 }],
   "method": "ga",
   "config": {
     "population_size": 50, "max_generations": 200,
@@ -281,8 +281,9 @@ all of which keep time windows (see below).
 
 **Distances: `distances`.** By default every length is the Euclidean distance between
 the points' `x`/`y`. A road network, rounded benchmark distances or any other metric
-goes in `distances`: one row per point, the depot first and then the customers in
-the order given (`distances[0][1]` is the depot to `customers[0]`), each row as long.
+goes in `distances`: one row per point, the depots first and then the customers in
+the order given (with one depot, `distances[0][1]` is the depot to `customers[0]`), each
+row as long.
 It replaces the coordinates for every length -- routes, `max_distance`, the travel
 time behind time windows and `max_duration`, the totals -- and `check_vrp_solution`
 reads it the same way. It need not be symmetric -- a one-way street makes the way
@@ -298,7 +299,7 @@ costs stay the distances -- a slow road is long in time and short in kilometres.
 ```javascript
 solve_vrp({
   customers: [{ id: 1, x: 0, y: 0, demand: 1 }, { id: 2, x: 0, y: 0, demand: 1 }],
-  depot: { x: 0, y: 0 },
+  depots: [{ x: 0, y: 0 }],
   distances: [[0, 4, 6], [4, 0, 3], [6, 3, 0]],
 });
 ```
@@ -347,7 +348,7 @@ for (let i = 1; i <= 6; i++) {
   customers.push({ id: i, x: Math.cos(a) * 10, y: Math.sin(a) * 10, demand: 10 });
 }
 const out = solve_vrp({
-  depot: { x: 0, y: 0 }, customers, method: "savings",
+  depots: [{ x: 0, y: 0 }], customers, method: "savings",
   vehicles: [{ capacity: 20, fixed_cost: 1, count: 2 }, { capacity: 60, fixed_cost: 30 }],
 });
 console.log(out.route_vehicles); // the kind of each route: 0 = small, 1 = big
@@ -366,7 +367,7 @@ leave a longer single route open. A large fixed cost approximates the
 its routes greedily and reports their cost.
 
 ```js
-solve_vrp({ depot: { x: 0, y: 0 }, customers,
+solve_vrp({ depots: [{ x: 0, y: 0 }], customers,
             vehicles: [{ capacity: 200, fixed_cost: 1000 }],
             method: "alns" });
 ```
@@ -382,7 +383,7 @@ reach within them comes back in `unassigned`. Left out (or `null`), there is no
 limit.
 
 ```js
-solve_vrp({ depot: { x: 0, y: 0 }, customers,
+solve_vrp({ depots: [{ x: 0, y: 0 }], customers,
             vehicles: [{ capacity: 100, max_distance: 120, max_duration: 480 }],
             method: "savings" });
 ```
@@ -400,9 +401,34 @@ cheapest, so kinds with different breaks are refused (`invalid_option`, `vehicle
 to finish the route earliest, and the lateness follows. Left out (or `null`), no break.
 
 ```js
-solve_vrp({ depot: { x: 0, y: 0 }, customers,
+solve_vrp({ depots: [{ x: 0, y: 0 }], customers,
             vehicles: [{ capacity: 100, max_duration: 600, break: { earliest: 240, latest: 300, duration: 30 } }],
             method: "savings" });
+```
+
+**Several depots: `depots`, `vehicles[].depot`.** `depots` lists the depots (at least one) and
+a vehicle starts from, and returns to, the one its `depot` names -- an index into `depots`
+(default 0; out of range is `parameter_out_of_range` with `parameter: "depot"` and the vehicle's
+`index`). A plan's `route_vehicles` names each route's vehicle, so a route's depot is
+`vehicles[route_vehicles[i]].depot`; the route's own figures (`route_summaries`, `total_distance`,
+`total_cost`, the checks of `check_vrp_solution`) are measured from it. With several depots every
+method plans each depot alone -- each customer goes to the nearest depot that has a vehicle, and
+what that depot cannot take (a load no vehicle of it carries, a window it cannot reach in time) is
+offered to the customer's next-nearest -- and the plans are then improved by moving customers
+between the routes of different depots (relocate and swap, each route priced and allowed by its own
+vehicle). A kind's `count` is its number of vehicles at its depot. Left out, `vehicles` is one
+kind of unlimited capacity and number at every depot. `distances` and `durations` give a row and a
+column for each depot first, then each customer. `config.max_vehicles` and `config.balance` span
+every route of the plan and are refused with several depots (`invalid_option`); with one depot nothing
+changes.
+
+```js
+solve_vrp({
+  depots: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+  customers,
+  vehicles: [{ capacity: 30 }, { capacity: 30, depot: 1 }],
+  method: "alns",
+});
 ```
 
 **How many routes a plan may use: `config.max_vehicles`.** The length of
@@ -428,7 +454,7 @@ const customers = [1, 2, 3, 4, 5, 6].map((id) => {
   const a = (2 * Math.PI * id) / 6;
   return { id, x: 10 * Math.cos(a), y: 10 * Math.sin(a), demand: 10 };
 });
-const out = solve_vrp({ depot: { x: 0, y: 0 }, customers, vehicles: [{ capacity: 20 }],
+const out = solve_vrp({ depots: [{ x: 0, y: 0 }], customers, vehicles: [{ capacity: 20 }],
                         method: "ga", config: { max_vehicles: 2, seed: 1 } });
 console.log(out.num_vehicles, out.unassigned); // 2, the two customers no truck can take
 if (out.num_vehicles > 2 || out.unassigned.length !== 2) throw new Error("fleet not kept");
@@ -459,7 +485,7 @@ import { solve_vrp } from '@iyulab/u-routing';
 const customers = Array.from({ length: 24 }, (_, i) => ({
   id: i + 1, x: (i * 37) % 100, y: (i * 61) % 100, demand: 1 + (i % 4),
 }));
-const problem = { depot: { x: 50, y: 50 }, customers, vehicles: [{ capacity: 15 }], method: "savings" };
+const problem = { depots: [{ x: 50, y: 50 }], customers, vehicles: [{ capacity: 15 }], method: "savings" };
 const cheapest = solve_vrp(problem);
 const longest = Math.max(...cheapest.route_summaries.map((r) => r.distance));
 const even = solve_vrp({ ...problem, config: { balance: { quantity: "distance", weight: 20 } } });
@@ -526,7 +552,7 @@ try {
       { id: 1, x: 1.0, y: 0.0 },
       { id: 1, x: 2.0, y: 0.0 },
     ],
-    depot: { x: 0.0, y: 0.0 },
+    depots: [{ x: 0.0, y: 0.0 }],
   });
 } catch (err) {
   console.log(err.code, err.id, err.first, err.second); // duplicate_id 1 0 1
@@ -618,7 +644,7 @@ const problem = {
     { id: 2, x: 0.0, y: 1.0, demand: 10 },
   ],
   vehicles: [{ capacity: 15 }],
-  depot: { x: 0.0, y: 0.0 },
+  depots: [{ x: 0.0, y: 0.0 }],
   method: "savings",
 };
 const { routes, route_vehicles, unassigned, total_distance } = solve_vrp(problem);

@@ -499,6 +499,21 @@ impl InputCustomer {
     }
 }
 
+/// A depot: a point routes start from and return to.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InputDepot {
+    x: f64,
+    y: f64,
+}
+
+/// The depots as the points the solver reads.
+pub(crate) fn depot_points(depots: &[InputDepot]) -> Vec<(f64, f64)> {
+    depots.iter().map(|d| (d.x, d.y)).collect()
+}
+
 #[derive(Deserialize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]

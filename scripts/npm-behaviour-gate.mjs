@@ -39,7 +39,7 @@ for (let i = 1; i <= 6; i++) {
 }
 const two = [{ capacity: 20 }, { capacity: 20 }]
 for (const method of ['nn', 'savings', 'ga', 'alns']) {
-  const out = m.solve_vrp({ depot, customers, vehicles: two, method,
+  const out = m.solve_vrp({ depots: [depot], customers, vehicles: two, method,
                             config: Object.assign({}, base(method), { max_vehicles: 2 }) })
   ok(out.num_vehicles <= 2, method + ': ' + out.num_vehicles + ' routes')
   const served = out.routes.reduce((n, r) => n + r.length, 0)
@@ -49,14 +49,14 @@ for (const method of ['nn', 'savings', 'ga', 'alns']) {
 // Without the limit the same request needs a third route, so the
 // check above measures the limit.
 for (const method of ['savings', 'ga', 'alns']) {
-  const out = m.solve_vrp({ depot, customers, vehicles: two, method, config: base(method) })
+  const out = m.solve_vrp({ depots: [depot], customers, vehicles: two, method, config: base(method) })
   ok(out.num_vehicles === 3, method + ': unlimited gave ' + out.num_vehicles)
 }
 
 // The length of vehicles is not a limit: a single entry states one
 // capacity, and savings/ga/alns still open as many routes as needed.
 for (const method of ['savings', 'ga', 'alns']) {
-  const out = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20 }],
+  const out = m.solve_vrp({ depots: [depot], customers, vehicles: [{ capacity: 20 }],
                             method, config: base(method) })
   ok(out.num_vehicles > 1, method + ': a single capacity entry became a fleet cap')
   ok(out.unassigned.length === 0, method + ': unexpected unassigned ' + JSON.stringify(out.unassigned))
@@ -64,7 +64,7 @@ for (const method of ['savings', 'ga', 'alns']) {
 // A setting the method does not read is refused, not ignored.
 let refused = null
 try {
-  m.solve_vrp({ depot, customers, vehicles: two, method: 'nn', config: { population_size: 10 } })
+  m.solve_vrp({ depots: [depot], customers, vehicles: two, method: 'nn', config: { population_size: 10 } })
 } catch (e) { refused = e }
 ok(refused && refused.code === 'invalid_option' && refused.parameter === 'config.population_size',
    'nn with population_size: ' + (refused ? refused.code + ' ' + refused.parameter : 'accepted'))
@@ -77,7 +77,7 @@ for (let i = 1; i <= 60; i++) {
 }
 for (const [method, budget] of [['ga', { max_generations: 1000000 }], ['alns', { max_iterations: 100000000 }]]) {
   const started = Date.now()
-  const out = m.solve_vrp({ depot, customers: sixty, vehicles: [{ capacity: 20 }], method,
+  const out = m.solve_vrp({ depots: [depot], customers: sixty, vehicles: [{ capacity: 20 }], method,
                             config: Object.assign({ seed: 1, time_limit_ms: 1 }, budget) })
   ok(out.stop_reason === 'time_limit', method + ': stop_reason ' + out.stop_reason)
   ok(Date.now() - started < 5000, method + ': ran ' + (Date.now() - started) + ' ms past a 1 ms limit')
@@ -86,13 +86,13 @@ for (const [method, budget] of [['ga', { max_generations: 1000000 }], ['alns', {
 // on a kind that carries it, and `count` bounds the vehicles of a kind.
 const kinds = [{ capacity: 20, fixed_cost: 1 }, { capacity: 60, fixed_cost: 30 }]
 for (const method of ['nn', 'savings', 'ga', 'alns']) {
-  const out = m.solve_vrp({ depot, customers, vehicles: kinds, method, config: base(method) })
+  const out = m.solve_vrp({ depots: [depot], customers, vehicles: kinds, method, config: base(method) })
   ok(out.unassigned.length === 0, method + ': mixed fleet left out ' + JSON.stringify(out.unassigned))
   out.routes.forEach((route, i) => {
     ok(out.route_summaries[i].load <= kinds[out.route_vehicles[i]].capacity,
       method + ': route ' + i + ' of load ' + out.route_summaries[i].load + ' on kind ' + out.route_vehicles[i])
   })
-  const counted = m.solve_vrp({ depot, customers, vehicles: [{ capacity: 20, count: 1 }], method,
+  const counted = m.solve_vrp({ depots: [depot], customers, vehicles: [{ capacity: 20, count: 1 }], method,
                                 config: base(method) })
   ok(counted.routes.length === 1 && counted.unassigned.length === 4,
     method + ': one vehicle of 20 gave ' + counted.routes.length + ' routes, left out ' + counted.unassigned.length)

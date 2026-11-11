@@ -36,8 +36,14 @@
                 }
               }
             },
-            "depot_x": {},
-            "depot_y": {},
+            "depots": {
+              "items": {
+                "properties": {
+                  "x": {},
+                  "y": {}
+                }
+              }
+            },
             "distances": {},
             "durations": {},
             "method": {},
@@ -109,8 +115,14 @@
             }
           }
         },
-        "depot_x": {},
-        "depot_y": {},
+        "depots": {
+          "items": {
+            "properties": {
+              "x": {},
+              "y": {}
+            }
+          }
+        },
         "distances": {},
         "durations": {},
         "method": {

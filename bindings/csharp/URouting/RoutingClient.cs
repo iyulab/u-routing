@@ -175,6 +175,7 @@ public sealed class RoutingClient : IDisposable
             Put(vehicle, "fixed_cost", v.FixedCost, $"{at}.fixed_cost");
             Put(vehicle, "cost_per_distance", v.CostPerDistance, $"{at}.cost_per_distance");
             Put(vehicle, "count", v.Count);
+            Put(vehicle, "depot", v.Depot);
             if (v.Break is { } rest)
                 vehicle["break"] = new JsonObject
                 {
@@ -185,10 +186,16 @@ public sealed class RoutingClient : IDisposable
             vehicles.Add((JsonNode)vehicle);
         }
 
+        var depots = new JsonArray();
+        for (var d = 0; d < request.Depots.Count; d++)
+            depots.Add((JsonNode)new JsonObject
+            {
+                ["x"] = Num($"depots[{d}].x", request.Depots[d].X),
+                ["y"] = Num($"depots[{d}].y", request.Depots[d].Y),
+            });
         var body = new JsonObject
         {
-            ["depot_x"] = Num("depot_x", request.DepotX),
-            ["depot_y"] = Num("depot_y", request.DepotY),
+            ["depots"] = depots,
             ["customers"] = customers,
             ["vehicles"] = vehicles,
             ["method"] = JsonSerializer.SerializeToNode(request.Method, RoutingJson.Default.RoutingMethod),

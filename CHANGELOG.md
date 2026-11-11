@@ -39,9 +39,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   is answered exactly as the heuristic alone answers it), and a customer a depot cannot serve is offered to its next-nearest depot. `local_search::cross_depot_improve(solution, customers, distances, vehicles)` then lets
   customers change depots: best-improvement relocate and swap between the routes of different depots, each route judged by its own
   vehicle (capacity, windows, limits, break) and priced with it (a route a move empties gives back its fixed cost).
+  Requests carry several depots: `depots` (a list of points) and `vehicles[].depot` (an index into it, default 0) in the
+  WebAssembly, C ABI and .NET requests (`VrpRequest.Depots`, `Vehicle.Depot`). Every method plans each depot alone -- a customer goes
+  to the nearest depot that has a vehicle, and what that depot cannot take is offered to its next-nearest -- and the plans are then
+  improved by moving customers between the routes of different depots; a route's depot is its vehicle's, and its figures and
+  the plan check are measured from it. `config.max_vehicles` and `config.balance` span every route and are refused with several
+  depots (`invalid_option`). `vehicles` left out is one unlimited kind at every depot.
 
 ### Changed
 
+- **Breaking** (wire and .NET): the request names its depots as a list. The WebAssembly request's `depot: { x, y }` is `depots: [{ x, y }]`, the C ABI request's `depot_x` and `depot_y` are `depots: [{ "x": …, "y": … }]`, and `VrpRequest(DepotX, DepotY, Customers)` is `VrpRequest(Depots, Customers)` (`new VrpRequest([new(0, 0)], customers)`); a request with one depot answers as before. `distances` and `durations` have a row and a column for each depot first.
 - **Breaking** (Rust API): `ViolationType` gains the variants `LatenessMismatch` and `BreakNotPlaceable`; an exhaustive `match` over it needs an arm. `RouteLimits` gains the field `rest`, `RouteEval` the field `rest` and `Vehicle` the field of `with_break` (a struct literal of the first two needs it).
 - **Breaking** (Rust API): `RoutingSolution::recalculate_distance(distances)` is `recalculate(distances, customers)`: the solution carries its lateness cost as well as its distance, and the customers are what it is computed from.
 - **Breaking** (wire and .NET): `route_summaries[]` entries gain `lateness` and `lateness_cost` (`RouteSummary` gains `Lateness` and `LatenessCost` before `Workload`, so a positional construction needs them); `RouteDemand` and `RouteFigures` (Rust) gain `lateness_cost`.
