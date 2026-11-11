@@ -134,6 +134,15 @@ impl Customer {
         }
     }
 
+    /// This entry as entry `id` of a table, a depot or not.
+    pub(crate) fn placed(&self, id: usize, depot: bool) -> Customer {
+        Customer {
+            id,
+            depot,
+            ..self.clone()
+        }
+    }
+
     /// Whether this entry is a depot, not a customer to visit.
     pub fn is_depot(&self) -> bool {
         self.depot

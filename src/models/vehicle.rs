@@ -93,6 +93,15 @@ impl Vehicle {
         self
     }
 
+    /// This vehicle as entry `id` of a vehicle list, starting from `depot_id`.
+    pub(crate) fn placed(&self, id: usize, depot_id: usize) -> Vehicle {
+        Vehicle {
+            id,
+            depot_id,
+            ..self.clone()
+        }
+    }
+
     /// Sets cost per unit distance.
     pub fn with_cost_per_distance(mut self, cost: f64) -> Self {
         self.cost_per_distance = cost;

@@ -337,3 +337,126 @@ fn a_route_out_of_another_depot_is_another_route() {
     assert!(route_feasible(&[2], 1, &dm, &customers, &limits));
     assert!(!route_feasible(&[2], 0, &dm, &customers, &limits));
 }
+
+// ── Construction ──────────────────────────────────────────────────────────
+
+use u_routing::constructive::{
+    clarke_wright_savings, construct_by_depot, nearest_neighbor, nearest_neighbor_tw, solomon_i1,
+    sweep,
+};
+
+type Construction = fn(&[Customer], &DistanceMatrix, &[Vehicle]) -> Solution;
+
+fn constructions() -> [(&'static str, Construction); 5] {
+    [
+        ("nn", |c, d, v| nearest_neighbor(c, d, v)),
+        ("nn_tw", |c, d, v| nearest_neighbor_tw(c, d, v)),
+        ("savings", |c, d, v| clarke_wright_savings(c, d, &v[0])),
+        ("sweep", |c, d, v| sweep(c, d, &v[0])),
+        ("i1", |c, d, v| solomon_i1(c, d, &v[0])),
+    ]
+}
+
+/// Several vehicles at each depot, none of them limited in number: the
+/// constructions use a vehicle in order, so a few of each depot's are plenty.
+fn fleet_for(r: &mut Lcg, depots: usize, customers: usize) -> Vec<Vehicle> {
+    let mut vehicles = Vec::new();
+    for d in 0..depots {
+        let capacity = 15 + r.below(25) as i32;
+        for _ in 0..customers {
+            let v = Vehicle::new(vehicles.len(), capacity).with_depot(d);
+            vehicles.push(v);
+        }
+    }
+    vehicles
+}
+
+#[test]
+fn every_construction_serves_each_customer_once_from_a_depot_of_its_vehicles() {
+    let mut r = Lcg(20261112);
+    let mut multi = 0;
+    for case in 0..250 {
+        let mut p = problem(&mut r);
+        let depots = num_depots(&p.customers);
+        let n = p.customers.len() - depots;
+        // A full fleet at every depot, and windows wide enough that a plan exists.
+        p.vehicles = fleet_for(&mut r, depots, n);
+        let dm = DistanceMatrix::from_customers(&p.customers);
+        multi += (depots > 1) as usize;
+        for (name, construct) in constructions() {
+            let plan = construct_by_depot(&p.customers, &dm, &p.vehicles, construct);
+            let counts: Vec<Option<usize>> = Vec::new();
+            let fleet = Fleet {
+                vehicles: &p.vehicles,
+                counts: &counts,
+                max_routes: None,
+            };
+            // Structure (each customer once or unassigned, each route from its vehicle's depot
+            // with its own distance) is the construction's to get right at every depot count.
+            let structural: Vec<&str> = check_solution(&p.customers, &dm, &fleet, &plan)
+                .iter()
+                .map(name_of_violation)
+                .filter(|v| matches!(*v, "structure" | "distance_mismatch" | "lateness_mismatch"))
+                .collect();
+            assert!(structural.is_empty(), "case {case} {name}: {structural:?}");
+        }
+    }
+    assert!(multi > 100, "{multi} multi-depot problems");
+}
+
+fn name_of_violation(v: &Violation) -> &'static str {
+    name(v)
+}
+
+#[test]
+fn a_depots_share_is_what_the_heuristic_makes_of_it_alone() {
+    // Every customer is nearest to depot 0 and only depot 0 has vehicles: the plan is the
+    // heuristic's own on the table of depot 0 and the customers.
+    let mut r = Lcg(77);
+    for case in 0..60 {
+        let n = 4 + r.below(8);
+        let mut customers = vec![
+            Customer::depot_at(0, 50.0, 50.0),
+            Customer::depot_at(1, 5000.0, 5000.0),
+        ];
+        for i in 0..n {
+            customers.push(Customer::new(
+                2 + i,
+                r.range(0.0, 100.0),
+                r.range(0.0, 100.0),
+                1 + r.below(6) as i32,
+                r.range(0.0, 3.0),
+            ));
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let vehicles: Vec<Vehicle> = (0..n).map(|v| Vehicle::new(v, 12)).collect();
+
+        // The same customers behind a single depot, numbered from 1.
+        let mut alone = vec![Customer::depot(50.0, 50.0)];
+        for c in &customers[2..] {
+            alone.push(Customer::new(
+                c.id() - 1,
+                c.x(),
+                c.y(),
+                c.demand(),
+                c.service_duration(),
+            ));
+        }
+        let alone_dm = DistanceMatrix::from_customers(&alone);
+        for (name, construct) in constructions() {
+            let plan = construct_by_depot(&customers, &dm, &vehicles, construct);
+            let direct = construct(&alone, &alone_dm, &vehicles);
+            let shift = |s: &Solution| -> Vec<(usize, Vec<usize>)> {
+                s.routes()
+                    .iter()
+                    .map(|r| (r.vehicle_id(), r.customer_ids()))
+                    .collect()
+            };
+            let wrapped: Vec<_> = shift(&plan)
+                .into_iter()
+                .map(|(v, ids)| (v, ids.into_iter().map(|i| i - 1).collect::<Vec<_>>()))
+                .collect();
+            assert_eq!(wrapped, shift(&direct), "case {case} {name}");
+        }
+    }
+}

@@ -5,8 +5,10 @@
 //! - [`clarke_wright_savings()`] — Clarke-Wright savings algorithm (1964), O(n² log n)
 //! - [`sweep()`] — Polar-angle sweep clustering (Gillett & Miller, 1974), O(n log n)
 //! - [`solomon_i1()`] — Solomon's I1 sequential insertion for VRPTW (1987), O(n²m)
+//! - [`construct_by_depot()`] — any of them for a problem with several depots: each depot's customers routed from that depot
 
 mod clarke_wright;
+mod multi_depot;
 mod nearest_neighbor;
 mod nn_tw;
 #[cfg(test)]
@@ -15,6 +17,7 @@ mod solomon_i1;
 mod sweep;
 
 pub use clarke_wright::clarke_wright_savings;
+pub use multi_depot::construct_by_depot;
 pub use nearest_neighbor::nearest_neighbor;
 pub use nn_tw::nearest_neighbor_tw;
 pub use solomon_i1::solomon_i1;

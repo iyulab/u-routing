@@ -33,7 +33,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   `check_solution` takes the leading `D` entries as the depots -- they are no customers to visit, and none of them is reported
   missing -- and judges each route from its vehicle's depot (`Vehicle::with_depot`, which has to name one of them). The route
   measures (`RouteEvaluator::build_route`, `route_feasible`, `route_eval`) already ran out of the vehicle's depot. The
-  construction heuristics, the searches and the requests still plan with one depot.
+  searches and the requests still plan with one depot. `constructive::construct_by_depot(customers, distances, vehicles, construct)`
+  builds a plan for several depots with any of the single-depot constructions: each customer goes to the nearest depot that has a
+  vehicle, each depot's customers are routed from that depot by `construct` (run unchanged on the depot's own sub-problem, so one depot
+  is answered exactly as the heuristic alone answers it), and a customer a depot cannot serve is offered to its next-nearest depot.
 
 ### Changed
 
