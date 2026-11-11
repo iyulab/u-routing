@@ -8,6 +8,23 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Fixed
+
+- A fleet of several kinds with a `count` on every kind left customers `unassigned` that the fleet has room for.
+  `"savings"`, `"ga"` and `"alns"` shape their routes for one kind of vehicle and then give each route a vehicle;
+  when the routes did not divide among the kinds there are, the customers of a route no vehicle could take went only
+  into the routes that remained. On a day that is nearly full (38 customers, 89% of the fleet's capacity, five kinds)
+  one to four customers were left out although loading by demand alone fits all of them, and a longer search left
+  out more than a short one. When customers are left out, the fleet is now also loaded first -- the largest demand
+  to the vehicle with the least room that still takes it (best-fit decreasing), at the cheapest place that keeps the
+  vehicle's limits and every time window -- and that plan stands when it serves more customers. It is longer than a
+  route-first plan would be; a plan that left nobody out is unchanged bit for bit. A fleet with a kind that has no
+  `count` is not affected (it is never short of vehicles), and neither is `"nn"`.
+- A fixed fleet of one kind (`count`, or `max_vehicles`) left out a customer that fits when the routes that remained
+  had the room only in pieces: demands 6, 6, 4, 4, 5, 5 in three vehicles of 10 fit as (6, 4), (6, 4), (5, 5), but a
+  plan that pairs the customers near each other and is then brought down to three routes had nowhere to put a 6.
+  The same loading-first plan is now tried when a customer is left out, and stands when it serves more.
+
 ## [0.27.1] - 2026-11-02
 
 The .NET client is `URouting` 0.24.1.
