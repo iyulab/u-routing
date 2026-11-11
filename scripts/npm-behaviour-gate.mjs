@@ -97,4 +97,41 @@ for (const method of ['nn', 'savings', 'ga', 'alns']) {
   ok(counted.routes.length === 1 && counted.unassigned.length === 4,
     method + ': one vehicle of 20 gave ' + counted.routes.length + ' routes, left out ' + counted.unassigned.length)
 }
+// Several depots: each route runs out of its vehicle's depot, the plan measures it from there, the
+// plan check agrees, and what cannot be said with several depots is refused by name.
+const places = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
+const beside = [
+  { id: 1, x: 10, y: 0, demand: 1 }, { id: 2, x: 20, y: 0, demand: 1 },
+  { id: 3, x: 90, y: 0, demand: 1 }, { id: 4, x: 80, y: 0, demand: 1 },
+]
+const atBoth = [{ capacity: 5 }, { capacity: 5, depot: 1 }]
+for (const method of ['nn', 'savings', 'ga', 'alns']) {
+  const problem = { depots: places, customers: beside, vehicles: atBoth, method, config: base(method) }
+  const out = m.solve_vrp(problem)
+  ok(out.unassigned.length === 0 && out.routes.length === 2, method + ': two depots left out ' + JSON.stringify(out.unassigned))
+  // 0 -> 10 -> 20 -> 0 and 100 -> 90 -> 80 -> 100: 40 each.
+  ok(Math.abs(out.total_distance - 80) < 1e-9, method + ': two depots ' + out.total_distance)
+  out.routes.forEach((route, i) => {
+    const from = atBoth[out.route_vehicles[i]].depot || 0
+    ok(route.every((id) => (id <= 2) === (from === 0)), method + ': route ' + JSON.stringify(route) + ' from depot ' + from)
+  })
+  const verdict = m.check_vrp_solution(problem, {
+    routes: out.routes, route_vehicles: out.route_vehicles, unassigned: out.unassigned,
+    total_distance: out.total_distance, total_cost: out.total_cost,
+  })
+  ok(verdict.feasible, method + ': two depots checked ' + JSON.stringify(verdict.violations))
+}
+let spanned = null
+try {
+  m.solve_vrp({ depots: places, customers: beside, vehicles: atBoth, method: 'savings', config: { max_vehicles: 2 } })
+} catch (e) { spanned = e }
+ok(spanned && spanned.code === 'invalid_option' && spanned.parameter === 'config.max_vehicles',
+   'a fixed fleet with two depots: ' + (spanned ? spanned.code + ' ' + spanned.parameter : 'accepted'))
+let none = null
+try {
+  m.solve_vrp({ depots: places, customers: beside, vehicles: [{ capacity: 5, depot: 2 }], method: 'nn' })
+} catch (e) { none = e }
+ok(none && none.code === 'parameter_out_of_range' && none.parameter === 'depot' && none.index === 0,
+   'a depot that is none: ' + (none ? none.code + ' ' + none.parameter : 'accepted'))
+
 console.log(`behaviour gate: ok (${checks} checks)`)

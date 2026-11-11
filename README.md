@@ -181,6 +181,32 @@ feasible. Larger ones (seed 1): X-n200-k36 3.1 % in 1.9 s, X-n251-k28 2.7 %
 in 2.5 s, X-n303-k21 3.7 % in 4.7 s, X-n401-k29 2.0 % in 8.6 s --
 `config.time_limit_ms` bounds the time.
 
+`examples/mdvrp.rs` measures the methods on Cordeau's multi-depot instances (`p01`–`p23`,
+`pr01`–`pr10`: 48–360 customers, 2–9 depots; the University of Malaga's VRP site has the
+instances and the best known results), every answer checked with `urouting_check_solution`:
+
+```bash
+cargo run --release --features ffi --example mdvrp -- <instances> [best-known] [nn,savings,ga,alns] [settings]
+```
+
+Each depot has one kind of vehicle of the instance's capacity, `count` of them (the vehicles per
+depot), limited in duration where the instance sets a limit. Default settings, seed 1, all 33
+instances: every answer feasible, and the mean gap to the best known total distance is
+
+| Method | Mean gap | Worst | Time (all 33) |
+|---|---|---|---|
+| `nn` (22 instances¹) | +26.6 % | +42.9 % | 1 s |
+| `savings` | +5.5 % (`p` 4.1, `pr` 8.7) | +17.3 % | 2 s |
+| `alns` | +3.9 % (`p` 2.6, `pr` 6.7) | +13.3 % (`pr10`) | 23 s |
+
+¹ `nn` takes the vehicles of a depot in order and leaves customers out on the other 11
+(each depot has only `count` vehicles). `ga` on four instances (`p01`, `p15`, `p18`, `pr02`)
+is +4.6 %, +2.6 %, +3.2 % and +7.7 %. Each depot is planned alone and customers then change
+depots (see *Several depots*): where a depot's vehicles are all needed and capacity is tight,
+`ga` and `alns` reach what `savings` reaches (`p12`–`p23`), and what is left of the gap is which
+depot serves which customer -- a search that decides that together with the routes would close
+it.
+
 ## Dependencies
 
 - [`u-metaheur`](https://crates.io/crates/u-metaheur) — GA/ALNS framework
