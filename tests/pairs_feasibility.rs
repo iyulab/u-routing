@@ -16,8 +16,8 @@ use u_routing::evaluation::{
 };
 use u_routing::fleet::limit_routes;
 use u_routing::local_search::{
-    cross_depot_improve, exchange_improve, or_opt_improve, relocate_improve, three_opt_improve,
-    two_opt_improve,
+    cross_depot_improve, exchange_improve, or_opt_improve, pair_relocate_improve, relocate_improve,
+    three_opt_improve, two_opt_improve,
 };
 use u_routing::models::{Customer, Solution, TimeWindow, Vehicle, VehicleBreak};
 
@@ -497,4 +497,94 @@ fn several_depots_keep_a_pair_at_one_depot() {
             "savings by depot (seed {seed}, capacity {capacity}): {found:?}"
         );
     }
+}
+
+#[test]
+fn moving_a_pair_as_a_pair_improves_a_plan_the_single_moves_cannot() {
+    let (mut better, mut same) = (0, 0);
+    for seed in 0..60 {
+        let i = instance(seed);
+        if i.routes.len() < 2 {
+            continue;
+        }
+        let start = plan(&i, &i.routes, &[]);
+        // The single-customer moves cannot touch a pair: relocation leaves the plan as it was.
+        let single = relocate_improve(&start, &i.customers, &i.dm, &i.vehicle);
+        assert!(
+            (single.total_distance() - start.total_distance()).abs() < 1e-9,
+            "seed {seed}"
+        );
+
+        let moved = pair_relocate_improve(&start, &i.customers, &i.dm, &i.vehicle);
+        assert_clean(&i, &moved, "pair_relocate", seed);
+        assert!(
+            moved.total_distance() <= start.total_distance() + 1e-9,
+            "pair_relocate made it longer (seed {seed})"
+        );
+        assert_eq!(
+            served(
+                &moved
+                    .routes()
+                    .iter()
+                    .map(|r| r.customer_ids())
+                    .collect::<Vec<_>>()
+            ),
+            served(&i.routes)
+        );
+        if moved.total_distance() < start.total_distance() - 1e-9 {
+            better += 1;
+        } else {
+            same += 1;
+        }
+    }
+    assert!(
+        better >= 20,
+        "only {better} of {} plans improved",
+        better + same
+    );
+}
+
+#[test]
+fn pair_relocation_after_the_constructions_keeps_the_plan_clean() {
+    for seed in 0..60 {
+        let base = instance(seed);
+        let capacity = [6, 9, 14, 30][(seed % 4) as usize];
+        let vehicle = Vehicle::new(0, capacity);
+        let vehicles: Vec<Vehicle> = (0..6).map(|v| Vehicle::new(v, capacity)).collect();
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: None,
+        };
+        for (name, start) in [
+            ("nn", nearest_neighbor(&base.customers, &base.dm, &vehicles)),
+            (
+                "savings",
+                clarke_wright_savings(&base.customers, &base.dm, &vehicle),
+            ),
+        ] {
+            let moved = pair_relocate_improve(&start, &base.customers, &base.dm, &vehicle);
+            let found = check_solution(&base.customers, &base.dm, &fleet, &moved);
+            assert!(
+                found.is_empty(),
+                "{name} + pair_relocate (seed {seed}): {found:?}"
+            );
+            assert!(
+                moved.total_distance() <= start.total_distance() + 1e-9,
+                "{name} (seed {seed})"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_plan_with_half_a_pair_is_left_alone_by_pair_relocation() {
+    let i = instance(3);
+    // Pickup 1 on a route, its delivery 2 reported unassigned: not a plan the move should touch.
+    let routes: Vec<Vec<usize>> = vec![vec![1], vec![3, 4]];
+    let start = plan(&i, &routes, &[2]);
+    let after = pair_relocate_improve(&start, &i.customers, &i.dm, &i.vehicle);
+    let ids: Vec<Vec<usize>> = after.routes().iter().map(|r| r.customer_ids()).collect();
+    assert_eq!(served(&ids), [1, 3, 4]);
+    assert_eq!(after.unassigned(), [2]);
 }

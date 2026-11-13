@@ -5,11 +5,13 @@
 //! - [`three_opt_improve()`] — Intra-route 3-opt reconnection (Lin 1965)
 //! - [`relocate_improve()`] — Inter-route customer relocation
 //! - [`exchange_improve()`] — Inter-route cross-exchange / 2-opt* (Potvin & Rousseau, 1995)
+//! - [`pair_relocate_improve()`] — Pickup-delivery pair relocation (both stops of a pair together)
 //! - [`cross_depot_improve()`] — Customer relocation and swap between the routes of different depots
 
 mod cross_depot;
 mod exchange;
 mod or_opt;
+mod pair_relocate;
 mod relocate;
 mod route_elimination;
 mod route_minimization;
@@ -20,6 +22,7 @@ mod two_opt;
 pub use cross_depot::cross_depot_improve;
 pub use exchange::exchange_improve;
 pub use or_opt::{or_opt_improve, route_distance};
+pub use pair_relocate::pair_relocate_improve;
 pub use relocate::relocate_improve;
 pub(crate) use route_elimination::eliminate_routes;
 pub(crate) use route_minimization::minimize_routes;
