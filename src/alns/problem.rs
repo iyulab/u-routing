@@ -97,8 +97,12 @@ impl AlnsProblem for RoutingAlnsProblem {
                     Some(d) => v.with_max_distance(d),
                     None => v,
                 };
-                match self.limits.max_duration {
+                let v = match self.limits.max_duration {
                     Some(t) => v.with_max_duration(t),
+                    None => v,
+                };
+                match self.limits.rest {
+                    Some(rest) => v.with_break(rest),
                     None => v,
                 }
             })
@@ -212,5 +216,35 @@ mod tests {
         let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
         assert!(result.best_cost < f64::INFINITY);
         assert!(result.best.unassigned().is_empty());
+    }
+
+    /// The seed solution keeps the driver's break: its routes are feasible with the break placed.
+    #[test]
+    fn the_initial_solution_keeps_the_drivers_break() {
+        use crate::evaluation::route_feasible;
+        use crate::models::{TimeWindow, VehicleBreak};
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for i in 1..=4 {
+            customers.push(
+                Customer::new(i, 10.0 * i as f64, 0.0, 1, 2.0)
+                    .with_time_window(TimeWindow::new(0.0, 60.0).expect("window")),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let limits = RouteLimits {
+            rest: Some(VehicleBreak::new(5.0, 40.0, 20.0)),
+            ..RouteLimits::NONE
+        };
+        let problem =
+            RoutingAlnsProblem::new(customers.clone(), dm.clone(), 10).with_limits(limits);
+        let mut rng = u_numflow::random::create_rng(3);
+        let sol = problem.initial_solution(&mut rng);
+        assert!(sol.routes().len() > 1, "{:?}", sol.routes());
+        for route in sol.routes() {
+            assert!(
+                route_feasible(route, 0, &dm, &customers, &limits),
+                "{route:?}"
+            );
+        }
     }
 }

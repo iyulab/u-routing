@@ -175,6 +175,13 @@ public sealed class RoutingClient : IDisposable
             Put(vehicle, "fixed_cost", v.FixedCost, $"{at}.fixed_cost");
             Put(vehicle, "cost_per_distance", v.CostPerDistance, $"{at}.cost_per_distance");
             Put(vehicle, "count", v.Count);
+            if (v.Break is { } rest)
+                vehicle["break"] = new JsonObject
+                {
+                    ["earliest"] = Num($"{at}.break.earliest", rest.Earliest),
+                    ["latest"] = Num($"{at}.break.latest", rest.Latest),
+                    ["duration"] = Num($"{at}.break.duration", rest.Duration),
+                };
             vehicles.Add((JsonNode)vehicle);
         }
 

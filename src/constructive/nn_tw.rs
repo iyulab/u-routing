@@ -17,7 +17,9 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{effective_cost, has_soft_windows, RouteEvaluator, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_feasible, RouteEvaluator, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRPTW solution using a time-window-aware nearest-neighbor.
@@ -123,7 +125,16 @@ pub fn nearest_neighbor_tw(
                     Some(tw) => arrival + tw.waiting_time(arrival),
                     None => arrival,
                 };
-                if !limits.allow(
+                if limits.rest.is_some() {
+                    // A driver's break is placed on the whole route: ask the route's clock.
+                    route_customers.push(i);
+                    let fits =
+                        route_feasible(&route_customers, depot, distances, customers, &limits);
+                    route_customers.pop();
+                    if !fits {
+                        continue;
+                    }
+                } else if !limits.allow(
                     travelled + travel + distances.get(i, depot),
                     start + customers[i].service_duration() + distances.travel_time(i, depot),
                 ) {

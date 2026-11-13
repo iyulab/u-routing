@@ -23,7 +23,7 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::RouteLimits;
+use crate::evaluation::{BreakClock, RouteLimits};
 use crate::models::Customer;
 
 use super::split::SplitResult;
@@ -98,6 +98,11 @@ pub fn split_tw(
         let mut time = 0.0;
         // What the segment's lateness at soft windows costs, in distance (0 for hard windows).
         let mut late_cost = 0.0;
+        // With a driver's break the clock is the two-label one, grown a stop at a time.
+        let mut clock = limits
+            .rest
+            .as_ref()
+            .map(|rest| BreakClock::new(rest, depot));
 
         for j in i..n {
             let cid = tour[j];
@@ -114,6 +119,27 @@ pub fn split_tw(
             } else {
                 route_dist += distances.get(tour[j - 1], cid);
                 time += distances.travel_time(tour[j - 1], cid);
+            }
+
+            if let Some(clock) = clock.as_mut() {
+                // No placement of the break keeps the stops so far: no longer segment does.
+                if !clock.push(cid, distances, customers) {
+                    break;
+                }
+                let total_route = route_dist + distances.get(cid, depot);
+                let Some(done) = clock.finish(total_route, depot, distances) else {
+                    continue;
+                };
+                if !limits.allow(total_route, done.duration) {
+                    continue;
+                }
+                let new_cost = cost[i] + route_cost + total_route + done.lateness_cost;
+                if new_cost < cost[j + 1] {
+                    cost[j + 1] = new_cost;
+                    dist[j + 1] = dist[i] + total_route;
+                    pred[j + 1] = i;
+                }
+                continue;
             }
 
             // Check time window
@@ -312,5 +338,38 @@ mod tests {
         // Capacity 25: can hold at most 1 customer each (15+15=30>25)
         let result = split_tw(&[1, 2, 3], &customers, &dm, 25, &RouteLimits::NONE, 0.0);
         assert!(result.routes.len() >= 2);
+    }
+
+    /// A driver's break lengthens the route the stops after it feel: a tour that is one route
+    /// without the break is cut into routes that each keep their windows with it.
+    #[test]
+    fn a_drivers_break_cuts_the_tour_where_the_windows_after_it_would_close() {
+        use crate::evaluation::route_feasible;
+        use crate::models::{TimeWindow, VehicleBreak};
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for i in 1..=4 {
+            customers.push(
+                Customer::new(i, 10.0 * i as f64, 0.0, 1, 2.0)
+                    .with_time_window(TimeWindow::new(0.0, 60.0).expect("window")),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let tour = [1, 2, 3, 4];
+        let free = split_tw(&tour, &customers, &dm, 10, &RouteLimits::NONE, 0.0);
+        assert_eq!(free.routes.len(), 1, "stops at 10, 22, 34, 46: one route");
+        // The break is due from 5 and takes 20: the first stop's service waits for it.
+        let limits = RouteLimits {
+            rest: Some(VehicleBreak::new(5.0, 40.0, 20.0)),
+            ..RouteLimits::NONE
+        };
+        let cut = split_tw(&tour, &customers, &dm, 10, &limits, 0.0);
+        assert!(cut.routes.len() > 1, "{:?}", cut.routes);
+        for route in &cut.routes {
+            assert!(
+                route_feasible(route, 0, &dm, &customers, &limits),
+                "{route:?}"
+            );
+        }
+        assert_eq!(cut.routes.concat(), tour);
     }
 }

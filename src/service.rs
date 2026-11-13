@@ -531,6 +531,30 @@ pub(crate) struct InputVehicle {
     #[serde(default)]
     #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
     count: Option<i128>,
+    /// A rest the driver takes during every route of this vehicle: `duration` long, starting at
+    /// some time in `[earliest, latest]` (on the clock that starts at 0) at the stop the vehicle
+    /// has just reached, before that stop's service -- so it can overlap the wait for a time window
+    /// to open. A route has to contain it unless the vehicle is back at the depot by `earliest`.
+    /// It is placed where the route finishes earliest and costs nothing itself: it makes the route
+    /// longer, which `max_duration` and the time windows after it feel. A route that cannot place
+    /// it is not allowed (`break_not_placeable` in a plan check). Absent or `null`: no break.
+    #[serde(default, rename = "break")]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "InputBreak | null"))]
+    rest: Option<InputBreak>,
+}
+
+/// The rest of a vehicle's driver ([`InputVehicle::rest`]).
+#[derive(Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(all(test, feature = "wasm"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InputBreak {
+    /// The first time the break may start (`>= 0`).
+    earliest: f64,
+    /// The last time the break may start (`>= earliest`).
+    latest: f64,
+    /// How long the break takes (`> 0`).
+    duration: f64,
 }
 
 /// No limit: the most the model stores, which is also the most one customer
@@ -1302,6 +1326,9 @@ pub(crate) enum PlanViolation {
         duration: f64,
         max_duration: f64,
     },
+    /// The vehicle's `break` cannot be placed on the route: the vehicle is still out when the break
+    /// is due and no stop lets it start by its `latest` without closing a hard time window behind it.
+    BreakNotPlaceable { route: usize },
     /// The route visits an id that is no customer of the request.
     UnknownCustomer { route: usize, customer: i64 },
     /// `customer` is visited a second time, on `route`.
@@ -1361,6 +1388,7 @@ impl PlanViolation {
                 duration: 0.0,
                 max_duration: 0.0,
             },
+            Self::BreakNotPlaceable { route: 0 },
             Self::UnknownCustomer {
                 route: 0,
                 customer: 0,
@@ -1621,6 +1649,9 @@ pub(crate) fn check(
                     duration,
                     max_duration,
                 },
+                ViolationType::BreakNotPlaceable { route_index } => {
+                    PlanViolation::BreakNotPlaceable { route: route_index }
+                }
                 ViolationType::UnknownCustomer {
                     route_index,
                     customer_id,
@@ -2179,7 +2210,7 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, S
     if input_vehicles.is_empty() {
         return Ok(vec![VehicleType::new(Vehicle::new(0, i32::MAX), None)]);
     }
-    input_vehicles
+    let types: Vec<VehicleType> = input_vehicles
         .iter()
         .enumerate()
         .map(|(i, v)| {
@@ -2208,6 +2239,43 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, S
                 } else {
                     vehicle.with_max_duration(limit)
                 };
+            }
+            if let Some(b) = &v.rest {
+                let refuse = |parameter: &str, got: f64, bounds: Bounds, text: String| {
+                    let mut fields = json!({ "parameter": parameter, "index": i, "got": got });
+                    bounds.insert_into(&mut fields);
+                    ServiceError::new(Code::ParameterOutOfRange, text, fields)
+                };
+                if b.earliest < 0.0 {
+                    return Err(refuse(
+                        "break.earliest",
+                        b.earliest,
+                        Bounds::of((Bound::Included(0.0), Bound::Unbounded)),
+                        format!("vehicle {i}: break.earliest must be >= 0, got {}", b.earliest),
+                    ));
+                }
+                if b.latest < b.earliest {
+                    return Err(refuse(
+                        "break.latest",
+                        b.latest,
+                        Bounds::of((Bound::Included(b.earliest), Bound::Unbounded)),
+                        format!(
+                            "vehicle {i}: break.latest must be >= break.earliest ({}), got {}",
+                            b.earliest, b.latest
+                        ),
+                    ));
+                }
+                if b.duration <= 0.0 {
+                    return Err(refuse(
+                        "break.duration",
+                        b.duration,
+                        Bounds::of((Bound::Excluded(0.0), Bound::Unbounded)),
+                        format!("vehicle {i}: break.duration must be > 0, got {}", b.duration),
+                    ));
+                }
+                vehicle = vehicle.with_break(crate::models::VehicleBreak::new(
+                    b.earliest, b.latest, b.duration,
+                ));
             }
             // JSON has no infinity or NaN: only the range is left to check.
             if v.fixed_cost < 0.0 {
@@ -2248,7 +2316,20 @@ fn build_vehicles(input_vehicles: &[InputVehicle]) -> Result<Vec<VehicleType>, S
                 count,
             ))
         })
-        .collect()
+        .collect::<Result<_, ServiceError>>()?;
+    // A route is timed once and then given to the kind that carries it cheapest
+    // (`assign_fleet`): that is sound only when every kind keeps the same clock.
+    if types
+        .windows(2)
+        .any(|w| w[0].vehicle().rest() != w[1].vehicle().rest())
+    {
+        return Err(ServiceError::new(
+            Code::InvalidOption,
+            "every vehicle kind must have the same break (or none): a route is timed once and then given to the kind that carries it cheapest".to_string(),
+            json!({ "parameter": "vehicles[].break" }),
+        ));
+    }
+    Ok(types)
 }
 
 /// The kind of vehicle the methods that plan every route alike plan with: the
@@ -2803,7 +2884,7 @@ mod tests {
     /// has one), and the fields listed are the ones it serializes.
     #[test]
     fn the_code_catalog_covers_every_violation() {
-        let mut seen = [false; 15];
+        let mut seen = [false; 16];
         for v in PlanViolation::examples() {
             let i = match v {
                 PlanViolation::CapacityExceeded { .. } => 0,
@@ -2821,6 +2902,7 @@ mod tests {
                 PlanViolation::CostMismatch { .. } => 12,
                 PlanViolation::EquityMismatch { .. } => 13,
                 PlanViolation::ObjectiveMismatch { .. } => 14,
+                PlanViolation::BreakNotPlaceable { .. } => 15,
             };
             assert!(!seen[i], "two examples of variant {i}");
             seen[i] = true;
@@ -4797,6 +4879,203 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // ---- vehicle break ----
+
+    /// Every route of every method keeps the driver's break: the route's clock with the break
+    /// placed (the evaluator's, built from the numbers) raises nothing, and a route out past the
+    /// break's `earliest` does carry one -- through construction, every search move, a fixed fleet's
+    /// emptied routes, and the plan check.
+    #[test]
+    fn every_method_keeps_the_drivers_break() {
+        // Hard windows closing at 80: the 30 the break takes is time the stops after it do not
+        // have, so a method that plans without the break packs routes the break then overruns.
+        let customers: Vec<InputCustomer> = (1..=9)
+            .map(|i| {
+                let a = i as f64;
+                customer(serde_json::json!({
+                    "id": i, "x": a.cos() * 10.0, "y": a.sin() * 10.0, "demand": 5.0,
+                    "service_time": 3.0, "time_window": [0.0, 80.0]
+                }))
+            })
+            .collect();
+        let fleet = vec![vehicle(serde_json::json!({
+            "capacity": 1000.0,
+            "break": { "earliest": 5.0, "latest": 15.0, "duration": 30.0 }
+        }))];
+        let internal = build_customers((0.0, 0.0), &customers, i32::MAX)
+            .expect("valid")
+            .customers;
+        let dm = DistanceMatrix::from_customers(&internal);
+        // Built from the numbers, not from the code under test.
+        let oracle =
+            Vehicle::new(0, 1000).with_break(crate::models::VehicleBreak::new(5.0, 15.0, 30.0));
+        let mut routes_with_break = 0;
+        for max_vehicles in [None, Some(2)] {
+            for method in ["nn", "savings", "ga", "alns"] {
+                let config = InputConfig {
+                    max_vehicles,
+                    ..quick(method)
+                };
+                let problem = ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles: &fleet,
+                    distances: None,
+                    durations: None,
+                };
+                let out =
+                    solve(&problem, method, &config).unwrap_or_else(|e| panic!("{method}: {e:?}"));
+                let evaluator = crate::evaluation::RouteEvaluator::new(&internal, &dm, &oracle);
+                for route in &out.routes {
+                    let (timed, violations) = evaluator.build_route(route);
+                    assert!(
+                        violations.is_empty(),
+                        "{method} {max_vehicles:?}: {violations:?} on {route:?}"
+                    );
+                    routes_with_break += usize::from(timed.rest().is_some());
+                }
+                let served: usize = out.routes.iter().map(Vec::len).sum();
+                assert_eq!(served + out.unassigned.len(), 9, "{method} lost a customer");
+            }
+        }
+        assert!(
+            routes_with_break > 0,
+            "no route was long enough to need the break"
+        );
+    }
+
+    /// A plan the break cannot be placed on is a result: `break_not_placeable`, and one that
+    /// can place it is clean.
+    #[test]
+    fn a_plan_whose_route_cannot_place_the_break_reports_it() {
+        let customers = vec![customer(json!({ "id": 7, "x": 10.0, "y": 0.0 }))];
+        let problem = |earliest: f64, latest: f64| {
+            vec![vehicle(json!({
+                "capacity": 10.0,
+                "break": { "earliest": earliest, "latest": latest, "duration": 1.0 }
+            }))]
+        };
+        let solution: InputSolution = serde_json::from_value(json!({
+            "routes": [[7]], "route_vehicles": [0], "unassigned": [], "total_distance": 20.0
+        }))
+        .expect("a solution");
+        let run = |vehicles: &[InputVehicle]| {
+            check(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &customers,
+                    vehicles,
+                    distances: None,
+                    durations: None,
+                },
+                "nn",
+                &InputConfig::default(),
+                &solution,
+            )
+            .expect("a check")
+        };
+        // Out at 10 .. 11 and back at 21: the break due from 2 must start by 5 -- it cannot (arrival 10).
+        let out = run(&problem(2.0, 5.0));
+        assert!(!out.feasible);
+        assert!(
+            out.violations
+                .iter()
+                .any(|v| matches!(v, PlanViolation::BreakNotPlaceable { route: 0 })),
+            "{:?}",
+            out.violations
+        );
+        // The window reaches the arrival: the break goes there.
+        let out = run(&problem(2.0, 12.0));
+        assert!(out.feasible, "{:?}", out.violations);
+    }
+
+    /// Kinds that differ in their break are refused: a route is timed once and then given to the
+    /// cheapest kind that carries it, which only holds when they keep one clock.
+    #[test]
+    fn vehicle_kinds_with_different_breaks_are_refused() {
+        let b = json!({ "earliest": 5.0, "latest": 40.0, "duration": 20.0 });
+        let other = json!({ "earliest": 5.0, "latest": 40.0, "duration": 25.0 });
+        for (a, c) in [
+            (
+                json!({ "capacity": 10.0, "break": b }),
+                json!({ "capacity": 20.0 }),
+            ),
+            (
+                json!({ "capacity": 10.0, "break": b }),
+                json!({ "capacity": 20.0, "break": other }),
+            ),
+        ] {
+            let vehicles = vec![vehicle(a), vehicle(c)];
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &[customer(json!({ "id": 1, "x": 1.0, "y": 0.0 }))],
+                    vehicles: &vehicles,
+                    distances: None,
+                    durations: None,
+                },
+                "nn",
+                &InputConfig::default(),
+            )
+            .expect_err("refused");
+            assert_eq!(err.code(), "invalid_option", "{err:?}");
+            assert_eq!(err.fields["parameter"], "vehicles[].break");
+        }
+        // The same break on every kind is a fleet.
+        let vehicles = vec![
+            vehicle(json!({ "capacity": 10.0, "break": b })),
+            vehicle(json!({ "capacity": 20.0, "break": b })),
+        ];
+        solve(
+            &ProblemInput {
+                depot: (0.0, 0.0),
+                customers: &[customer(json!({ "id": 1, "x": 1.0, "y": 0.0 }))],
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
+            "nn",
+            &InputConfig::default(),
+        )
+        .expect("a fleet that shares one break");
+    }
+
+    /// A break is refused where it cannot mean anything: before time 0, ending before it starts,
+    /// taking no time.
+    #[test]
+    fn a_break_that_cannot_exist_is_refused_with_its_parameter() {
+        for (spec, parameter) in [
+            (
+                json!({ "earliest": -1.0, "latest": 5.0, "duration": 1.0 }),
+                "break.earliest",
+            ),
+            (
+                json!({ "earliest": 5.0, "latest": 4.0, "duration": 1.0 }),
+                "break.latest",
+            ),
+            (
+                json!({ "earliest": 1.0, "latest": 4.0, "duration": 0.0 }),
+                "break.duration",
+            ),
+        ] {
+            let vehicles = vec![vehicle(json!({ "capacity": 10.0, "break": spec }))];
+            let err = solve(
+                &ProblemInput {
+                    depot: (0.0, 0.0),
+                    customers: &[customer(json!({ "id": 1, "x": 1.0, "y": 0.0 }))],
+                    vehicles: &vehicles,
+                    distances: None,
+                    durations: None,
+                },
+                "nn",
+                &InputConfig::default(),
+            )
+            .expect_err("refused");
+            assert_eq!(err.fields["parameter"], parameter, "{err:?}");
+            assert_eq!(err.fields["index"], 0);
         }
     }
 

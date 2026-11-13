@@ -13,7 +13,7 @@
 //! quality is typically 15-25% above optimal, it provides a fast baseline.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{RouteEvaluator, RouteLimits};
+use crate::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
 use crate::models::{Customer, Route, Solution, Vehicle};
 
 /// The vehicle of `route` in `vehicles` (by id; the first when the id is not
@@ -109,7 +109,16 @@ pub fn nearest_neighbor(
                 }
                 let d = distances.get(current, i);
                 let back = distances.get(i, depot);
-                if !limits.allow(
+                if limits.rest.is_some() {
+                    // A driver's break is placed on the whole route: ask the route's clock.
+                    route_customers.push(i);
+                    let fits =
+                        route_feasible(&route_customers, depot, distances, customers, &limits);
+                    route_customers.pop();
+                    if !fits {
+                        continue;
+                    }
+                } else if !limits.allow(
                     travelled + d + back,
                     clock
                         + distances.travel_time(current, i)
@@ -233,5 +242,42 @@ mod tests {
         let (customers, dm, vehicles) = line_customers();
         let sol = nearest_neighbor(&customers, &dm, &vehicles);
         assert!((sol.total_cost() - sol.total_distance()).abs() < 1e-10);
+    }
+
+    /// A driver's break is time on the route: with `max_duration` the stops it leaves no room for go
+    /// on another route.
+    #[test]
+    fn the_drivers_break_counts_against_the_duration_limit() {
+        use crate::evaluation::route_feasible;
+        use crate::models::VehicleBreak;
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for i in 1..=4 {
+            customers.push(Customer::new(i, 5.0 * i as f64, 0.0, 1, 1.0));
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        // Out and back to the fourth stop is 40 and four services 4: 44 without the break.
+        let free = Vehicle::new(0, 10).with_max_duration(67.0);
+        let with_break = free.clone().with_break(VehicleBreak::new(2.0, 30.0, 25.0));
+        let vehicles = |v: &Vehicle| vec![v.clone(), v.clone(), v.clone(), v.clone()];
+        let sol = nearest_neighbor(&customers, &dm, &vehicles(&free));
+        assert_eq!(sol.routes().len(), 1, "one route of 44 fits in 67");
+        let sol = nearest_neighbor(&customers, &dm, &vehicles(&with_break));
+        assert!(
+            sol.routes().len() > 1,
+            "44 + 25 does not fit: {:?}",
+            sol.routes()
+                .iter()
+                .map(|r| r.customer_ids())
+                .collect::<Vec<_>>()
+        );
+        let limits = RouteLimits::of(&with_break);
+        for route in sol.routes() {
+            assert!(
+                route_feasible(&route.customer_ids(), 0, &dm, &customers, &limits),
+                "{:?}",
+                route.customer_ids()
+            );
+        }
+        assert_eq!(sol.num_served(), 4);
     }
 }

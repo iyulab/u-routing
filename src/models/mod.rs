@@ -14,4 +14,4 @@ pub use customer::{Customer, TimeWindow};
 pub use problem::RoutingProblem;
 pub use route::{Route, Visit};
 pub use solution::{Solution, Violation, ViolationType};
-pub use vehicle::Vehicle;
+pub use vehicle::{Vehicle, VehicleBreak};

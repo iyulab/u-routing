@@ -43,6 +43,7 @@ pub struct Route {
     total_load: i32,
     total_lateness: f64,
     lateness_cost: f64,
+    rest: Option<(usize, f64)>,
 }
 
 impl Route {
@@ -56,7 +57,21 @@ impl Route {
             total_load: 0,
             total_lateness: 0.0,
             lateness_cost: 0.0,
+            rest: None,
         }
+    }
+
+    /// Records where the driver's break goes: the index of the visit it comes before the
+    /// service of, and when it starts.
+    pub fn set_rest(&mut self, rest: Option<(usize, f64)>) {
+        self.rest = rest;
+    }
+
+    /// Where the driver's break goes -- the index of the visit it comes before the service of,
+    /// and when it starts -- or `None` without a break, or when the vehicle is back at the depot
+    /// by the break's `earliest`.
+    pub fn rest(&self) -> Option<(usize, f64)> {
+        self.rest
     }
 
     /// Appends a visit to the end of this route.

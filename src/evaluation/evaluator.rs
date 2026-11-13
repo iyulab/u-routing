@@ -59,14 +59,27 @@ impl<'a> RouteEvaluator<'a> {
         let mut lateness_cost = 0.0;
         let mut prev = depot_id;
 
-        for &cid in customer_ids {
+        // The driver's break, placed where the route finishes earliest.
+        let rest = self.vehicle.rest();
+        let placed = rest.as_ref().and_then(|b| {
+            super::schedule::schedule(customer_ids, depot_id, self.distances, self.customers, b)
+        });
+        let rest_at = placed.and_then(|s| s.rest);
+
+        for (index, &cid) in customer_ids.iter().enumerate() {
             total_distance += self.distances.get(prev, cid);
             let arrival = current_time + self.distances.travel_time(prev, cid);
+            // At the stop the break comes before, the service can start only after it.
+            let ready_at = match rest_at {
+                Some((at, start)) if at == index => start + rest.map_or(0.0, |b| b.duration()),
+                _ => arrival,
+            };
 
             let customer = &self.customers[cid];
 
             // Check time window
             let service_start = if let Some(tw) = customer.time_window() {
+                let arrival = ready_at;
                 if tw.is_violated(arrival) {
                     match customer.lateness_penalty() {
                         // A soft window: late is allowed and costs.
@@ -87,7 +100,7 @@ impl<'a> RouteEvaluator<'a> {
                 }
                 arrival + tw.waiting_time(arrival)
             } else {
-                arrival
+                ready_at
             };
 
             let departure = service_start + customer.service_duration();
@@ -111,6 +124,19 @@ impl<'a> RouteEvaluator<'a> {
         route.set_total_distance(total_distance);
         route.set_total_duration(total_duration);
         route.set_lateness(total_lateness, lateness_cost);
+        route.set_rest(rest_at);
+        // No placement of the break keeps the windows and the break's own: if no hard window is
+        // reported closed on the timing above, the break is what cannot be placed.
+        if rest.is_some()
+            && placed.is_none()
+            && !violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationType::TimeWindowViolated { .. }))
+        {
+            violations.push(Violation::new(ViolationType::BreakNotPlaceable {
+                route_index: 0,
+            }));
+        }
 
         // Check capacity
         if current_load > self.vehicle.capacity() {

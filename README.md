@@ -387,6 +387,24 @@ solve_vrp({ depot: { x: 0, y: 0 }, customers,
             method: "savings" });
 ```
 
+**A driver's rest: `break` on a vehicle.** `break: { earliest, latest, duration }` makes every
+route of the vehicle contain a rest of `duration` that starts at some time in `[earliest, latest]`
+(the clock above), at the stop the vehicle has just reached and before that stop's service -- so it
+can overlap the wait for a time window to open. A route that is back at the depot by `earliest` needs
+none. The rest costs nothing itself; it lengthens the route, which `max_duration` and the windows
+after it feel, and it is placed where the route finishes earliest. Every method keeps it as it
+keeps `max_duration` (one test of a route's feasibility), and `check_vrp_solution` reports a route
+that cannot place it as `break_not_placeable`. At most one break per vehicle, and a fleet of several kinds has
+the same break on every kind (or none): a route is timed once and then given to the kind that carries it
+cheapest, so kinds with different breaks are refused (`invalid_option`, `vehicles[].break`). With soft windows the break is placed
+to finish the route earliest, and the lateness follows. Left out (or `null`), no break.
+
+```js
+solve_vrp({ depot: { x: 0, y: 0 }, customers,
+            vehicles: [{ capacity: 100, max_duration: 600, break: { earliest: 240, latest: 300, duration: 30 } }],
+            method: "savings" });
+```
+
 **How many routes a plan may use: `config.max_vehicles`.** The length of
 `vehicles` is not that number. For `"savings"`, `"ga"` and `"alns"` a
 single-entry list is how a caller states one capacity, which is why the
@@ -622,6 +640,7 @@ request and plan name them):
 | `time_window_violated` | `route`, `customer`, `arrival`, `due` | The route reaches the customer after its window closes |
 | `max_distance_exceeded` | `route`, `distance`, `max_distance` | The route is longer than its vehicle's `max_distance` |
 | `max_duration_exceeded` | `route`, `duration`, `max_duration` | The route returns later than its vehicle's `max_duration` |
+| `break_not_placeable` | `route` | The vehicle's `break` cannot be placed on the route: it is still out when the break is due and no stop lets it start by its `latest` without closing a hard time window behind it |
 | `unknown_customer` | `route`, `customer` | The route visits an id no customer has |
 | `customer_visited_twice` | `route`, `customer` | The customer is visited a second time, on this route |
 | `customer_missing` | `customer` | The customer is on no route and not in `unassigned` |

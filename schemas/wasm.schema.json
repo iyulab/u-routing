@@ -41,6 +41,33 @@
       ],
       "type": "object"
     },
+    "InputBreak": {
+      "additionalProperties": false,
+      "description": "The rest of a vehicle's driver ([`InputVehicle::rest`]).",
+      "properties": {
+        "duration": {
+          "description": "How long the break takes (`> 0`).",
+          "format": "double",
+          "type": "number"
+        },
+        "earliest": {
+          "description": "The first time the break may start (`>= 0`).",
+          "format": "double",
+          "type": "number"
+        },
+        "latest": {
+          "description": "The last time the break may start (`>= earliest`).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "earliest",
+        "latest",
+        "duration"
+      ],
+      "type": "object"
+    },
     "InputConfig": {
       "additionalProperties": false,
       "description": "Optional solver configuration.\n\nFields are shared across methods; each method uses only the relevant ones.\nCounts and the seed are whole numbers read signed, so a negative one is\nrefused by the range check like a too-small one ([`Whole`]).\nBesides the per-method parameters, it carries limits the solver has to\nrespect whichever method runs -- `max_vehicles` is one.",
@@ -287,6 +314,17 @@
     "InputVehicle": {
       "additionalProperties": false,
       "properties": {
+        "break": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputBreak"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A rest the driver takes during every route of this vehicle: `duration` long, starting at\nsome time in `[earliest, latest]` (on the clock that starts at 0) at the stop the vehicle\nhas just reached, before that stop's service -- so it can overlap the wait for a time window\nto open. A route has to contain it unless the vehicle is back at the depot by `earliest`.\nIt is placed where the route finishes earliest and costs nothing itself: it makes the route\nlonger, which `max_duration` and the time windows after it feel. A route that cannot place\nit is not allowed (`break_not_placeable` in a plan check). Absent or `null`: no break."
+        },
         "capacity": {
           "default": 2147483647.0,
           "format": "double",
@@ -498,6 +536,26 @@
             "route",
             "duration",
             "max_duration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The vehicle's `break` cannot be placed on the route: the vehicle is still out when the break\nis due and no stop lets it start by its `latest` without closing a hard time window behind it.",
+          "properties": {
+            "code": {
+              "const": "break_not_placeable",
+              "type": "string"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route"
           ],
           "type": "object"
         },

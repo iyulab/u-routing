@@ -357,6 +357,7 @@ proptest! {
         let limits = RouteLimits {
             max_distance: Some(reach * distance_share),
             max_duration: Some((reach + service) * duration_share),
+            ..RouteLimits::NONE
         };
         let capacity = capacity_for(&customers, 15);
         let vehicle = Vehicle::new(0, capacity)
