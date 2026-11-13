@@ -1,6 +1,7 @@
 //! Measures the pickup-delivery constructions on the Li & Lim PDPTW instances through the Rust
-//! API: nearest neighbour, savings, and savings followed by pair relocation, each judged by
-//! `check_solution`.
+//! API: nearest neighbour, savings, savings followed by pair relocation, and an adaptive large
+//! neighbourhood search (every route is worth `ROUTE_COST` in distance, so vehicles come first
+//! as in the benchmark's objective), each judged by `check_solution`.
 //!
 //! The instances are not in this repository. Download the 100-task set (SINTEF's "Li & Lim
 //! benchmark" page, `pdp_100.zip`) and point the harness at the directory holding `lc101.txt` …:
@@ -11,7 +12,9 @@
 //!
 //! `bks.csv` (optional) has a header and lines `instance,mark,vehicles,distance,…` -- the best
 //! known results under the usual hierarchical objective (vehicles first, then distance); the gap
-//! columns are against it. `methods` is a comma list of `nn,savings,savings+pairs` (default all).
+//! columns are against it. `methods` is a comma list of `nn,savings,savings+pairs,alns` (default
+//! the first three; `alns` runs `ALNS_ITERATIONS` iterations, 200 by default). A fourth argument
+//! keeps only the instances whose name starts with it.
 //!
 //! Instance format: one header line (vehicles, capacity, speed), then one row per node (id, x, y,
 //! demand, ready, due, service, pickup sibling, delivery sibling); node 0 is the depot, a pickup
@@ -22,11 +25,18 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use u_metaheur::alns::{AlnsConfig, AlnsRunner};
+use u_routing::alns::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemoval};
+use u_routing::alns::repair::{GreedyInsertion, RegretInsertion};
+use u_routing::alns::{Destroy, Repair, RoutingAlnsProblem};
 use u_routing::constructive::{clarke_wright_savings, nearest_neighbor_tw};
 use u_routing::distance::DistanceMatrix;
-use u_routing::evaluation::{check_solution, Fleet};
+use u_routing::evaluation::{check_solution, Fleet, RouteEvaluator, RouteLimits};
 use u_routing::local_search::pair_relocate_improve;
 use u_routing::models::{Customer, Solution, TimeWindow, Vehicle};
+
+/// What opening a route is worth in distance: a route outweighs any detour on these maps.
+const ROUTE_COST: f64 = 1000.0;
 
 struct Instance {
     name: String,
@@ -82,6 +92,7 @@ fn main() {
         .next()
         .expect("usage: pdptw <instances> [bks.csv] [methods]");
     let bks_path = args.next().filter(|p| !p.is_empty());
+    let only = args_filter();
     let methods: Vec<String> = args
         .next()
         .map(|m| m.split(',').map(str::to_string).collect())
@@ -110,6 +121,11 @@ fn main() {
         .filter(|p| p.extension().is_some_and(|e| e == "txt"))
         .collect();
     files.sort();
+    files.retain(|f| {
+        f.file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| only.as_deref().is_none_or(|prefix| n.starts_with(prefix)))
+    });
 
     println!("instance,method,routes,distance,unassigned,violations,ms,bks_vehicles,bks_distance,gap_pct");
     for file in files {
@@ -140,6 +156,7 @@ fn main() {
                     let s = clarke_wright_savings(&i.customers, &dm, &i.vehicle);
                     pair_relocate_improve(&s, &i.customers, &dm, &i.vehicle)
                 }
+                "alns" => alns(&i, &dm),
                 other => panic!("unknown method {other}"),
             };
             let ms = start.elapsed().as_millis();
@@ -167,4 +184,57 @@ fn main() {
             );
         }
     }
+}
+
+/// The instance-name prefix given as the fourth argument, if any.
+fn args_filter() -> Option<String> {
+    std::env::args().nth(4).filter(|p| !p.is_empty())
+}
+
+/// An adaptive large neighbourhood search from the problem's own seed, with every destroy and
+/// repair operator, the vehicle's capacity and duration limit, and a price per route.
+fn alns(i: &Instance, dm: &DistanceMatrix) -> Solution {
+    let iterations: usize = std::env::var("ALNS_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
+    let limits = RouteLimits::of(&i.vehicle);
+    let capacity = i.vehicle.capacity();
+    let problem = RoutingAlnsProblem::new(i.customers.clone(), dm.clone(), capacity)
+        .with_route_cost(ROUTE_COST)
+        .with_limits(limits);
+    let destroy = vec![
+        Destroy::Random(RandomRemoval),
+        Destroy::Worst(WorstRemoval::new(dm.clone())),
+        Destroy::Shaw(ShawRemoval::new(dm.clone(), i.customers.clone())),
+        Destroy::Route(RouteRemoval),
+    ];
+    let repair = vec![
+        Repair::Greedy(
+            GreedyInsertion::new(dm.clone(), i.customers.clone(), capacity)
+                .with_limits(limits)
+                .with_route_cost(ROUTE_COST),
+        ),
+        Repair::Regret(
+            RegretInsertion::new(dm.clone(), i.customers.clone(), capacity)
+                .with_limits(limits)
+                .with_route_cost(ROUTE_COST),
+        ),
+    ];
+    let config = AlnsConfig::default()
+        .with_max_iterations(iterations)
+        .with_seed(1);
+    let best = AlnsRunner::run(&problem, &destroy, &repair, &config)
+        .expect("a run")
+        .best;
+    let evaluator = RouteEvaluator::new(&i.customers, dm, &i.vehicle);
+    let mut solution = Solution::new();
+    for route in best.routes().iter().filter(|r| !r.is_empty()) {
+        solution.add_route(evaluator.build_route(route).0);
+    }
+    for &u in best.unassigned() {
+        solution.add_unassigned(u);
+    }
+    solution.price(|_| &i.vehicle);
+    solution
 }

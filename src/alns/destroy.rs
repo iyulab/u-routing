@@ -270,14 +270,15 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
     }
 }
 
-/// Removes a customer from the solution's routes.
-fn remove_customer(sol: &mut RoutingSolution, customer_id: usize) {
+/// Removes a customer from the solution's routes, returning whether it was in one.
+pub(super) fn remove_customer(sol: &mut RoutingSolution, customer_id: usize) -> bool {
     for route in sol.routes_mut() {
         if let Some(pos) = route.iter().position(|&c| c == customer_id) {
             route.remove(pos);
-            return;
+            return true;
         }
     }
+    false
 }
 
 /// Removes every customer of one route, chosen uniformly among the routes

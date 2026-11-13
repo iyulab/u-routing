@@ -16,10 +16,14 @@ use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{effective_cost, has_soft_windows};
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
-use crate::fleet::{insertion_on_time, soft_insertion_cost};
+use crate::evaluation::{route_checks_needed, route_feasible, route_peak_load, RouteLimits};
+use crate::fleet::{
+    cheapest_insertion, cheapest_pair_insertion, insertion_on_time, soft_insertion_cost, units_of,
+    Unit,
+};
 use crate::models::Customer;
 
+use super::destroy::remove_customer;
 use super::solution_repr::RoutingSolution;
 
 /// Whether a route of this one customer reaches it on time and within the
@@ -143,6 +147,16 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
     }
 
     fn repair<R: Rng>(&self, solution: &RoutingSolution, _rng: &mut R) -> RoutingSolution {
+        if has_pairs(&self.customers) {
+            let world = PairWorld {
+                distances: &self.distances,
+                customers: &self.customers,
+                capacity: self.capacity,
+                limits: &self.limits,
+                route_cost: self.route_cost,
+            };
+            return repair_with_pairs(solution, &world, None);
+        }
         let mut sol = solution.clone();
         let mut unassigned = std::mem::take(sol.unassigned_mut());
 
@@ -211,6 +225,176 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
 
 /// The route index that stands for a new route in a candidate.
 const NEW_ROUTE: usize = usize::MAX;
+
+// ---------------------------------------------------------------------------
+// Pickup-delivery pairs
+// ---------------------------------------------------------------------------
+//
+// Either half of a pair alone is not a route, so with pairs the unit a repair places is the
+// pair, the pickup before its delivery, and a half a destroy operator left in a route is taken
+// out with its other half first. The same two orders -- cheapest first, largest regret first --
+// choose among the units.
+
+/// Whether any customer is part of a pickup-delivery pair.
+fn has_pairs(customers: &[Customer]) -> bool {
+    customers.iter().any(|c| c.delivery_index().is_some())
+}
+
+/// What a repair of an instance with pairs reads.
+struct PairWorld<'a> {
+    distances: &'a DistanceMatrix,
+    customers: &'a [Customer],
+    capacity: i32,
+    limits: &'a RouteLimits,
+    route_cost: f64,
+}
+
+/// What opening a route for the pair costs (`route_cost` plus its length), or `None` when even
+/// that route is not allowed: the vehicle cannot carry it, or a window or limit is broken.
+fn new_pair_route_cost(pickup: usize, delivery: usize, world: &PairWorld<'_>) -> Option<f64> {
+    let route = [pickup, delivery];
+    if route_peak_load(&route, world.customers) > world.capacity {
+        return None;
+    }
+    let cost = effective_cost(&route, 0, world.distances, world.customers, world.limits);
+    cost.is_finite().then_some(world.route_cost + cost)
+}
+
+/// Every way to place a unit, as `(route, first_position, second_position, cost_increase)`
+/// sorted by cost: the cheapest position in each route that can take it, and a new route. A
+/// unit alone has equal positions.
+fn unit_options(
+    unit: Unit,
+    routes: &[Vec<usize>],
+    world: &PairWorld<'_>,
+) -> Vec<(usize, usize, usize, f64)> {
+    let mut options = Vec::new();
+    for (ri, route) in routes.iter().enumerate() {
+        let single = std::slice::from_ref(route);
+        let found = match unit {
+            Unit::One(c) => cheapest_insertion(
+                single,
+                |_| world.capacity,
+                |_| *world.limits,
+                c,
+                world.distances,
+                world.customers,
+            )
+            .map(|(_, pos, cost)| (ri, pos, pos, cost)),
+            Unit::Pair { pickup, delivery } => cheapest_pair_insertion(
+                single,
+                |_| world.capacity,
+                |_| *world.limits,
+                pickup,
+                delivery,
+                world.distances,
+                world.customers,
+            )
+            .map(|(_, i, j, cost)| (ri, i, j, cost)),
+        };
+        options.extend(found);
+    }
+    let own_route = match unit {
+        Unit::One(c) => new_route_cost(
+            c,
+            world.distances,
+            world.customers,
+            world.limits,
+            world.route_cost,
+        ),
+        Unit::Pair { pickup, delivery } => new_pair_route_cost(pickup, delivery, world),
+    };
+    options.extend(own_route.map(|cost| (NEW_ROUTE, 0, 0, cost)));
+    options.sort_by(|a, b| {
+        a.3.partial_cmp(&b.3)
+            .expect("insertion costs should not be NaN")
+    });
+    options
+}
+
+/// Repairs `solution` of an instance with pickup-delivery pairs: the pairs a destroy operator
+/// split are completed (the half still in a route comes out), then the units are placed one at a
+/// time -- the cheapest first (`regret` `None`) or the one with the largest regret-`k` first --
+/// at the cheapest position that keeps the route within the vehicle's capacity along the way and
+/// its windows and limits. A unit that fits nowhere, a new route included, stays unassigned.
+fn repair_with_pairs(
+    solution: &RoutingSolution,
+    world: &PairWorld<'_>,
+    regret: Option<usize>,
+) -> RoutingSolution {
+    let mut sol = solution.clone();
+    let mut unassigned = std::mem::take(sol.unassigned_mut());
+
+    // A pair is repaired whole: take the partner of a removed half out of its route.
+    for c in unassigned.clone() {
+        let partner = world.customers[c]
+            .delivery_index()
+            .or(world.customers[c].pickup_index());
+        if let Some(partner) = partner {
+            if !unassigned.contains(&partner) && remove_customer(&mut sol, partner) {
+                unassigned.push(partner);
+            }
+        }
+    }
+    sol.remove_empty_routes();
+
+    let mut units = units_of(&unassigned, world.customers);
+    while !units.is_empty() {
+        let mut chosen: Option<(usize, (usize, usize, usize, f64))> = None;
+        let mut chosen_score = f64::NEG_INFINITY;
+        for (ui, &unit) in units.iter().enumerate() {
+            let options = unit_options(unit, sol.routes(), world);
+            let Some(&best) = options.first() else {
+                continue;
+            };
+            let score = match regret {
+                // The cheapest first: the lower the cost, the higher the score.
+                None => -best.3,
+                Some(k) => {
+                    let sum: f64 = options
+                        .iter()
+                        .skip(1)
+                        .take(k - 1)
+                        .map(|o| o.3 - best.3)
+                        .sum();
+                    // With fewer than k alternatives the unit has little choice: place it early.
+                    if options.len() < k {
+                        sum + f64::MAX / 2.0
+                    } else {
+                        sum
+                    }
+                }
+            };
+            if score > chosen_score {
+                chosen_score = score;
+                chosen = Some((ui, best));
+            }
+        }
+        match chosen {
+            Some((ui, (route, i, j, _))) => match units.remove(ui) {
+                Unit::One(c) => place(&mut sol, route, i, c),
+                Unit::Pair { pickup, delivery } => {
+                    if route == NEW_ROUTE {
+                        sol.routes_mut().push(vec![pickup, delivery]);
+                    } else {
+                        // The delivery first: `j` counts the route as it stands.
+                        sol.routes_mut()[route].insert(j, delivery);
+                        sol.routes_mut()[route].insert(i, pickup);
+                    }
+                }
+            },
+            None => {
+                // Nothing fits, a route of its own included: those customers stay out.
+                for unit in units.drain(..) {
+                    sol.unassigned_mut().extend(unit.customers());
+                }
+            }
+        }
+    }
+
+    sol.recalculate(world.distances, world.customers);
+    sol
+}
 
 /// Puts `cid` at `pos` of route `route`, or on a new route of its own.
 fn place(sol: &mut RoutingSolution, route: usize, pos: usize, cid: usize) {
@@ -370,6 +554,16 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
     }
 
     fn repair<R: Rng>(&self, solution: &RoutingSolution, _rng: &mut R) -> RoutingSolution {
+        if has_pairs(&self.customers) {
+            let world = PairWorld {
+                distances: &self.distances,
+                customers: &self.customers,
+                capacity: self.capacity,
+                limits: &self.limits,
+                route_cost: self.route_cost,
+            };
+            return repair_with_pairs(solution, &world, Some(self.k));
+        }
         let mut sol = solution.clone();
         let mut unassigned = std::mem::take(sol.unassigned_mut());
 
@@ -505,5 +699,162 @@ mod tests {
         let (ri, pos, _cost) = result.expect("should find insertion");
         assert_eq!(ri, 0);
         assert_eq!(pos, 1); // between 1 and 3
+    }
+    // -- pickup-delivery pairs ---------------------------------------------
+
+    use crate::models::TimeWindow;
+
+    /// Three pairs on a line (and one off it): 1 -> 2, 3 -> 4 nested inside it, 5 -> 6.
+    fn pairs() -> (Vec<Customer>, DistanceMatrix) {
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 5, 0.0).pickup_of(2),
+            Customer::new(2, 3.0, 0.0, 0, 0.0).delivery_of(1),
+            Customer::new(3, 1.5, 0.0, 5, 0.0).pickup_of(4),
+            Customer::new(4, 2.5, 0.0, 0, 0.0).delivery_of(3),
+            Customer::new(5, 0.0, 2.0, 5, 0.0).pickup_of(6),
+            Customer::new(6, 0.0, 3.0, 0, 0.0).delivery_of(5),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        (customers, dm)
+    }
+
+    /// Every route allowed, every pair whole in one route with the pickup first, and the vehicle
+    /// within `capacity` along each route.
+    fn assert_pairs_kept(
+        sol: &RoutingSolution,
+        customers: &[Customer],
+        dm: &DistanceMatrix,
+        capacity: i32,
+    ) {
+        for route in sol.routes() {
+            assert!(
+                route_feasible(route, 0, dm, customers, &RouteLimits::NONE),
+                "{route:?}"
+            );
+            assert!(route_peak_load(route, customers) <= capacity, "{route:?}");
+        }
+        for pickup in (1..customers.len()).filter(|&c| customers[c].delivery_index().is_some()) {
+            let delivery = customers[pickup].delivery_index().expect("a pickup");
+            let in_route = |c: usize| sol.routes().iter().position(|r| r.contains(&c));
+            let (a, b) = (in_route(pickup), in_route(delivery));
+            assert_eq!(a.is_some(), b.is_some(), "a pair is served whole: {sol:?}");
+            if let (Some(a), Some(b)) = (a, b) {
+                assert_eq!(a, b, "{sol:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pair_instances_place_a_whole_unassigned_pair() {
+        let (cust, dm) = pairs();
+        for greedy in [true, false] {
+            let sol = RoutingSolution::new(vec![vec![1, 2]], vec![3, 4], &cust, &dm);
+            let mut rng = u_numflow::random::create_rng(1);
+            let repaired = if greedy {
+                GreedyInsertion::new(dm.clone(), cust.clone(), 10).repair(&sol, &mut rng)
+            } else {
+                RegretInsertion::new(dm.clone(), cust.clone(), 10).repair(&sol, &mut rng)
+            };
+            assert!(repaired.unassigned().is_empty(), "{repaired:?}");
+            let total: usize = repaired.routes().iter().map(Vec::len).sum();
+            assert_eq!(total, 4);
+            assert_pairs_kept(&repaired, &cust, &dm, 10);
+        }
+    }
+
+    #[test]
+    fn a_half_left_in_a_route_is_taken_out_with_its_partner_and_returns() {
+        let (cust, dm) = pairs();
+        // The pickup 3 was removed; its delivery 4 is still in the route.
+        let sol = RoutingSolution::new(vec![vec![1, 4, 2, 5, 6]], vec![3], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(1);
+        for repaired in [
+            GreedyInsertion::new(dm.clone(), cust.clone(), 10).repair(&sol, &mut rng),
+            RegretInsertion::new(dm.clone(), cust.clone(), 10).repair(&sol, &mut rng),
+        ] {
+            assert!(repaired.unassigned().is_empty(), "{repaired:?}");
+            let total: usize = repaired.routes().iter().map(Vec::len).sum();
+            assert_eq!(total, 6);
+            assert_pairs_kept(&repaired, &cust, &dm, 10);
+        }
+    }
+
+    #[test]
+    fn a_pair_is_not_nested_where_the_vehicle_cannot_carry_both() {
+        let (cust, dm) = pairs();
+        // Nested in 1 -> 2 is the cheapest placement of 3 -> 4, but it carries 10 on a vehicle
+        // of 5; the pairs have to follow one another or take another route.
+        let sol = RoutingSolution::new(vec![vec![1, 2]], vec![3, 4], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(1);
+        for repaired in [
+            GreedyInsertion::new(dm.clone(), cust.clone(), 5).repair(&sol, &mut rng),
+            RegretInsertion::new(dm.clone(), cust.clone(), 5).repair(&sol, &mut rng),
+        ] {
+            assert!(repaired.unassigned().is_empty(), "{repaired:?}");
+            assert_pairs_kept(&repaired, &cust, &dm, 5);
+        }
+    }
+
+    #[test]
+    fn a_pair_no_route_can_serve_stays_unassigned_whole() {
+        let (mut cust, _) = pairs();
+        // The delivery of 5 -> 6 closes before the vehicle can get there.
+        cust[6] = Customer::new(6, 0.0, 3.0, 0, 0.0)
+            .delivery_of(5)
+            .with_time_window(TimeWindow::new(0.0, 0.5).expect("window"));
+        let dm = DistanceMatrix::from_customers(&cust);
+        let sol = RoutingSolution::new(vec![vec![1, 2]], vec![5, 6], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(1);
+        let repaired = GreedyInsertion::new(dm.clone(), cust.clone(), 10).repair(&sol, &mut rng);
+        let mut left = repaired.unassigned().to_vec();
+        left.sort_unstable();
+        assert_eq!(left, vec![5, 6]);
+        assert_eq!(repaired.routes(), &[vec![1, 2]]);
+    }
+
+    #[test]
+    fn a_pair_the_vehicle_cannot_carry_even_alone_stays_unassigned() {
+        let (cust, dm) = pairs();
+        // The pickup loads 5 on a vehicle of 4.
+        let sol = RoutingSolution::new(vec![], vec![1, 2], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(1);
+        let repaired = GreedyInsertion::new(dm.clone(), cust.clone(), 4).repair(&sol, &mut rng);
+        let mut left = repaired.unassigned().to_vec();
+        left.sort_unstable();
+        assert_eq!(left, vec![1, 2]);
+        assert_eq!(repaired.num_routes(), 0);
+    }
+
+    #[test]
+    fn a_new_route_is_priced_and_an_empty_one_is_no_way_round_the_price() {
+        let (cust, dm) = pairs();
+        // A route costs 1000 to open. Placing 1 -> 2 in the route of 5 -> 6 adds far less than
+        // that, and the empty route left by a destroy operator is no cheaper way to open one.
+        let sol = RoutingSolution::new(vec![vec![], vec![5, 6]], vec![1, 2], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(1);
+        for repaired in [
+            GreedyInsertion::new(dm.clone(), cust.clone(), 10)
+                .with_route_cost(1000.0)
+                .repair(&sol, &mut rng),
+            RegretInsertion::new(dm.clone(), cust.clone(), 10)
+                .with_route_cost(1000.0)
+                .repair(&sol, &mut rng),
+        ] {
+            assert_eq!(repaired.num_routes(), 1, "{repaired:?}");
+            assert!(repaired.unassigned().is_empty());
+            assert_pairs_kept(&repaired, &cust, &dm, 10);
+        }
+    }
+
+    #[test]
+    fn instances_without_pairs_repair_as_before() {
+        let (cust, dm) = setup();
+        let sol = RoutingSolution::new(vec![vec![1]], vec![2, 3, 4], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(42);
+        let repaired = GreedyInsertion::new(dm.clone(), cust.clone(), 100).repair(&sol, &mut rng);
+        // One route along the line, in either direction: 0 -> 4 -> 0.
+        assert_eq!(repaired.num_routes(), 1);
+        assert!((repaired.total_distance() - 8.0).abs() < 1e-10);
     }
 }

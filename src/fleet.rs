@@ -206,14 +206,14 @@ pub(crate) fn cheapest_pair_insertion(
 /// What is left to place after a route is emptied: a customer on its own, or a pickup-delivery
 /// pair, which moves as one.
 #[derive(Debug, Clone, Copy)]
-enum Unit {
+pub(crate) enum Unit {
     One(usize),
     Pair { pickup: usize, delivery: usize },
 }
 
 impl Unit {
     /// The customers of the unit.
-    fn customers(self) -> impl Iterator<Item = usize> {
+    pub(crate) fn customers(self) -> impl Iterator<Item = usize> {
         let (a, b) = match self {
             Unit::One(c) => (c, None),
             Unit::Pair { pickup, delivery } => (pickup, Some(delivery)),
@@ -224,7 +224,7 @@ impl Unit {
 
 /// The units of the customers of an emptied route: a pickup with its delivery when both are
 /// there, every other customer alone.
-fn units_of(pending: &[usize], customers: &[Customer]) -> Vec<Unit> {
+pub(crate) fn units_of(pending: &[usize], customers: &[Customer]) -> Vec<Unit> {
     let has = |c: usize| pending.contains(&c);
     pending
         .iter()

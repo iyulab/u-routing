@@ -247,4 +247,59 @@ mod tests {
             );
         }
     }
+    /// A run on an instance of pickup-delivery pairs keeps every pair whole and in order, every
+    /// route within the vehicle's load, and ends no worse than the seed.
+    #[test]
+    fn a_run_on_pairs_serves_them_whole_and_in_order() {
+        use crate::alns::{Destroy, Repair};
+        use crate::evaluation::{route_feasible, route_peak_load};
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for k in 0..8_usize {
+            let a = std::f64::consts::TAU * k as f64 / 8.0;
+            let (pickup, delivery) = (1 + 2 * k, 2 + 2 * k);
+            customers.push(
+                Customer::new(pickup, 10.0 * a.cos(), 10.0 * a.sin(), 4, 0.0).pickup_of(delivery),
+            );
+            customers.push(
+                Customer::new(delivery, 20.0 * a.cos(), 20.0 * a.sin(), 0, 0.0).delivery_of(pickup),
+            );
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let capacity = 8;
+        let problem = RoutingAlnsProblem::new(customers.clone(), dm.clone(), capacity);
+        let destroy_ops = vec![
+            Destroy::Random(RandomRemoval),
+            Destroy::Worst(WorstRemoval::new(dm.clone())),
+            Destroy::Shaw(ShawRemoval::new(dm.clone(), customers.clone())),
+            Destroy::Route(crate::alns::destroy::RouteRemoval),
+        ];
+        let repair_ops = vec![
+            Repair::Greedy(GreedyInsertion::new(
+                dm.clone(),
+                customers.clone(),
+                capacity,
+            )),
+            Repair::Regret(RegretInsertion::new(
+                dm.clone(),
+                customers.clone(),
+                capacity,
+            )),
+        ];
+        let config = AlnsConfig::default().with_max_iterations(300).with_seed(7);
+        let seed = problem.initial_solution(&mut u_numflow::random::create_rng(7));
+        let result = AlnsRunner::run(&problem, &destroy_ops, &repair_ops, &config).unwrap();
+
+        assert!(result.best.unassigned().is_empty(), "{:?}", result.best);
+        assert!(result.best_cost <= problem.cost(&seed) + 1e-9);
+        let mut served = 0;
+        for route in result.best.routes() {
+            assert!(
+                route_feasible(route, 0, &dm, &customers, &RouteLimits::NONE),
+                "{route:?}"
+            );
+            assert!(route_peak_load(route, &customers) <= capacity, "{route:?}");
+            served += route.len();
+        }
+        assert_eq!(served, 16);
+    }
 }
