@@ -8,6 +8,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- Pickup-delivery pairs, in the Rust API (the request does not take them yet). `Customer::pickup_of(delivery)` and `Customer::delivery_of(pickup)` name the two rows of a pair: the pickup's `demand` is loaded at its stop and unloaded at the delivery's. A route's load is then a profile that rises and falls along it, and what a vehicle's capacity has to cover is its highest point (`evaluation::route_peak_load`; without pairs it is the sum of the demands, as before). `RouteEvaluator::build_route` reports the load after each stop and a delivery visited before its pickup, `check_solution` reports a pair that is not on one route, and `route_feasible` / `route_eval` keep every pair whole and in order (`evaluation::pairs_ordered`), so every search that asks them -- the intra- and inter-route moves, route limiting, balancing -- leaves a pair intact. A request without pairs is answered bit for bit as before.
+- `nearest_neighbor`, `nearest_neighbor_tw`, `clarke_wright_savings` and `construct_by_depot` build routes of pairs (a pair goes to one depot), and `local_search::pair_relocate_improve` moves both stops of a pair together to the cheapest placement. On the Li & Lim pickup-and-delivery instances of 100 tasks (example `pdptw`), savings followed by pair relocation is on average 22 % above the best known distances and 3.6 vehicles over them, with no plan broken.
+- The plan checker's codes `pair_order` (`route`, `pickup`, `delivery`) and `pair_split` (`pickup`, `delivery`), and the .NET records `PlanViolation.PairOrder` / `PairSplit`; a response carries them once the request can state pairs.
+
+### Changed
+
+- **Breaking** (Rust API): `ViolationType` gains the variants `PairOrder` and `PairSplit`; an exhaustive `match` over it needs arms. In .NET `PlanViolation` gains the records `PairOrder` and `PairSplit`.
+
 ## [0.28.0] - 2026-11-13
 
 The .NET client is `URouting` 0.25.0.
