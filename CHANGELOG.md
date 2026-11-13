@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-13
+
+The .NET client is `URouting` 0.25.0.
+
 ### Added
 
 - Soft ends of time windows, in the Rust model (every method honours it, and the WebAssembly, C ABI and .NET requests carry it): `Customer::with_lateness_penalty(penalty)` lets a vehicle arrive after a customer's `due`, each unit
