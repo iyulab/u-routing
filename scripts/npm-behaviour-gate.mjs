@@ -134,4 +134,49 @@ try {
 ok(none && none.code === 'parameter_out_of_range' && none.parameter === 'depot' && none.index === 0,
    'a depot that is none: ' + (none ? none.code + ' ' + none.parameter : 'accepted'))
 
+// Pickups and deliveries: a pair rides one route, pickup first, and the vehicle's capacity is
+// measured along the route -- two pairs of 3 do not fit a vehicle of 4 together (6) but go one after
+// the other (3). The plan check agrees, names a split or reversed pair, and what cannot plan pairs
+// is refused by name.
+const pairs = [
+  { id: 1, x: 10, y: 0, demand: 3, delivery: 11 }, { id: 2, x: 20, y: 0, demand: 3, delivery: 12 },
+  { id: 11, x: 12, y: 0 }, { id: 12, x: 22, y: 0 },
+]
+const pairProblem = (method, vehicles) => ({ depots: [depot], customers: pairs, vehicles, method, config: base(method) })
+for (const method of ['nn', 'savings', 'alns']) {
+  const problem = pairProblem(method, [{ capacity: 4 }])
+  const out = m.solve_vrp(problem)
+  ok(out.unassigned.length === 0, method + ': pairs left out ' + JSON.stringify(out.unassigned))
+  out.routes.forEach((route, i) => {
+    for (const [pickup, delivery] of [[1, 11], [2, 12]]) {
+      const at = route.indexOf(pickup)
+      ok((at === -1 && route.indexOf(delivery) === -1) || (at !== -1 && route.indexOf(delivery) > at),
+        method + ': pair ' + pickup + '->' + delivery + ' on ' + JSON.stringify(route))
+    }
+    ok(out.route_summaries[i].load <= 4, method + ': route ' + i + ' of load ' + out.route_summaries[i].load)
+  })
+  const verdict = m.check_vrp_solution(problem, { routes: out.routes, unassigned: out.unassigned })
+  ok(verdict.feasible, method + ': pairs checked ' + JSON.stringify(verdict.violations))
+}
+// "nn" drives one route per vehicle of the list, so it takes two entries of one depot; the others want one kind per depot.
+const twoVehicles = [{ capacity: 8 }, { capacity: 8 }]
+const parted = m.check_vrp_solution(pairProblem('nn', twoVehicles),
+  { routes: [[1, 2, 12], [11]], route_vehicles: [0, 1], unassigned: [] })
+ok(parted.violations.some((v) => v.code === 'pair_split' && v.pickup === 1 && v.delivery === 11),
+  'a pair on two routes: ' + JSON.stringify(parted.violations))
+const reversed = m.check_vrp_solution(pairProblem('nn', twoVehicles),
+  { routes: [[11, 1, 2, 12]], unassigned: [] })
+ok(reversed.violations.some((v) => v.code === 'pair_order' && v.pickup === 1 && v.delivery === 11),
+  'a delivery before its pickup: ' + JSON.stringify(reversed.violations))
+let unpaired = null
+try { m.solve_vrp(pairProblem('ga', [{ capacity: 4 }])) } catch (e) { unpaired = e }
+ok(unpaired && unpaired.code === 'invalid_option' && unpaired.parameter === 'method',
+  'pairs with ga: ' + (unpaired ? unpaired.code + ' ' + unpaired.parameter : 'accepted'))
+let ghost = null
+try {
+  m.solve_vrp({ depots: [depot], customers: [{ id: 1, x: 1, y: 0, demand: 1, delivery: 9 }], vehicles: [{ capacity: 4 }], method: 'nn' })
+} catch (e) { ghost = e }
+ok(ghost && ghost.code === 'invalid_option' && ghost.parameter === 'customers[0].delivery',
+  'a delivery that is none: ' + (ghost ? ghost.code + ' ' + ghost.parameter : 'accepted'))
+
 console.log(`behaviour gate: ok (${checks} checks)`)

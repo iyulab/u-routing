@@ -26,8 +26,11 @@ public class RequestContractTests
         [
             new Customer(1, 10, 5, Demand: 10, ServiceTime: 1, TimeWindow: new(0, 500)),
             new Customer(2, -4, 8, Demand: 15, ServiceTime: 1, TimeWindow: new(0, 500)),
-            new Customer(3, 6, -9, Demand: 20, ServiceTime: 2, TimeWindow: new(0, 500), LatenessPenalty: 1.5),
-            new Customer(4, -7, -6, Demand: 5, ServiceTime: 2),
+            // A pair (customer 3 is loaded for customer 4) under the methods that plan pairs; the
+            // genetic algorithm refuses them.
+            new Customer(3, 6, -9, Demand: 20, ServiceTime: 2, TimeWindow: new(0, 500), LatenessPenalty: 1.5,
+                Delivery: method == RoutingMethod.Genetic ? null : 4),
+            new Customer(4, -7, -6, Demand: method == RoutingMethod.Genetic ? 5 : 0, ServiceTime: 2),
         ])
     {
         Vehicles = method == RoutingMethod.NearestNeighbor

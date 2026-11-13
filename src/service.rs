@@ -495,8 +495,8 @@ pub(crate) struct InputCustomer {
     /// loaded here. The pair goes on one route, this customer first; `demand` is what the pair
     /// carries between the two stops, and the delivery's own `demand` is 0 (or absent). A
     /// delivery is named by one pickup only and is not a pickup itself. Absent or `null`: an
-    /// ordinary customer. Pairs are planned by the `"nn"`, `"savings"` and `"alns"` methods, with
-    /// one kind of vehicle per depot.
+    /// ordinary customer. Pairs are planned by the `"nn"`, `"savings"` and `"alns"` methods; the
+    /// last two with one kind of vehicle per depot.
     #[serde(default, deserialize_with = "optional_whole")]
     #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
     delivery: Option<i128>,
@@ -1450,7 +1450,8 @@ const MAX_DEPOT_ROUNDS: usize = 8;
 ///   plan pairs.
 /// - A fleet of several kinds at one depot is brought to the plan route by route afterwards, by
 ///   cutting and refilling routes a customer at a time, which parts pairs. One kind of vehicle per
-///   depot (any count, any number of depots) plans pairs as they are.
+///   depot (any count, any number of depots) plans pairs as they are. `"nn"` has no such step -- it
+///   drives one route per vehicle of the list -- so it takes any fleet.
 fn refuse_unsupported_pairs(
     method: Method,
     customers: &[Customer],
@@ -1472,7 +1473,7 @@ fn refuse_unsupported_pairs(
     for t in fleet {
         *kinds.entry(t.vehicle().depot_id()).or_default() += 1;
     }
-    if kinds.values().any(|&n| n > 1) {
+    if method != Method::NearestNeighbor && kinds.values().any(|&n| n > 1) {
         return Err(ServiceError::new(
             Code::InvalidOption,
             "pickup-delivery pairs are planned with one kind of vehicle per depot -- a depot \
@@ -8043,6 +8044,21 @@ mod pair_tests {
         );
     }
 
+    /// The example of the README: the pairs ride one route in turn, the load never passing 3.
+    #[test]
+    fn the_readme_pair_example_is_what_the_package_prints() {
+        let customers = customers(json!([
+            { "id": 1, "x": 10, "y": 0, "demand": 3, "delivery": 11 },
+            { "id": 2, "x": 20, "y": 0, "demand": 3, "delivery": 12 },
+            { "id": 11, "x": 12, "y": 0 },
+            { "id": 12, "x": 22, "y": 0 },
+        ]));
+        let vehicles = fleet(json!([{ "capacity": 4 }]));
+        let out = solve_pairs(&[(0.0, 0.0)], &customers, &vehicles, "savings").expect("savings");
+        assert_eq!(out.routes, [[1, 11, 2, 12]]);
+        assert_eq!(out.route_summaries[0].load, 3);
+    }
+
     #[test]
     fn pairs_are_kept_whole_with_several_depots() {
         let depots = [(0.0, 0.0), (100.0, 0.0)];
@@ -8204,6 +8220,10 @@ mod pair_tests {
         );
         assert_eq!(err.code(), Code::InvalidOption.name());
         assert_eq!(err.fields["parameter"], "vehicles");
+        // `nn` drives one route per vehicle of the list, whatever the kinds: it plans the pairs.
+        let mixed = fleet(json!([{ "capacity": 2 }, { "capacity": 3, "fixed_cost": 3 }]));
+        let out = solve_pairs(&[(0.0, 0.0)], &pairs, &mixed, "nn").expect("nn takes any fleet");
+        assert_pairs_are_kept(&pairs, &mixed, &out, "nn with two kinds");
         // Without pairs the same requests are fine.
         let plain = customers(json!([
             { "id": 1, "x": 10.0, "y": 0.0, "demand": 1 },

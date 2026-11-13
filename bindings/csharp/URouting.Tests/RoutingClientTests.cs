@@ -188,6 +188,62 @@ public class RoutingClientTests
     }
 
     [Fact]
+    public void A_pickup_and_its_delivery_ride_one_route_pickup_first_within_the_capacity_along_the_way()
+    {
+        // Two pairs of 3 on a line, a capacity of 4: both are served, one after the other, so the
+        // route carries 3 at most although the demands add up to 6.
+        Customer[] customers =
+        [
+            new(1, 10, 0, Demand: 3, Delivery: 11), new(2, 20, 0, Demand: 3, Delivery: 12),
+            new(11, 12, 0), new(12, 22, 0),
+        ];
+        foreach (var method in new[] { RoutingMethod.NearestNeighbor, RoutingMethod.Savings, RoutingMethod.Alns })
+        {
+            var request = new VrpRequest([new(0, 0)], customers)
+            {
+                Vehicles = [new(4)],
+                Method = method,
+                Config = method == RoutingMethod.Alns ? new VrpConfig { MaxIterations = 20, Seed = 1 } : null,
+            };
+            var solution = _client.SolveVrp(request);
+            Assert.Empty(solution.Unassigned);
+            foreach (var stops in solution.Routes.Select(r => r.ToList()))
+            {
+                Assert.True(stops.IndexOf(1) < stops.IndexOf(11) || !stops.Contains(1), $"{method}: {string.Join(",", stops)}");
+                Assert.True(stops.IndexOf(2) < stops.IndexOf(12) || !stops.Contains(2), $"{method}: {string.Join(",", stops)}");
+            }
+            Assert.All(solution.RouteSummaries, s => Assert.True(s.Load <= 4, $"{method}: load {s.Load}"));
+            Assert.Empty(_client.CheckSolution(request, VrpPlan.Of(solution)).Violations);
+        }
+
+        // The checker names a delivery that comes before its pickup, and a pair split over routes.
+        var plan = new VrpPlan([[11L, 1L, 2L, 12L]]);
+        var order = _client.CheckSolution(new VrpRequest([new(0, 0)], customers) { Vehicles = [new(8)] }, plan);
+        Assert.Contains(order.Violations, v => v is PlanViolation.PairOrder { Pickup: 1, Delivery: 11 });
+        var split = _client.CheckSolution(new VrpRequest([new(0, 0)], customers) { Vehicles = [new(8), new(8)] },
+            new VrpPlan([[1L, 2L, 12L], [11L]]) { RouteVehicles = [0, 1] });
+        Assert.Contains(split.Violations, v => v is PlanViolation.PairSplit { Pickup: 1, Delivery: 11 });
+    }
+
+    [Fact]
+    public void A_delivery_the_engine_cannot_pair_is_refused_where_it_is_given()
+    {
+        var unknown = Assert.Throws<RoutingException>(() =>
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1, Demand: 1, Delivery: 9)])));
+        Assert.Equal("invalid_option", unknown.ErrorCode);
+        Assert.Equal("customers[0].delivery", unknown.Parameter);
+
+        // The genetic algorithm does not plan pairs.
+        var genetic = Assert.Throws<RoutingException>(() =>
+            _client.SolveVrp(new VrpRequest([new(0, 0)], [new(1, 1, 1, Demand: 1, Delivery: 2), new(2, 2, 2)])
+            {
+                Method = RoutingMethod.Genetic,
+            }));
+        Assert.Equal("invalid_option", genetic.ErrorCode);
+        Assert.Equal("method", genetic.Parameter);
+    }
+
+    [Fact]
     public void A_fixed_fleet_is_kept()
     {
         var solution = _client.SolveVrp(new VrpRequest([new(0, 0)], Customers)

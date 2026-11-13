@@ -98,6 +98,14 @@ public readonly record struct TimeWindow(double Ready, double Due);
 /// <see cref="TimeWindow.Due"/> and is priced at its distance plus this times the lateness
 /// (<see cref="RouteSummary.LatenessCost"/>); <c>null</c> is a hard window, where a late arrival is not
 /// allowed. It has no effect on a customer without a time window.
+/// <para>
+/// <paramref name="Delivery"/> makes this customer the <em>pickup</em> of a pair: the <see cref="Id"/> of the
+/// customer that unloads what is loaded here. The pair goes on one route, this customer first, within the
+/// vehicle's capacity at every stop. <paramref name="Demand"/> is what the pair carries; the delivery's own
+/// demand is 0, and a delivery is named by one pickup only and is not a pickup itself. <c>null</c> is an
+/// ordinary customer. <see cref="RoutingMethod.NearestNeighbor"/>, <see cref="RoutingMethod.Savings"/> and
+/// <see cref="RoutingMethod.Alns"/> plan pairs, with one kind of vehicle per depot; the others refuse them.
+/// </para>
 /// </remarks>
 public sealed record Customer(
     long Id,
@@ -106,7 +114,8 @@ public sealed record Customer(
     double Demand = 0,
     double ServiceTime = 0,
     TimeWindow? TimeWindow = null,
-    double? LatenessPenalty = null);
+    double? LatenessPenalty = null,
+    long? Delivery = null);
 
 /// <summary>
 /// A vehicle. <see cref="Capacity"/> <c>null</c> means effectively unlimited; a

@@ -160,6 +160,8 @@ public sealed class RoutingClient : IDisposable
                 customer["time_window"] = new JsonArray(Num($"{at}.time_window", w.Ready, 0), Num($"{at}.time_window", w.Due, 1));
             if (c.LatenessPenalty is { } penalty)
                 customer["lateness_penalty"] = Num($"{at}.lateness_penalty", penalty);
+            if (c.Delivery is { } delivery)
+                customer["delivery"] = delivery;
             customers.Add((JsonNode)customer);
         }
 

@@ -14,6 +14,7 @@ TSP, CVRP, and VRPTW variants.
 - **Distance** — Dense distance/travel-time matrix with nearest-neighbor lookup
 - **Evaluation** — Route feasibility checking (capacity, time windows, max distance/duration)
 - **Constructive heuristics** — Nearest Neighbor (O(n²)), Clarke-Wright Savings (O(n² log n))
+- **Pickups and deliveries** — pairs that ride one route, pickup first, within the capacity at every stop: construction, savings with pair relocation, an ALNS that places a pair as one unit, and a plan checker that names a split or reversed pair
 - **Time windows** — time-window Nearest Neighbor, Solomon (1987) I1 insertion, a time-window split for the GA, and every local-search move, savings merge and ALNS insertion gated on the windows
 - **Local search** — Intra-route 2-opt (Croes 1958), or-opt, 3-opt; inter-route Relocate (Or 1976) and 2-opt* (exchange of route tails, Potvin & Rousseau 1995) — all of them window-aware
 - **Genetic algorithm** — Prins (2004) hybrid GA: giant tour + split DP, a population seeded with the savings, sweep and (with time windows) Solomon I1 solutions, OX crossover, and mutation followed by local search (relocate, 2-opt*, 2-opt, or-opt) written back into the tour
@@ -542,6 +543,51 @@ reach on time is served late (at its penalty) where a hard window would leave it
 `check_vrp_solution` compares a reported `total_cost` with that price. A negative penalty is
 `parameter_out_of_range` (`parameter: "lateness_penalty"`, `min: 0`).
 
+**Pickups and deliveries: `customers[].delivery`.** A customer with a `delivery` is a *pickup*: the value
+is the `id` of the customer that unloads what is loaded here, and the two form a pair. The pair goes on
+one route, the pickup first, and the vehicle carries the pickup's `demand` between the two stops — a
+route's load goes up at a pickup and down at its delivery, and its capacity has to cover the load after
+every stop, not the sum of the demands (`route_summaries[].load` is that highest load). The delivery
+asks for nothing itself (its `demand` is 0 or absent), is named by one pickup only and is not a pickup
+too. Time windows, service times and lateness penalties are the stops' own. A pair whose pickup is larger
+than every vehicle is left out whole, in `unassigned`, and so is a pair that `config.max_vehicles`
+leaves no route for. `"nn"`, `"savings"` (which moves each pair to its cheapest place as part
+of the method) and `"alns"` plan pairs; `"ga"` refuses them (`invalid_option`, `parameter: "method"`),
+and so do `"savings"` and `"alns"` for a depot with several kinds of vehicle (`parameter: "vehicles"` —
+give it one kind, with a `count` if it has several; `"nn"` takes any fleet). `check_vrp_solution`
+reports a pair on two routes as `pair_split` and a delivery before its pickup as `pair_order`.
+
+```js
+import { solve_vrp, check_vrp_solution } from '@iyulab/u-routing';
+
+// Two pairs of 3 on a line and a vehicle that carries 4: it takes the pairs one after the other
+// (the load never passes 3), where the sum of the demands, 6, would not fit.
+const problem = {
+  depots: [{ x: 0, y: 0 }],
+  customers: [
+    { id: 1, x: 10, y: 0, demand: 3, delivery: 11 },
+    { id: 2, x: 20, y: 0, demand: 3, delivery: 12 },
+    { id: 11, x: 12, y: 0 },
+    { id: 12, x: 22, y: 0 },
+  ],
+  vehicles: [{ capacity: 4 }],
+  method: 'savings',
+};
+const plan = solve_vrp(problem);
+console.log(plan.routes, plan.route_summaries[0].load); // [[1, 11, 2, 12]] 3
+const verdict = check_vrp_solution(problem, { routes: plan.routes, unassigned: plan.unassigned });
+if (!verdict.feasible) throw new Error(JSON.stringify(verdict.violations));
+```
+
+On the Li & Lim pickup-and-delivery instances of 100 tasks (56 instances, a route priced at 1000 distance
+units so that fewer routes rank first, every plan accepted by `check_vrp_solution`):
+
+| Method | Routes over the best known | Distance over the best known | Time per instance |
+|---|---|---|---|
+| `"savings"` | +3.6 | +22.3 % | 0.07 s |
+| `"alns"`, 300 iterations | +0.4 | +1.5 % | 24 s |
+| `"alns"`, `time_limit_ms: 3000` | +0.8 | +12.0 % | 3 s |
+
 **Config constraints:**
 
 | Parameter | Method | Constraint | Default |
@@ -588,11 +634,11 @@ try {
 | `code` | Fields | Meaning |
 |---|---|---|
 | `unknown_option` | `parameter`, `got`, `expected` | A `method` that names none of `"nn"`, `"savings"`, `"ga"`, `"alns"` |
-| `duplicate_id` | `id`, `first`, `second` | Two customers share an `id` (at positions `first` and `second`, from 0) — `routes` and `unassigned` name customers by id, so each needs its own |
+| `duplicate_id` | `id`, `first`, `second` | Two customers share an `id` (at positions `first` and `second`, from 0) — `routes` and `unassigned` name customers by id, so each needs its own — or two pickups name the same `delivery` (`id` is the delivery, `first` and `second` the pickups) |
 | `invalid_time_window` | `id`, `index`, `ready`, `due` | A `time_window` with `ready > due` |
 | `not_whole_units` | `parameter` (`"demand"` or `"capacity"`), `index`, `id` (customers only, else `null`), `value` | A demand or capacity with a fractional part. Load is counted in whole units; a fractional amount is refused rather than rounded, so scale the unit (kilograms to grams, say) to keep it |
 | `parameter_out_of_range` | `parameter`, `index` (vehicles and customers), `id` (customers, for a demand), `method` (method settings), `min`, `max`, `exclusive_min`, `exclusive_max`, `got` | A vehicle's `max_distance` / `max_duration` / `cost_per_distance` of 0 or less (no route could keep it), a negative `fixed_cost` (`min: 0`), a whole demand or capacity outside 0 to 2147483647 (`min: 0`, `max: 2147483647`), customers whose demands (those a vehicle can carry) add up past 2147483647 (`parameter: "total_demand"`, `min: 0`, `max: 2147483647` — a route's load is counted in 32 bits), a GA `mutation_rate` outside (0, 1] or `elite_ratio` outside (0, 1), a `config.max_vehicles` below 1, a negative `config.seed`, a customer `id` below 0 (with `index`), a negative entry of `distances` (`parameter: "distances[i]"`, `index: j`, `min: 0`), or a setting the method's runner checks (`config.population_size` below 2, `config.max_iterations` below 1, … — with `method`; a negative count is refused here like a too-small one). `min` / `max` are the closed (included) bounds and are always present — `null` on a side that is open or unbounded; `exclusive_min` / `exclusive_max` are the open (excluded) bounds, present only when that end is open: `max_distance` (> 0) is refused with `min: null, exclusive_min: 0`, `mutation_rate` (0, 1] with `exclusive_min: 0, max: 1` |
-| `invalid_option` | `parameter`, `method` | A setting the method does not read (`config.max_iterations` with `"ga"`), or settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population) |
+| `invalid_option` | `parameter`, `method` | A setting the method does not read (`config.max_iterations` with `"ga"`), or settings the method rejects only in combination (an `elite_ratio` leaving no elite in the population); a pair the request cannot state or the method cannot plan: a `delivery` that names no customer, the customer itself or a customer that is a pickup too (`parameter: "customers[i].delivery"`), a delivery with a `demand` (`"customers[j].demand"`), pairs with `"ga"` (`"method"`) or with `"savings"` / `"alns"` at a depot that lists several kinds of vehicle (`"vehicles"`) |
 | `value_not_finite` | `parameter`, `index` | A NaN or ±Infinity anywhere in an argument — `parameter` is the path to it (`config.nodes[1]`), `index` its position in that array, or `null` |
 | `malformed_input` | `parameter`, `index` (inside an array) | An argument of the wrong shape or type (a missing or unknown key), a count, seed or `id` that is not a whole number (`config.population_size: 2.5` — `parameter` is the field), or a JSON string. The C ABI names the field the same way (`customers[1].id`); text that is not JSON at all is `request` |
 | `dimension_mismatch` | `parameter`, `expected`, `got` | `distances` without one row per point (`parameter: "distances"`) or a row of another length (`"distances[2]"`), or (`check_vrp_solution`) a `solution.route_vehicles` without one entry per route |

@@ -163,7 +163,7 @@
       "properties": {
         "delivery": {
           "default": null,
-          "description": "Makes this customer the pickup of a pair: the `id` of the customer that unloads what is\nloaded here. The pair goes on one route, this customer first; `demand` is what the pair\ncarries between the two stops, and the delivery's own `demand` is 0 (or absent). A\ndelivery is named by one pickup only and is not a pickup itself. Absent or `null`: an\nordinary customer. Pairs are planned by the `\"nn\"`, `\"savings\"` and `\"alns\"` methods, with\none kind of vehicle per depot.",
+          "description": "Makes this customer the pickup of a pair: the `id` of the customer that unloads what is\nloaded here. The pair goes on one route, this customer first; `demand` is what the pair\ncarries between the two stops, and the delivery's own `demand` is 0 (or absent). A\ndelivery is named by one pickup only and is not a pickup itself. Absent or `null`: an\nordinary customer. Pairs are planned by the `\"nn\"`, `\"savings\"` and `\"alns\"` methods; the\nlast two with one kind of vehicle per depot.",
           "format": "int128",
           "type": [
             "integer",
