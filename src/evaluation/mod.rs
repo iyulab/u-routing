@@ -136,10 +136,34 @@ impl RouteLimits {
 }
 
 /// Whether a search has to ask [`route_feasible`] about its candidates at all:
-/// only when a customer has a time window or the vehicle sets a limit. Without
-/// either, every sequence is feasible apart from capacity.
+/// only when a customer has a time window, the vehicle sets a limit, or a
+/// customer belongs to a pickup-delivery pair. Without any of them, every
+/// sequence is feasible apart from capacity.
 pub fn route_checks_needed(customers: &[Customer], limits: &RouteLimits) -> bool {
-    has_time_windows(customers) || !limits.is_unlimited()
+    has_time_windows(customers) || !limits.is_unlimited() || has_pairs(customers)
+}
+
+/// Whether the pairs a route touches are whole on it: every pickup on the route has its delivery
+/// later on the route, and every delivery has its pickup earlier. A route without pairs is
+/// ordered. O(n) for a route without pairs, and a scan of the route for each stop of a pair.
+pub fn pairs_ordered(route: &[usize], customers: &[Customer]) -> bool {
+    route
+        .iter()
+        .enumerate()
+        .all(|(index, &id)| pair_stop_whole(route, index, &customers[id]))
+}
+
+/// Whether the stop at `index` of `route`, `customer`, has its partner in the right place: a
+/// pickup its delivery later on the route, a delivery its pickup earlier. A customer in no pair is
+/// always whole.
+#[inline]
+fn pair_stop_whole(route: &[usize], index: usize, customer: &Customer) -> bool {
+    customer
+        .delivery_index()
+        .is_none_or(|delivery| route[index + 1..].contains(&delivery))
+        && customer
+            .pickup_index()
+            .is_none_or(|pickup| route[..index].contains(&pickup))
 }
 
 /// Whether a route `depot → route[0] → … → depot` reaches every customer by
@@ -149,8 +173,10 @@ pub fn route_checks_needed(customers: &[Customer], limits: &RouteLimits) -> bool
 /// [`RouteEvaluator::build_route`]: departure at 0, travel times from
 /// [`DistanceMatrix::travel_time`] (the distances unless it has times of its
 /// own), waiting for a window that has not opened, and service before
-/// moving on. Capacity is not checked here. O(n) and allocation-free, so a
-/// search can ask it about every candidate move.
+/// moving on, and keeps every pickup-delivery pair whole and in order
+/// ([`pairs_ordered`]). Capacity is not checked here. O(n) and allocation-free
+/// (a route with pairs scans itself for each pair stop), so a search can ask it
+/// about every candidate move.
 pub fn route_feasible(
     route: &[usize],
     depot: usize,
@@ -159,16 +185,20 @@ pub fn route_feasible(
     limits: &RouteLimits,
 ) -> bool {
     if let Some(rest) = &limits.rest {
-        return schedule::schedule(route, depot, distances, customers, rest)
-            .is_some_and(|s| limits.allow(s.distance, s.duration));
+        return pairs_ordered(route, customers)
+            && schedule::schedule(route, depot, distances, customers, rest)
+                .is_some_and(|s| limits.allow(s.distance, s.duration));
     }
     let mut time = 0.0;
     let mut distance = 0.0;
     let mut prev = depot;
-    for &cid in route {
+    for (index, &cid) in route.iter().enumerate() {
         distance += distances.get(prev, cid);
         let arrival = time + distances.travel_time(prev, cid);
         let customer = &customers[cid];
+        if !pair_stop_whole(route, index, customer) {
+            return false;
+        }
         let start = match customer.time_window() {
             Some(tw) => {
                 if tw.is_violated(arrival) && customer.lateness_penalty().is_none() {
@@ -241,6 +271,9 @@ pub fn route_eval(
     limits: &RouteLimits,
 ) -> Option<RouteEval> {
     if let Some(rest) = &limits.rest {
+        if !pairs_ordered(route, customers) {
+            return None;
+        }
         let s = schedule::schedule(route, depot, distances, customers, rest)?;
         return limits.allow(s.distance, s.duration).then_some(RouteEval {
             distance: s.distance,
@@ -255,10 +288,13 @@ pub fn route_eval(
     let mut lateness = 0.0;
     let mut lateness_cost = 0.0;
     let mut prev = depot;
-    for &cid in route {
+    for (index, &cid) in route.iter().enumerate() {
         distance += distances.get(prev, cid);
         let arrival = time + distances.travel_time(prev, cid);
         let customer = &customers[cid];
+        if !pair_stop_whole(route, index, customer) {
+            return None;
+        }
         let start = match customer.time_window() {
             Some(tw) => {
                 if tw.is_violated(arrival) {
