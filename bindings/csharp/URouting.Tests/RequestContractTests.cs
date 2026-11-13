@@ -20,9 +20,9 @@ public class RequestContractTests
 
     private static Vehicle Vehicle() =>
         new(Capacity: 30, MaxDistance: 1000, MaxDuration: 1000, FixedCost: 50, CostPerDistance: 2, Count: 2,
-            Break: new(Earliest: 100, Latest: 300, Duration: 10));
+            Break: new(Earliest: 100, Latest: 300, Duration: 10), Depot: 0);
 
-    private static VrpRequest Full(RoutingMethod method) => new(0, 0,
+    private static VrpRequest Full(RoutingMethod method) => new([new(0, 0)],
         [
             new Customer(1, 10, 5, Demand: 10, ServiceTime: 1, TimeWindow: new(0, 500)),
             new Customer(2, -4, 8, Demand: 15, ServiceTime: 1, TimeWindow: new(0, 500)),

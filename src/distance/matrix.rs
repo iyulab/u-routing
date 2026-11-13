@@ -127,6 +127,28 @@ impl DistanceMatrix {
         }
     }
 
+    /// The matrix of the locations `rows` alone, in that order: entry `k` of
+    /// the result is location `rows[k]` of this one, travel times included.
+    pub(crate) fn restricted(&self, rows: &[usize]) -> DistanceMatrix {
+        let m = rows.len();
+        let pick = |source: &[f64]| -> Vec<f64> {
+            let mut out = Vec::with_capacity(m * m);
+            for &a in rows {
+                for &b in rows {
+                    out.push(source[a * self.size + b]);
+                }
+            }
+            out
+        };
+        DistanceMatrix {
+            data: pick(&self.data),
+            size: m,
+            symmetric: OnceLock::new(),
+            scale: OnceLock::new(),
+            times: self.times.as_deref().map(pick),
+        }
+    }
+
     /// The largest distance of the matrix: the size the distances are in,
     /// against which a search tells a gain from rounding (0 for an empty or
     /// all-zero matrix).

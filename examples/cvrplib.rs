@@ -133,7 +133,7 @@ fn main() {
                 config["max_generations"] = json!(g);
             }
             let request = json!({
-                "depot_x": points[0].0, "depot_y": points[0].1,
+                "depots": [{ "x": points[0].0, "y": points[0].1 }],
                 "customers": customers, "vehicles": vehicles, "method": "ga",
                 "config": config, "distances": distances,
             });

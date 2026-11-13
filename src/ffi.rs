@@ -25,7 +25,9 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::{self, InputConfig, InputCustomer, InputSolution, InputVehicle, ServiceError};
+use crate::service::{
+    self, InputConfig, InputCustomer, InputDepot, InputSolution, InputVehicle, ServiceError,
+};
 
 /// Status for a request whose JSON could not be read into the expected shape.
 const ERR_PARSE: i32 = -2;
@@ -36,7 +38,7 @@ const ERR_COMPUTE: i32 = -3;
 // ── Request shape ───────────────────────────────────────────
 //
 // Customers, vehicles and solver settings are the shared wire types. Only the
-// top level is this binding's own: the depot is two flat fields.
+// top level is this binding's own.
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,9 +46,10 @@ struct VrpInput {
     customers: Vec<InputCustomer>,
     #[serde(default)]
     vehicles: Vec<InputVehicle>,
-    depot_x: f64,
-    depot_y: f64,
-    /// Distance (and travel time) between every two points, the depot first,
+    /// The depots, at least one: where routes start and end. A vehicle's `depot`
+    /// is an index into this list.
+    depots: Vec<InputDepot>,
+    /// Distance (and travel time) between every two points, the depots first,
     /// then the customers in the order given. Absent: Euclidean.
     #[serde(default)]
     distances: Option<Vec<Vec<f64>>>,
@@ -162,7 +165,7 @@ pub unsafe extern "C" fn urouting_solve_vrp(
         let start = Instant::now();
         match service::solve(
             &service::ProblemInput {
-                depot: (input.depot_x, input.depot_y),
+                depots: &service::depot_points(&input.depots),
                 customers: &input.customers,
                 vehicles: &input.vehicles,
                 distances: input.distances.as_deref(),
@@ -207,7 +210,7 @@ pub unsafe extern "C" fn urouting_check_solution(
         let config = problem.config.unwrap_or_default();
         match service::check(
             &service::ProblemInput {
-                depot: (problem.depot_x, problem.depot_y),
+                depots: &service::depot_points(&problem.depots),
                 customers: &problem.customers,
                 vehicles: &problem.vehicles,
                 distances: problem.distances.as_deref(),
@@ -325,8 +328,7 @@ mod tests {
                 { "id": 14, "x": -1.0, "y": -3.0, "demand": 20.0 }
             ],
             "vehicles": [{ "capacity": 30.0 }],
-            "depot_x": 0.0,
-            "depot_y": 0.0,
+            "depots": [{ "x": 0.0, "y": 0.0 }],
             "method": method
         })
     }

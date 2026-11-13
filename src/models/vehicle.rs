@@ -85,10 +85,21 @@ impl Vehicle {
         }
     }
 
-    /// Sets the depot for this vehicle.
+    /// Sets the depot for this vehicle: the table index of the depot its routes
+    /// start from and end at, one of the first [`num_depots`](super::num_depots)
+    /// entries of the problem's locations (default 0).
     pub fn with_depot(mut self, depot_id: usize) -> Self {
         self.depot_id = depot_id;
         self
+    }
+
+    /// This vehicle as entry `id` of a vehicle list, starting from `depot_id`.
+    pub(crate) fn placed(&self, id: usize, depot_id: usize) -> Vehicle {
+        Vehicle {
+            id,
+            depot_id,
+            ..self.clone()
+        }
     }
 
     /// Sets cost per unit distance.

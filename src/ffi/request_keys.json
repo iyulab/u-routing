@@ -36,8 +36,14 @@
                 }
               }
             },
-            "depot_x": {},
-            "depot_y": {},
+            "depots": {
+              "items": {
+                "properties": {
+                  "x": {},
+                  "y": {}
+                }
+              }
+            },
             "distances": {},
             "durations": {},
             "method": {},
@@ -54,6 +60,7 @@
                   "capacity": {},
                   "cost_per_distance": {},
                   "count": {},
+                  "depot": {},
                   "fixed_cost": {},
                   "max_distance": {},
                   "max_duration": {}
@@ -108,8 +115,14 @@
             }
           }
         },
-        "depot_x": {},
-        "depot_y": {},
+        "depots": {
+          "items": {
+            "properties": {
+              "x": {},
+              "y": {}
+            }
+          }
+        },
         "distances": {},
         "durations": {},
         "method": {
@@ -133,6 +146,7 @@
               "capacity": {},
               "cost_per_distance": {},
               "count": {},
+              "depot": {},
               "fixed_cost": {},
               "max_distance": {},
               "max_duration": {}

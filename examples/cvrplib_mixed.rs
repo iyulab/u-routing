@@ -154,7 +154,7 @@ fn main() {
                     config["max_iterations"] = json!(2000);
                 }
                 let request = json!({
-                    "depot_x": points[0].0, "depot_y": points[0].1,
+                    "depots": [{ "x": points[0].0, "y": points[0].1 }],
                     "customers": customers, "vehicles": fleet, "method": method,
                     "config": config, "distances": distances,
                 });

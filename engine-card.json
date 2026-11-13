@@ -3,7 +3,7 @@
   "card_version": 1,
   "engine": {
     "id": "u-routing",
-    "summary": "Vehicle routing: plans routes from a depot that serve every customer within vehicle capacity, time windows and route limits (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
+    "summary": "Vehicle routing: plans routes from a depot (or several, each vehicle starting from its own) that serve every customer within vehicle capacity, time windows and route limits (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
     "version": "0.27.1",
     "license": "MIT",
     "repository": "https://github.com/iyulab/u-routing"
@@ -45,7 +45,7 @@
   "operations": [
     {
       "id": "solve_vrp",
-      "summary": "Routes from a depot that serve the customers within each vehicle's capacity, time windows, max_distance and max_duration, minimizing total cost, by the chosen method (nn, savings, ga or alns), optionally with at most max_vehicles routes; customers no route can take come back as unassigned, and the plan says per route its distance, load, cost and duration and why the method stopped.",
+      "summary": "Routes from a depot, or from several depots with each vehicle starting from its own, that serve the customers within each vehicle's capacity, time windows, max_distance and max_duration, minimizing total cost, by the chosen method (nn, savings, ga or alns), optionally with at most max_vehicles routes; customers no route can take come back as unassigned, and the plan says per route its distance, load, cost and duration and why the method stopped.",
       "input": {
         "schema": "schemas/wasm.schema.json#/$defs/solve_vrp.input",
         "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
@@ -136,7 +136,7 @@
     },
     {
       "id": "check_vrp_solution",
-      "summary": "Whether a plan keeps every rule of its problem, read as solve_vrp reads it: each customer served exactly once or reported unassigned, the vehicle of each route, the fleet size, capacity, time windows, route limits and the reported distance and cost; lists every rule broken.",
+      "summary": "Whether a plan keeps every rule of its problem, read as solve_vrp reads it: each customer served exactly once or reported unassigned, the vehicle of each route and the depot it starts from, the fleet size, capacity, time windows, route limits and the reported distance and cost; lists every rule broken.",
       "input": {
         "schema": "schemas/wasm.schema.json#/$defs/check_vrp_solution.input",
         "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"

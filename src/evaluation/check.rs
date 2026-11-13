@@ -2,7 +2,7 @@
 
 use super::RouteEvaluator;
 use crate::distance::DistanceMatrix;
-use crate::models::{Customer, Solution, Vehicle, Violation, ViolationType};
+use crate::models::{num_depots, Customer, Solution, Vehicle, Violation, ViolationType};
 
 /// The vehicles a plan may use.
 #[derive(Debug, Clone, Copy)]
@@ -28,10 +28,12 @@ const DISTANCE_TOLERANCE: f64 = 1e-6;
 /// (`Route::total_distance`) equal to its own. Empty means the plan is
 /// feasible as reported.
 ///
-/// Customer ids are indices into `customers`, whose entry 0 is the depot.
+/// Customer ids are indices into `customers`, whose first entries are the
+/// depots (one, or several -- see [`num_depots`]); the rest are the customers.
 /// Each route is judged with its own vehicle (`Route::vehicle_id`), from its
-/// customer sequence alone -- the visit timings a route carries are
-/// recomputed, not trusted.
+/// customer sequence alone, starting and ending at that vehicle's depot
+/// ([`Vehicle::depot_id`], which has to be one of the depots) -- the visit
+/// timings a route carries are recomputed, not trusted.
 ///
 /// # Complexity
 /// O(n + r) for n visits and r routes, after the O(1) distance lookups.
@@ -72,7 +74,8 @@ pub fn check_solution(
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mut push = |kind| violations.push(Violation::new(kind));
-    let is_customer = |id: usize| id != 0 && id < customers.len();
+    let depots = num_depots(customers);
+    let is_customer = |id: usize| id >= depots && id < customers.len();
 
     if let Some(max_routes) = fleet.max_routes {
         if solution.num_routes() > max_routes {
@@ -166,7 +169,7 @@ pub fn check_solution(
             reported_unassigned[id] = true;
         }
     }
-    for id in 1..customers.len() {
+    for id in depots..customers.len() {
         if !served[id] && !reported_unassigned[id] {
             push(ViolationType::CustomerMissing { customer_id: id });
         }
@@ -225,6 +228,129 @@ mod tests {
 
     fn kinds(v: &[Violation]) -> Vec<&ViolationType> {
         v.iter().map(|v| &v.kind).collect()
+    }
+
+    /// Two depots on a line, depot 0 at x = 0 and depot 1 at x = 100, and
+    /// customers 2..=5 at x = 10, 20, 90 and 80.
+    fn two_depots() -> (Vec<Customer>, DistanceMatrix) {
+        let at = |id: usize, x: f64| Customer::new(id, x, 0.0, 5, 0.0);
+        let customers = vec![
+            Customer::depot_at(0, 0.0, 0.0),
+            Customer::depot_at(1, 100.0, 0.0),
+            at(2, 10.0),
+            at(3, 20.0),
+            at(4, 90.0),
+            at(5, 80.0),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        (customers, dm)
+    }
+
+    /// A route through `ids` out of `depot`, reporting its own distance.
+    fn route_from(vehicle: usize, depot: usize, ids: &[usize], dm: &DistanceMatrix) -> Route {
+        let mut r = Route::new(vehicle);
+        let (mut prev, mut total) = (depot, 0.0);
+        for &id in ids {
+            r.push_visit(Visit {
+                customer_id: id,
+                arrival_time: 0.0,
+                departure_time: 0.0,
+                load_after: 0,
+            });
+            total += dm.get(prev, id);
+            prev = id;
+        }
+        r.set_total_distance(total + dm.get(prev, depot));
+        r
+    }
+
+    #[test]
+    fn each_route_runs_from_its_vehicles_depot() {
+        let (c, dm) = two_depots();
+        let vehicles = [Vehicle::new(0, 20), Vehicle::new(1, 20).with_depot(1)];
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: Some(2),
+        };
+        // 0 -> 2 -> 3 -> 0 is 40, and so is 1 -> 4 -> 5 -> 1.
+        let feasible = plan(
+            vec![
+                route_from(0, 0, &[2, 3], &dm),
+                route_from(1, 1, &[4, 5], &dm),
+            ],
+            &[],
+        );
+        assert!((feasible.routes()[0].total_distance() - 40.0).abs() < 1e-9);
+        assert!((feasible.routes()[1].total_distance() - 40.0).abs() < 1e-9);
+        assert!(check_solution(&c, &dm, &fleet, &feasible).is_empty());
+
+        // Each route reported as if it ran out of the other vehicle's depot
+        // (1 -> 2 -> 3 -> 1 is 180, 0 -> 4 -> 5 -> 0 is 180): both are wrong.
+        let swapped = plan(
+            vec![
+                route_from(0, 1, &[2, 3], &dm),
+                route_from(1, 0, &[4, 5], &dm),
+            ],
+            &[],
+        );
+        let v = check_solution(&c, &dm, &fleet, &swapped);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v
+            .iter()
+            .all(|v| matches!(v.kind, ViolationType::DistanceMismatch { .. })));
+        // Only the second one: the first is where its vehicle is.
+        let one_wrong = plan(
+            vec![
+                route_from(0, 0, &[2, 3], &dm),
+                route_from(1, 0, &[4, 5], &dm),
+            ],
+            &[],
+        );
+        assert!(matches!(
+            check_solution(&c, &dm, &fleet, &one_wrong)[..],
+            [Violation {
+                kind: ViolationType::DistanceMismatch { route_index: 1, .. }
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_depot_is_no_customer_and_the_customers_start_after_the_depots() {
+        let (c, dm) = two_depots();
+        let vehicles = [Vehicle::new(0, 100)];
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: None,
+        };
+        // Both depots are refused as a visit; customer 2 is the first customer,
+        // reported missing; ids 0 and 1 are not customers to report either.
+        let s = plan(
+            vec![
+                route_from(0, 0, &[3, 4, 5], &dm),
+                route_from(0, 0, &[1], &dm),
+            ],
+            &[0],
+        );
+        let v = check_solution(&c, &dm, &fleet, &s);
+        let expect = [
+            ViolationType::UnknownCustomer {
+                route_index: 1,
+                customer_id: 1,
+            },
+            ViolationType::WronglyUnassigned { customer_id: 0 },
+            ViolationType::CustomerMissing { customer_id: 2 },
+        ];
+        for e in &expect {
+            assert!(kinds(&v).contains(&e), "missing {e:?} in {v:?}");
+        }
+        // Nothing is said about the depots as customers going missing.
+        assert!(!v.iter().any(|v| matches!(
+            v.kind,
+            ViolationType::CustomerMissing { customer_id: 0 | 1 }
+        )));
+        assert_eq!(v.len(), 3, "{v:?}");
     }
 
     #[test]

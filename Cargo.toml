@@ -70,6 +70,12 @@ required-features = ["ffi"]
 name = "cvrplib_balance"
 required-features = ["ffi"]
 
+# Cordeau multi-depot VRP measurement through the C entry points (instances
+# not in the repository -- see the file's header).
+[[example]]
+name = "mdvrp"
+required-features = ["ffi"]
+
 [dev-dependencies]
 # Generates the JSON Schemas the engine card points at (tests only).
 schemars = "1"

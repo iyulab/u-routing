@@ -36,13 +36,14 @@ use super::{Customer, Solution, Vehicle, Violation};
 /// }
 /// ```
 pub trait RoutingProblem: Send + Sync {
-    /// Returns all locations (index 0 = depot, 1..=N = customers).
+    /// Returns all locations: the depots first (index 0 for one depot; see
+    /// [`num_depots`](super::num_depots)), then the customers.
     fn customers(&self) -> &[Customer];
 
     /// Returns the available vehicles.
     fn vehicles(&self) -> &[Vehicle];
 
-    /// Number of customers (excluding depot).
+    /// Number of customers (excluding the depots).
     fn num_customers(&self) -> usize;
 
     /// Travel distance from location `from` to location `to`.

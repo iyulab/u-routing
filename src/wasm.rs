@@ -14,7 +14,7 @@
 //!     { id: 2, x: 3.0, y: 4.0, demand: 15.0 },
 //!   ],
 //!   vehicles: [{ capacity: 100.0 }],
-//!   depot: { x: 0.0, y: 0.0 },
+//!   depots: [{ x: 0.0, y: 0.0 }],
 //!   method: "nn",   // "nn" | "savings" | "ga" | "alns"
 //! });
 //! console.log(result.routes, result.total_distance, result.num_vehicles);
@@ -23,7 +23,7 @@
 //! const gaResult = solve_vrp({
 //!   customers: [...],
 //!   vehicles: [{ capacity: 100.0 }],
-//!   depot: { x: 0.0, y: 0.0 },
+//!   depots: [{ x: 0.0, y: 0.0 }],
 //!   method: "ga",
 //!   config: { population_size: 100, max_generations: 500 },
 //! });
@@ -35,7 +35,7 @@
 //!     { id: 2, x: 3.0, y: 4.0, demand: 15.0, time_window: [10.0, 16.0] },
 //!   ],
 //!   vehicles: [{ capacity: 100.0 }],
-//!   depot: { x: 0.0, y: 0.0 },
+//!   depots: [{ x: 0.0, y: 0.0 }],
 //!   method: "ga",
 //!   config: { population_size: 100, max_generations: 500 },
 //! });
@@ -44,7 +44,9 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use crate::service::{self, InputConfig, InputCustomer, InputSolution, InputVehicle, ServiceError};
+use crate::service::{
+    self, InputConfig, InputCustomer, InputDepot, InputSolution, InputVehicle, ServiceError,
+};
 
 // ============================================================================
 // Error helper
@@ -190,15 +192,7 @@ fn from_json<T: serde::de::DeserializeOwned>(
 // ============================================================================
 //
 // Customers, vehicles and solver settings are the shared wire types in
-// `service`. Only the top level is this binding's own: the depot is an object.
-
-#[derive(Deserialize, tsify::Tsify)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-struct InputDepot {
-    x: f64,
-    y: f64,
-}
+// `service`. Only the top level is this binding's own.
 
 #[derive(Deserialize, tsify::Tsify)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -208,10 +202,12 @@ struct VrpInput {
     #[serde(default)]
     #[tsify(optional)]
     vehicles: Vec<InputVehicle>,
-    depot: InputDepot,
-    /// Distance (and travel time) between every two points, the depot first
-    /// and then the customers in the order given -- `distances[0][1]` is the
-    /// depot to `customers[0]`. Square and symmetric, entries finite and not
+    /// The depots, at least one: where routes start and end. A vehicle's `depot`
+    /// is an index into this list.
+    depots: Vec<InputDepot>,
+    /// Distance (and travel time) between every two points, the depots first
+    /// and then the customers in the order given -- with one depot,
+    /// `distances[0][1]` is the depot to `customers[0]`. Square and symmetric, entries finite and not
     /// negative. Absent or `null`: the Euclidean distance between `x`/`y`.
     #[serde(default)]
     #[tsify(optional, type = "number[][] | null")]
@@ -261,7 +257,7 @@ pub fn check_vrp_solution(
     let config = input.config.unwrap_or_default();
     let output = service::check(
         &service::ProblemInput {
-            depot: (input.depot.x, input.depot.y),
+            depots: &service::depot_points(&input.depots),
             customers: &input.customers,
             vehicles: &input.vehicles,
             distances: input.distances.as_deref(),
@@ -341,7 +337,7 @@ pub fn solve_vrp(
     let start = web_time();
     let mut output = service::solve(
         &service::ProblemInput {
-            depot: (input.depot.x, input.depot.y),
+            depots: &service::depot_points(&input.depots),
             customers: &input.customers,
             vehicles: &input.vehicles,
             distances: input.distances.as_deref(),
@@ -408,7 +404,7 @@ mod dto_strictness_tests {
                 { "id": 1, "x": 0.0, "y": 0.0 },
                 { "id": 2, "x": 1.0, "y": 1.0 }
             ],
-            "depot": { "x": 0.0, "y": 0.0 },
+            "depots": [{ "x": 0.0, "y": 0.0 }],
             "method": "ga",
             "ga_config": { "population_size": 60 }
         }));
@@ -455,7 +451,7 @@ mod path_tests {
                 { "id": 2, "x": 3.0, "y": 1.0, "demand": 1.0 },
                 { "id": 3, "x": -2.0, "y": 4.0, "demand": 1.0 }
             ],
-            "depot": { "x": 0.0, "y": 0.0 },
+            "depots": [{ "x": 0.0, "y": 0.0 }],
             "method": "ga",
             "config": config,
         })
@@ -467,7 +463,7 @@ mod path_tests {
         let input: super::VrpInput = super::from_json(problem, "problem")?;
         crate::service::solve(
             &crate::service::ProblemInput {
-                depot: (input.depot.x, input.depot.y),
+                depots: &crate::service::depot_points(&input.depots),
                 customers: &input.customers,
                 vehicles: &input.vehicles,
                 distances: input.distances.as_deref(),

@@ -300,8 +300,7 @@ fn solve_vrp() -> Value {
             { "id": 2, "x": 3.0, "y": 1.0, "demand": 2.0, "service_time": 1.0, "time_window": [0.0, 100.0] }
         ],
         "vehicles": [{ "capacity": 10.0, "max_distance": 1000.0, "max_duration": 1000.0 }],
-        "depot_x": 0.0,
-        "depot_y": 0.0,
+        "depots": [{ "x": 0.0, "y": 0.0 }],
         // `ga`, with the settings it reads: a setting the method does not read
         // is refused, and the keys of `config` are measured from the refusal of
         // an unknown one, which lists them all.

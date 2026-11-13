@@ -83,8 +83,7 @@ fn every_method_answers_degenerate_problems_without_internal() {
             let request = json!({
                 "customers": customers,
                 "vehicles": vehicles,
-                "depot_x": 0.0,
-                "depot_y": 0.0,
+                "depots": [{ "x": 0.0, "y": 0.0 }],
                 "method": method,
             });
             let (_, body) = call(super::urouting_solve_vrp, &request);

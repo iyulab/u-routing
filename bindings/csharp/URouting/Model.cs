@@ -126,7 +126,8 @@ public sealed record Vehicle(
     double? FixedCost = null,
     double? CostPerDistance = null,
     int? Count = null,
-    VehicleBreak? Break = null);
+    VehicleBreak? Break = null,
+    int? Depot = null);
 
 /// <summary>
 /// A rest the driver takes during every route of a vehicle: <see cref="Duration"/> long, starting
@@ -167,8 +168,14 @@ public sealed record VrpConfig
     public Balance? Balance { get; init; }
 }
 
-/// <summary>A routing problem: a depot, the customers, the fleet and how to solve it.</summary>
-public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Customer> Customers)
+/// <summary>A point routes start from and return to.</summary>
+public sealed record Depot(double X, double Y);
+
+/// <summary>
+/// A routing problem: the depots (at least one), the customers, the fleet and how to solve it.
+/// A vehicle starts from the depot its <see cref="Vehicle.Depot"/> indexes (the first by default).
+/// </summary>
+public sealed record VrpRequest(IReadOnlyList<Depot> Depots, IReadOnlyList<Customer> Customers)
 {
     /// <summary>
     /// The fleet. For <see cref="RoutingMethod.NearestNeighbor"/> each entry is one route; for the
@@ -179,7 +186,7 @@ public sealed record VrpRequest(double DepotX, double DepotY, IReadOnlyList<Cust
 
     /// <summary>
     /// The distance (and travel time) between every two points, or <c>null</c> for the Euclidean
-    /// distance between the coordinates: one row per point, the depot first and then
+    /// distance between the coordinates: one row per point, the depots first and then
     /// <see cref="Customers"/> in order, each row as long; the way back may differ from the way
     /// there. The engine refuses a row count or length that does not match
     /// (<c>dimension_mismatch</c>) and a negative entry (<c>parameter_out_of_range</c>).

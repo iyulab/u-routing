@@ -113,7 +113,7 @@ fn main() {
                     config["balance"] = json!({ "quantity": "distance", "weight": weight });
                 }
                 let request = json!({
-                    "depot_x": points[0].0, "depot_y": points[0].1, "customers": customers,
+                    "depots": [{ "x": points[0].0, "y": points[0].1 }], "customers": customers,
                     "vehicles": [{ "capacity": capacity }], "method": method,
                     "config": config, "distances": distances,
                 });
