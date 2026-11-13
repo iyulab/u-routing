@@ -18,7 +18,8 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
-    effective_cost, has_soft_windows, route_feasible, RouteEvaluator, RouteLimits,
+    close_pairs, closes_feasibly, effective_cost, has_pairs, has_soft_windows, load_change,
+    route_feasible, RouteEvaluator, RouteLimits,
 };
 use crate::models::{Customer, Solution, Vehicle};
 
@@ -70,6 +71,7 @@ pub fn nearest_neighbor_tw(
     visited[0] = true; // depot
 
     let soft = has_soft_windows(customers);
+    let paired = has_pairs(customers);
     let mut solution = Solution::new();
     let mut vehicle_idx = 0;
 
@@ -102,8 +104,22 @@ pub fn nearest_neighbor_tw(
                 }
 
                 // Check capacity
-                let demand = customers[i].demand();
+                let demand = load_change(customers, i);
                 if current_load + demand > vehicle.capacity() {
+                    continue;
+                }
+
+                // Whatever the route owes at its end (a pickup's delivery) has to fit too.
+                if paired
+                    && !closes_feasibly(
+                        &mut route_customers,
+                        i,
+                        depot,
+                        distances,
+                        customers,
+                        &limits,
+                    )
+                {
                     continue;
                 }
 
@@ -179,13 +195,21 @@ pub fn nearest_neighbor_tw(
 
                     current_time = service_start + customers[next].service_duration();
                     travelled += travel;
-                    current_load += customers[next].demand();
+                    current_load += load_change(customers, next);
                     current = next;
                 }
                 None => break,
             }
         }
 
+        // The route ends with the deliveries it still owes (each was checked to fit).
+        if paired {
+            let before = route_customers.len();
+            close_pairs(&mut route_customers, customers);
+            for &delivery in &route_customers[before..] {
+                visited[delivery] = true;
+            }
+        }
         if !route_customers.is_empty() {
             let (route, _) = evaluator.build_route(&route_customers);
             solution.add_route(route);

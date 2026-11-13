@@ -7,6 +7,7 @@
 //! nothing of pairs: what keeps them right is the one feasibility question they all ask.
 
 use u_routing::balance::{improve as balance_improve, Balance, Quantity};
+use u_routing::constructive::{nearest_neighbor, nearest_neighbor_tw};
 use u_routing::distance::DistanceMatrix;
 use u_routing::evaluation::{
     check_solution, pairs_ordered, route_eval, route_feasible, Fleet, RouteEvaluator, RouteLimits,
@@ -16,7 +17,7 @@ use u_routing::local_search::{
     cross_depot_improve, exchange_improve, or_opt_improve, relocate_improve, three_opt_improve,
     two_opt_improve,
 };
-use u_routing::models::{Customer, Solution, Vehicle, VehicleBreak};
+use u_routing::models::{Customer, Solution, TimeWindow, Vehicle, VehicleBreak};
 
 struct Lcg(u64);
 
@@ -255,5 +256,103 @@ fn limiting_and_balancing_keep_every_pair_together() {
             );
             assert_clean(&i, &plan(&i, &routes, &[]), "balance", seed);
         }
+    }
+}
+
+/// The same pairs on a map, each customer with a window of the given width around a time that
+/// the trip to it takes; some pairs cannot be served at all.
+fn with_windows(i: &Instance, width: f64, seed: u64) -> Vec<Customer> {
+    let mut rng = Lcg(seed ^ 0xABCD);
+    i.customers
+        .iter()
+        .map(|c| {
+            if c.is_depot() {
+                return c.clone();
+            }
+            let centre = 20.0 + rng.next() * 120.0;
+            c.clone().with_time_window(
+                TimeWindow::new((centre - width).max(0.0), centre + width).expect("valid"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_nearest_neighbour_constructions_make_whole_routes() {
+    for seed in 0..80 {
+        let base = instance(seed);
+        // Capacity small enough to split the pairs over several routes, and with a limit on the
+        // route length now and then.
+        let capacity = [6, 9, 14, 30][(seed % 4) as usize];
+        let limit = seed % 3 == 0;
+        let make = |id: usize| {
+            let v = Vehicle::new(id, capacity);
+            if limit {
+                v.with_max_distance(260.0)
+            } else {
+                v
+            }
+        };
+        let vehicle = make(0);
+        let vehicles: Vec<Vehicle> = (0..6).map(make).collect();
+        for (label, customers) in [
+            ("no windows", base.customers.clone()),
+            ("loose windows", with_windows(&base, 300.0, seed)),
+            ("tight windows", with_windows(&base, 30.0, seed)),
+        ] {
+            let i = Instance {
+                customers,
+                dm: base.dm.clone(),
+                vehicle: vehicle.clone(),
+                routes: Vec::new(),
+            };
+            for (name, solution) in [
+                ("nn", nearest_neighbor(&i.customers, &i.dm, &vehicles)),
+                ("nn_tw", nearest_neighbor_tw(&i.customers, &i.dm, &vehicles)),
+            ] {
+                let fleet = Fleet {
+                    vehicles: &vehicles,
+                    counts: &[],
+                    max_routes: None,
+                };
+                let found = check_solution(&i.customers, &i.dm, &fleet, &solution);
+                // `nn` does not look at windows: only the pair and capacity rules are its.
+                let found: Vec<_> = found
+                    .into_iter()
+                    .filter(|v| {
+                        name == "nn_tw"
+                            || !matches!(
+                                v.kind,
+                                u_routing::models::ViolationType::TimeWindowViolated { .. }
+                            )
+                    })
+                    .collect();
+                assert!(
+                    found.is_empty(),
+                    "{name} / {label} (seed {seed}, capacity {capacity}): {found:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_vehicle_that_unloads_carries_the_next_pair_on_the_same_route() {
+    // Two 6-unit pairs along a line, a vehicle of 6: one pair after the other is one route.
+    let customers = vec![
+        Customer::depot(0.0, 0.0),
+        Customer::new(1, 1.0, 0.0, 6, 0.0).pickup_of(2),
+        Customer::new(2, 2.0, 0.0, 0, 0.0).delivery_of(1),
+        Customer::new(3, 3.0, 0.0, 6, 0.0).pickup_of(4),
+        Customer::new(4, 4.0, 0.0, 0, 0.0).delivery_of(3),
+    ];
+    let dm = DistanceMatrix::from_customers(&customers);
+    let vehicles = [Vehicle::new(0, 6), Vehicle::new(1, 6)];
+    for (name, solution) in [
+        ("nn", nearest_neighbor(&customers, &dm, &vehicles)),
+        ("nn_tw", nearest_neighbor_tw(&customers, &dm, &vehicles)),
+    ] {
+        assert_eq!(solution.num_routes(), 1, "{name}");
+        assert_eq!(solution.routes()[0].customer_ids(), [1, 2, 3, 4], "{name}");
     }
 }

@@ -13,7 +13,10 @@
 //! quality is typically 15-25% above optimal, it provides a fast baseline.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
+use crate::evaluation::{
+    close_pairs, closes_feasibly, has_pairs, load_change, route_feasible, RouteEvaluator,
+    RouteLimits,
+};
 use crate::models::{Customer, Route, Solution, Vehicle};
 
 /// The vehicle of `route` in `vehicles` (by id; the first when the id is not
@@ -70,6 +73,7 @@ pub fn nearest_neighbor(
     let mut visited = vec![false; n];
     visited[0] = true; // depot
 
+    let paired = has_pairs(customers);
     let mut solution = Solution::new();
     let mut vehicle_idx = 0;
 
@@ -103,8 +107,21 @@ pub fn nearest_neighbor(
                 if visited[i] {
                     continue;
                 }
-                let demand = customers[i].demand();
+                let demand = load_change(customers, i);
                 if current_load + demand > vehicle.capacity() {
+                    continue;
+                }
+                // Whatever the route owes at its end (a pickup's delivery) has to fit too.
+                if paired
+                    && !closes_feasibly(
+                        &mut route_customers,
+                        i,
+                        depot,
+                        distances,
+                        customers,
+                        &limits,
+                    )
+                {
                     continue;
                 }
                 let d = distances.get(current, i);
@@ -136,7 +153,7 @@ pub fn nearest_neighbor(
                 Some((next, d)) => {
                     visited[next] = true;
                     route_customers.push(next);
-                    current_load += customers[next].demand();
+                    current_load += load_change(customers, next);
                     travelled += d;
                     clock +=
                         distances.travel_time(current, next) + customers[next].service_duration();
@@ -146,6 +163,14 @@ pub fn nearest_neighbor(
             }
         }
 
+        // The route ends with the deliveries it still owes (each was checked to fit).
+        if paired {
+            let before = route_customers.len();
+            close_pairs(&mut route_customers, customers);
+            for &delivery in &route_customers[before..] {
+                visited[delivery] = true;
+            }
+        }
         if !route_customers.is_empty() {
             let (route, _) = evaluator.build_route(&route_customers);
             solution.add_route(route);

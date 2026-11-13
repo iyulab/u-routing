@@ -25,6 +25,37 @@ pub fn has_pairs(customers: &[Customer]) -> bool {
         .any(|c| c.delivery_index().is_some() || c.pickup_index().is_some())
 }
 
+/// Appends to `route` the deliveries of the pickups on it that it does not deliver yet, in the order
+/// of their pickups: the shortest way to make a route that ends with open pickups whole.
+pub(crate) fn close_pairs(route: &mut Vec<usize>, customers: &[Customer]) {
+    let open: Vec<usize> = route
+        .iter()
+        .filter_map(|&id| customers[id].delivery_index())
+        .filter(|delivery| !route.contains(delivery))
+        .collect();
+    route.extend(open);
+}
+
+/// Whether `route` followed by `next` can still end as a whole route: the deliveries it then owes
+/// ([`close_pairs`]) added, the route keeps its windows, limits and pairs. A constructive search
+/// that adds one stop at a time asks this of every candidate, so that it never strands a pickup.
+/// `route` is left as it was.
+pub(crate) fn closes_feasibly(
+    route: &mut Vec<usize>,
+    next: usize,
+    depot: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    limits: &RouteLimits,
+) -> bool {
+    let kept = route.len();
+    route.push(next);
+    close_pairs(route, customers);
+    let fits = route_feasible(route, depot, distances, customers, limits);
+    route.truncate(kept);
+    fits
+}
+
 /// How much a stop at `id` changes the load: a customer adds its demand, a pickup adds the
 /// demand it loads, and a delivery takes off what its pickup loaded.
 pub(crate) fn load_change(customers: &[Customer], id: usize) -> i32 {
