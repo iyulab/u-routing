@@ -87,6 +87,8 @@ pub fn check_solution(
     }
 
     let mut served = vec![false; customers.len()];
+    // The route that serves each customer (its first visit).
+    let mut route_of: Vec<Option<usize>> = vec![None; customers.len()];
     let mut vehicle_used = vec![0usize; fleet.vehicles.len()];
     for (route_index, route) in solution.routes().iter().enumerate() {
         let ids = route.customer_ids();
@@ -105,6 +107,7 @@ pub fn check_solution(
                 });
             } else {
                 served[id] = true;
+                route_of[id] = Some(route_index);
             }
         }
 
@@ -138,6 +141,7 @@ pub fn check_solution(
                 | ViolationType::TimeWindowViolated { route_index: r, .. }
                 | ViolationType::MaxDistanceExceeded { route_index: r, .. }
                 | ViolationType::MaxDurationExceeded { route_index: r, .. }
+                | ViolationType::PairOrder { route_index: r, .. }
                 | ViolationType::BreakNotPlaceable { route_index: r } => *r = route_index,
                 _ => {}
             }
@@ -158,6 +162,19 @@ pub fn check_solution(
                 reported,
                 actual,
             });
+        }
+    }
+
+    // A pickup and its delivery are served together, on one route.
+    for (pickup, customer) in customers.iter().enumerate().skip(depots) {
+        if let Some(delivery) = customer.delivery_index() {
+            let on = |id: usize| route_of.get(id).copied().flatten();
+            if on(pickup) != on(delivery) {
+                push(ViolationType::PairSplit {
+                    pickup_id: pickup,
+                    delivery_id: delivery,
+                });
+            }
         }
     }
 
@@ -536,5 +553,58 @@ mod tests {
         late.set_lateness(1.0, 3.0);
         let s = plan(vec![late, route(0, &[3, 4], &dm)], &[]);
         assert!(check_solution(&c, &dm, &fleet, &s).is_empty());
+    }
+
+    #[test]
+    fn a_pickup_and_its_delivery_are_served_together_and_in_order() {
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 5, 0.0).pickup_of(2),
+            Customer::new(2, 2.0, 0.0, 0, 0.0).delivery_of(1),
+            Customer::new(3, 0.0, 3.0, 5, 0.0),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        let vehicles = [Vehicle::new(0, 10)];
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: None,
+        };
+
+        // Together and in order: nothing to report.
+        let s = plan(vec![route(0, &[1, 2, 3], &dm)], &[]);
+        assert!(check_solution(&customers, &dm, &fleet, &s).is_empty());
+        // Both left out: also fine, the pair goes out together.
+        let s = plan(vec![route(0, &[3], &dm)], &[1, 2]);
+        assert!(check_solution(&customers, &dm, &fleet, &s).is_empty());
+
+        // Delivery first.
+        let s = plan(vec![route(0, &[2, 1, 3], &dm)], &[]);
+        assert!(matches!(
+            kinds(&check_solution(&customers, &dm, &fleet, &s))[..],
+            [ViolationType::PairOrder {
+                route_index: 0,
+                pickup_id: 1,
+                delivery_id: 2
+            }]
+        ));
+        // On two routes.
+        let s = plan(vec![route(0, &[1], &dm), route(0, &[2, 3], &dm)], &[]);
+        assert!(matches!(
+            kinds(&check_solution(&customers, &dm, &fleet, &s))[..],
+            [ViolationType::PairSplit {
+                pickup_id: 1,
+                delivery_id: 2
+            }]
+        ));
+        // One routed, the other unassigned.
+        let s = plan(vec![route(0, &[1, 3], &dm)], &[2]);
+        assert!(matches!(
+            kinds(&check_solution(&customers, &dm, &fleet, &s))[..],
+            [ViolationType::PairSplit {
+                pickup_id: 1,
+                delivery_id: 2
+            }]
+        ));
     }
 }

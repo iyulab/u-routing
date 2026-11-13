@@ -320,6 +320,8 @@ public sealed record PlanCheck(bool Feasible, IReadOnlyList<PlanViolation> Viola
 [JsonDerivedType(typeof(MaxDistanceExceeded), "max_distance_exceeded")]
 [JsonDerivedType(typeof(MaxDurationExceeded), "max_duration_exceeded")]
 [JsonDerivedType(typeof(BreakNotPlaceable), "break_not_placeable")]
+[JsonDerivedType(typeof(PairOrder), "pair_order")]
+[JsonDerivedType(typeof(PairSplit), "pair_split")]
 [JsonDerivedType(typeof(UnknownCustomer), "unknown_customer")]
 [JsonDerivedType(typeof(CustomerVisitedTwice), "customer_visited_twice")]
 [JsonDerivedType(typeof(CustomerMissing), "customer_missing")]
@@ -348,6 +350,10 @@ public abstract record PlanViolation
     /// when the break is due and no stop lets it start by its latest time without closing a hard window.
     /// </summary>
     public sealed record BreakNotPlaceable(int Route) : PlanViolation;
+    /// <summary>The route visits the delivery before its pickup.</summary>
+    public sealed record PairOrder(int Route, long Pickup, long Delivery) : PlanViolation;
+    /// <summary>The pickup and its delivery are not on one route: on two routes, or one is unassigned.</summary>
+    public sealed record PairSplit(long Pickup, long Delivery) : PlanViolation;
     /// <summary>The route visits an id no customer of the request has.</summary>
     public sealed record UnknownCustomer(int Route, long Customer) : PlanViolation;
     /// <summary>The customer is visited a second time, on this route.</summary>

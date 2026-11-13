@@ -1524,6 +1524,15 @@ pub(crate) enum PlanViolation {
     /// The vehicle's `break` cannot be placed on the route: the vehicle is still out when the break
     /// is due and no stop lets it start by its `latest` without closing a hard time window behind it.
     BreakNotPlaceable { route: usize },
+    /// The route visits `delivery` before its `pickup`.
+    PairOrder {
+        route: usize,
+        pickup: i64,
+        delivery: i64,
+    },
+    /// `pickup` and its `delivery` are not on one route: on two routes, or one is on a route and
+    /// the other is unassigned or on none.
+    PairSplit { pickup: i64, delivery: i64 },
     /// The route visits an id that is no customer of the request.
     UnknownCustomer { route: usize, customer: i64 },
     /// `customer` is visited a second time, on `route`.
@@ -1584,6 +1593,15 @@ impl PlanViolation {
                 max_duration: 0.0,
             },
             Self::BreakNotPlaceable { route: 0 },
+            Self::PairOrder {
+                route: 0,
+                pickup: 0,
+                delivery: 0,
+            },
+            Self::PairSplit {
+                pickup: 0,
+                delivery: 0,
+            },
             Self::UnknownCustomer {
                 route: 0,
                 customer: 0,
@@ -1852,6 +1870,22 @@ pub(crate) fn check(
                 ViolationType::BreakNotPlaceable { route_index } => {
                     PlanViolation::BreakNotPlaceable { route: route_index }
                 }
+                ViolationType::PairOrder {
+                    route_index,
+                    pickup_id,
+                    delivery_id,
+                } => PlanViolation::PairOrder {
+                    route: route_index,
+                    pickup: caller(pickup_id),
+                    delivery: caller(delivery_id),
+                },
+                ViolationType::PairSplit {
+                    pickup_id,
+                    delivery_id,
+                } => PlanViolation::PairSplit {
+                    pickup: caller(pickup_id),
+                    delivery: caller(delivery_id),
+                },
                 ViolationType::UnknownCustomer {
                     route_index,
                     customer_id,
@@ -3161,7 +3195,7 @@ mod tests {
     /// has one), and the fields listed are the ones it serializes.
     #[test]
     fn the_code_catalog_covers_every_violation() {
-        let mut seen = [false; 16];
+        let mut seen = [false; 18];
         for v in PlanViolation::examples() {
             let i = match v {
                 PlanViolation::CapacityExceeded { .. } => 0,
@@ -3180,6 +3214,8 @@ mod tests {
                 PlanViolation::EquityMismatch { .. } => 13,
                 PlanViolation::ObjectiveMismatch { .. } => 14,
                 PlanViolation::BreakNotPlaceable { .. } => 15,
+                PlanViolation::PairOrder { .. } => 16,
+                PlanViolation::PairSplit { .. } => 17,
             };
             assert!(!seen[i], "two examples of variant {i}");
             seen[i] = true;

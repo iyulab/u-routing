@@ -101,6 +101,10 @@ pub struct Customer {
     time_window: Option<TimeWindow>,
     lateness_penalty: Option<f64>,
     depot: bool,
+    /// On a pickup: the table index of the delivery its load goes to.
+    delivery: Option<usize>,
+    /// On a delivery: the table index of the pickup its load comes from.
+    pickup: Option<usize>,
 }
 
 impl Customer {
@@ -115,6 +119,8 @@ impl Customer {
             time_window: None,
             lateness_penalty: None,
             depot: false,
+            delivery: None,
+            pickup: None,
         }
     }
 
@@ -174,6 +180,33 @@ impl Customer {
     pub fn without_lateness_penalty(mut self) -> Self {
         self.lateness_penalty = None;
         self
+    }
+
+    /// Makes this customer the pickup of a pair: its `demand` is loaded here and unloaded at the
+    /// customer in table row `delivery`, which has to come later on the same route. The pair is
+    /// stated on both rows -- call [`Customer::delivery_of`] on the delivery's row with this
+    /// row's index.
+    pub fn pickup_of(mut self, delivery: usize) -> Self {
+        self.delivery = Some(delivery);
+        self
+    }
+
+    /// Makes this customer the delivery of a pair: it unloads the demand of the customer in table
+    /// row `pickup`, which has to be visited earlier on the same route. Its own `demand` is not
+    /// added to the load (give it 0).
+    pub fn delivery_of(mut self, pickup: usize) -> Self {
+        self.pickup = Some(pickup);
+        self
+    }
+
+    /// For a pickup, the table index of the delivery its load goes to.
+    pub fn delivery_index(&self) -> Option<usize> {
+        self.delivery
+    }
+
+    /// For a delivery, the table index of the pickup its load comes from.
+    pub fn pickup_index(&self) -> Option<usize> {
+        self.pickup
     }
 
     /// Customer ID: its index in the problem's table (a depot's is below

@@ -104,7 +104,7 @@ impl<'a> RouteEvaluator<'a> {
             };
 
             let departure = service_start + customer.service_duration();
-            current_load += customer.demand();
+            current_load += super::load_change(self.customers, cid);
 
             route.push_visit(Visit {
                 customer_id: cid,
@@ -138,11 +138,31 @@ impl<'a> RouteEvaluator<'a> {
             }));
         }
 
-        // Check capacity
-        if current_load > self.vehicle.capacity() {
+        // A delivery visited before its pickup, both on this route.
+        if super::has_pairs(self.customers) {
+            let mut position: Vec<Option<usize>> = vec![None; self.customers.len()];
+            for (index, &cid) in customer_ids.iter().enumerate() {
+                position[cid] = Some(index);
+            }
+            for (index, &cid) in customer_ids.iter().enumerate() {
+                if let Some(pickup) = self.customers[cid].pickup_index() {
+                    if position[pickup].is_some_and(|at| at > index) {
+                        violations.push(Violation::new(ViolationType::PairOrder {
+                            route_index: 0,
+                            pickup_id: pickup,
+                            delivery_id: cid,
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Check capacity: the most the vehicle carries at any point.
+        let peak = super::route_peak_load(customer_ids, self.customers);
+        if peak > self.vehicle.capacity() {
             violations.push(Violation::new(ViolationType::CapacityExceeded {
                 route_index: 0,
-                load: current_load,
+                load: peak,
                 capacity: self.vehicle.capacity(),
             }));
         }
@@ -330,5 +350,84 @@ mod tests {
         // Customer 1 departs, then travels to customer 2
         let expected_arrival_2 = v1.departure_time + dm.get(1, 2);
         assert!((v2.arrival_time - expected_arrival_2).abs() < 1e-10);
+    }
+
+    /// Two pairs on a line: pickups 1 and 3 (5 and 6 units), their deliveries 2 and 4.
+    fn pairs() -> (Vec<Customer>, DistanceMatrix) {
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 6, 0.0).pickup_of(2),
+            Customer::new(2, 2.0, 0.0, 0, 0.0).delivery_of(1),
+            Customer::new(3, 3.0, 0.0, 5, 0.0).pickup_of(4),
+            Customer::new(4, 4.0, 0.0, 0, 0.0).delivery_of(3),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        (customers, dm)
+    }
+
+    #[test]
+    fn the_load_rises_at_a_pickup_and_falls_at_its_delivery() {
+        let (customers, dm) = pairs();
+        let vehicle = Vehicle::new(0, 10);
+        let eval = RouteEvaluator::new(&customers, &dm, &vehicle);
+
+        // One pair after the other: 6, 0, 5, 0 -- the peak 6 fits.
+        let (route, violations) = eval.build_route(&[1, 2, 3, 4]);
+        let loads: Vec<i32> = route.visits().iter().map(|v| v.load_after).collect();
+        assert_eq!(loads, [6, 0, 5, 0]);
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(
+            crate::evaluation::route_peak_load(&[1, 2, 3, 4], &customers),
+            6
+        );
+
+        // Both pickups first: 6, 11, 5, 0 -- the peak 11 does not fit 10, though the demands sum to 11 too.
+        let (_, violations) = eval.build_route(&[1, 3, 2, 4]);
+        assert!(matches!(
+            violations[..],
+            [Violation {
+                kind: ViolationType::CapacityExceeded {
+                    load: 11,
+                    capacity: 10,
+                    ..
+                },
+                ..
+            }]
+        ));
+
+        // The peak is what counts, not the sum: a vehicle of 6 carries both pairs one after the other.
+        let small = Vehicle::new(0, 6);
+        let eval = RouteEvaluator::new(&customers, &dm, &small);
+        assert!(eval.build_route(&[1, 2, 3, 4]).1.is_empty());
+    }
+
+    #[test]
+    fn a_delivery_before_its_pickup_is_a_pair_order_violation() {
+        let (customers, dm) = pairs();
+        let vehicle = Vehicle::new(0, 50);
+        let eval = RouteEvaluator::new(&customers, &dm, &vehicle);
+        let (_, violations) = eval.build_route(&[3, 2, 1, 4]);
+        // Pair (1, 2) is the wrong way round; pair (3, 4) is fine.
+        assert!(matches!(
+            violations[..],
+            [Violation {
+                kind: ViolationType::PairOrder {
+                    pickup_id: 1,
+                    delivery_id: 2,
+                    ..
+                },
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn without_pairs_the_peak_is_the_sum() {
+        let (customers, _, _) = setup();
+        assert_eq!(
+            crate::evaluation::route_peak_load(&[1, 2, 3], &customers),
+            45
+        );
+        assert_eq!(crate::evaluation::route_peak_load(&[], &customers), 0);
     }
 }

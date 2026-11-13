@@ -571,6 +571,60 @@
         },
         {
           "additionalProperties": false,
+          "description": "The route visits `delivery` before its `pickup`.",
+          "properties": {
+            "code": {
+              "const": "pair_order",
+              "type": "string"
+            },
+            "delivery": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "pickup": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "route": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "route",
+            "pickup",
+            "delivery"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`pickup` and its `delivery` are not on one route: on two routes, or one is on a route and\nthe other is unassigned or on none.",
+          "properties": {
+            "code": {
+              "const": "pair_split",
+              "type": "string"
+            },
+            "delivery": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "pickup": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "code",
+            "pickup",
+            "delivery"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The route visits an id that is no customer of the request.",
           "properties": {
             "code": {

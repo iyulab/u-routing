@@ -693,6 +693,8 @@ request and plan name them):
 | `max_distance_exceeded` | `route`, `distance`, `max_distance` | The route is longer than its vehicle's `max_distance` |
 | `max_duration_exceeded` | `route`, `duration`, `max_duration` | The route returns later than its vehicle's `max_duration` |
 | `break_not_placeable` | `route` | The vehicle's `break` cannot be placed on the route: it is still out when the break is due and no stop lets it start by its `latest` without closing a hard time window behind it |
+| `pair_order` | `route`, `pickup`, `delivery` | The route visits the delivery before its pickup |
+| `pair_split` | `pickup`, `delivery` | The pickup and its delivery are not on one route: on two routes, or one is unassigned or on none |
 | `unknown_customer` | `route`, `customer` | The route visits an id no customer has |
 | `customer_visited_twice` | `route`, `customer` | The customer is visited a second time, on this route |
 | `customer_missing` | `customer` | The customer is on no route and not in `unassigned` |

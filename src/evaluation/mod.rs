@@ -16,6 +16,45 @@ pub fn has_time_windows(customers: &[Customer]) -> bool {
     customers.iter().any(|c| c.time_window().is_some())
 }
 
+/// Whether any customer belongs to a pickup-delivery pair
+/// ([`Customer::pickup_of`], [`Customer::delivery_of`]) -- the case where the order of a route
+/// matters beyond its times and where a route's load is not the sum of its demands.
+pub fn has_pairs(customers: &[Customer]) -> bool {
+    customers
+        .iter()
+        .any(|c| c.delivery_index().is_some() || c.pickup_index().is_some())
+}
+
+/// How much a stop at `id` changes the load: a customer adds its demand, a pickup adds the
+/// demand it loads, and a delivery takes off what its pickup loaded.
+pub(crate) fn load_change(customers: &[Customer], id: usize) -> i32 {
+    let customer = &customers[id];
+    match customer.pickup_index() {
+        Some(pickup) => -customers[pickup].demand(),
+        None => customer.demand(),
+    }
+}
+
+/// The most a vehicle carries at any point of `route` (customer ids, depot to depot): what its
+/// capacity has to cover. Without pickup-delivery pairs the load only grows, so this is the sum
+/// of the demands; with them it rises at a pickup and falls at its delivery, and the peak is the
+/// highest load after any stop.
+pub fn route_peak_load(route: &[usize], customers: &[Customer]) -> i32 {
+    let paired = route.iter().any(|&id| {
+        customers[id].delivery_index().is_some() || customers[id].pickup_index().is_some()
+    });
+    if !paired {
+        return route.iter().map(|&id| customers[id].demand()).sum();
+    }
+    let mut load = 0;
+    let mut peak = 0;
+    for &id in route {
+        load += load_change(customers, id);
+        peak = peak.max(load);
+    }
+    peak
+}
+
 /// Whether any customer has a time window whose end is soft
 /// ([`Customer::with_lateness_penalty`]) -- the case where a route's lateness is a cost the
 /// searches have to weigh, not a limit they check.

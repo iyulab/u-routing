@@ -50,6 +50,23 @@ pub enum ViolationType {
         /// Route index.
         route_index: usize,
     },
+    /// A delivery is visited before its pickup on the same route.
+    PairOrder {
+        /// Route index.
+        route_index: usize,
+        /// The pickup's customer ID.
+        pickup_id: usize,
+        /// The delivery's customer ID.
+        delivery_id: usize,
+    },
+    /// A pickup and its delivery are not on one route: on two routes, or one of them is on a
+    /// route and the other is reported unassigned or missing.
+    PairSplit {
+        /// The pickup's customer ID.
+        pickup_id: usize,
+        /// The delivery's customer ID.
+        delivery_id: usize,
+    },
     /// A route visits something that is not a customer of the problem: an id
     /// past the last customer, or the depot.
     UnknownCustomer {
