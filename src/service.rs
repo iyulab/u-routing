@@ -1220,17 +1220,36 @@ fn plan_one_depot(
         // vehicle list, but it can exceed a smaller `max_vehicles`.
         let plan = match max_vehicles {
             Some(max) if plan.routes.len() > max => {
+                let everyone: Vec<usize> = plan.routes.iter().flatten().copied().collect();
+                // The plan of one kind of vehicle: every route drives the same one.
+                let one_kind = plan
+                    .vehicles
+                    .first()
+                    .copied()
+                    .filter(|k| plan.vehicles.iter().all(|v| v == k));
                 let limited =
                     limit_routes(plan.routes, plan.vehicles, vehicles, max, dm, customers);
-                let limits: Vec<RouteLimits> = limited
-                    .vehicles
+                // Emptying whole routes leaves a customer out when the routes that
+                // remain have the room only in pieces. Loading the vehicles first is
+                // tried as well, and stands when it serves more customers.
+                let packed = one_kind
+                    .filter(|_| !limited.unserved.is_empty())
+                    .map(|kind| {
+                        pack_vehicles(&everyone, vec![kind; max], |k| &vehicles[k], customers, dm)
+                    })
+                    .filter(|(routes, _)| {
+                        routes.iter().map(Vec::len).sum::<usize>()
+                            > limited.routes.iter().map(Vec::len).sum::<usize>()
+                    });
+                let (routes, kinds) = packed.unwrap_or((limited.routes, limited.vehicles));
+                let limits: Vec<RouteLimits> = kinds
                     .iter()
                     .map(|&v| RouteLimits::of(&vehicles[v]))
                     .collect();
-                let (routes, _) = apply_local_search(&limited.routes, &limits, dm, customers);
+                let (routes, _) = apply_local_search(&routes, &limits, dm, customers);
                 Plan {
                     routes,
-                    vehicles: limited.vehicles,
+                    vehicles: kinds,
                     method,
                     stop_reason: plan.stop_reason,
                 }
@@ -2694,6 +2713,7 @@ fn assign_fleet(
         let sizes: Vec<usize> = routes.iter().map(Vec::len).collect();
         assign_types(&demands, &sizes, fleet)
     };
+    let everyone: Vec<usize> = plan.routes.iter().flatten().copied().collect();
     let mut routes = plan.routes;
     let mut given = assign(&routes);
     // A route no vehicle left carries is cut for the kinds still available.
@@ -2760,6 +2780,26 @@ fn assign_fleet(
             }
         }
         routes = kept;
+        // Customers were left out. The routes were shaped for one kind of
+        // vehicle, so what the real fleet could not take says little about what
+        // it can carry: loading the vehicles first is tried as well, and stands
+        // when it serves more customers.
+        let served: usize = routes.iter().map(Vec::len).sum();
+        if let Some((packed, kinds)) = pack_fleet(&everyone, fleet, customers, dm) {
+            if packed.iter().map(Vec::len).sum::<usize>() > served {
+                let limits: Vec<RouteLimits> = kinds
+                    .iter()
+                    .map(|&k| RouteLimits::of(fleet[k].vehicle()))
+                    .collect();
+                let (routes, _) = apply_local_search(&packed, &limits, dm, customers);
+                return Plan {
+                    routes,
+                    vehicles: kinds,
+                    method: plan.method,
+                    stop_reason: plan.stop_reason,
+                };
+            }
+        }
         // The vehicles each kept route already has still carry it, so this
         // assigns every route -- at least as cheaply as before.
         given = assign(&routes);
@@ -2774,6 +2814,90 @@ fn assign_fleet(
         method: plan.method,
         stop_reason: plan.stop_reason,
     }
+}
+
+/// Loads a fleet of counted vehicles before routing it; `None` when a kind
+/// has no `count` (such a fleet is never short of vehicles). See
+/// [`pack_vehicles`].
+fn pack_fleet(
+    everyone: &[usize],
+    fleet: &[VehicleType],
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+) -> Option<(Vec<Vec<usize>>, Vec<usize>)> {
+    let mut kinds: Vec<usize> = Vec::new();
+    for (k, t) in fleet.iter().enumerate() {
+        kinds.extend(std::iter::repeat_n(k, t.count()?));
+    }
+    Some(pack_vehicles(
+        everyone,
+        kinds,
+        |k| fleet[k].vehicle(),
+        customers,
+        dm,
+    ))
+}
+
+/// Loads the vehicles before routing them: the customers, the largest demand
+/// first, each go to the vehicle with the least room left that still takes
+/// them (best-fit decreasing; Johnson 1973), at the cheapest place on its
+/// route that keeps the vehicle's limits and every time window. `kinds` names
+/// the kind of each vehicle there is; the routes that carry someone come back
+/// with the kind of each.
+///
+/// A plan made route-first leaves a customer out when its routes do not divide
+/// among the vehicles there are -- shaped for one kind of a mixed fleet, or
+/// more of them than the fleet has -- although the fleet has the capacity.
+/// Loading first does not have that blind spot; it pays for it in distance, so
+/// it is only a second candidate.
+///
+/// # Complexity
+/// O(n · V · n) for n customers and V vehicles (each placement tries a route's
+/// positions), plus the window checks when customers carry windows.
+fn pack_vehicles<'a>(
+    everyone: &[usize],
+    kinds: Vec<usize>,
+    vehicle_of: impl Fn(usize) -> &'a Vehicle,
+    customers: &[Customer],
+    dm: &DistanceMatrix,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut routes: Vec<Vec<usize>> = vec![Vec::new(); kinds.len()];
+    let mut order: Vec<usize> = everyone.to_vec();
+    order.sort_by_key(|&c| (std::cmp::Reverse(customers[c].demand()), c));
+    for c in order {
+        let demand = customers[c].demand();
+        // The vehicles that have room, the fullest first; equal room resolves
+        // to the earlier vehicle, so the same request gives the same plan.
+        let mut room: Vec<(i32, usize)> = routes
+            .iter()
+            .enumerate()
+            .filter_map(|(v, route)| {
+                let load: i32 = route.iter().map(|&x| customers[x].demand()).sum();
+                let left = vehicle_of(kinds[v]).capacity() - load - demand;
+                (left >= 0).then_some((left, v))
+            })
+            .collect();
+        room.sort_unstable();
+        for (_, v) in room {
+            let placed = cheapest_insertion(
+                std::slice::from_ref(&routes[v]),
+                |_| vehicle_of(kinds[v]).capacity(),
+                |_| RouteLimits::of(vehicle_of(kinds[v])),
+                c,
+                dm,
+                customers,
+            );
+            if let Some((_, pos, _)) = placed {
+                routes[v].insert(pos, c);
+                break;
+            }
+        }
+    }
+    routes
+        .into_iter()
+        .zip(kinds)
+        .filter(|(route, _)| !route.is_empty())
+        .unzip()
 }
 
 // ============================================================================
@@ -3949,6 +4073,190 @@ mod tests {
             for (route, summary) in out.route_summaries.iter().enumerate() {
                 let capacity = [10, 40][out.route_vehicles[route]];
                 assert!(summary.load <= capacity, "{method}: route {route}");
+            }
+        }
+    }
+
+    /// A fleet of several kinds that is nearly full: 38 customers, 16 409 units,
+    /// eight vehicles of 18 500 in all -- and the same day with one vehicle of
+    /// 1 500 fewer (17 000). Both fit: best-fit decreasing by demand alone packs
+    /// them. The routes a method shapes for one kind of vehicle do not divide
+    /// among the kinds there are, and a customer used to be left out although
+    /// the fleet has the room; a longer search left out more than a short one.
+    #[test]
+    fn a_nearly_full_fleet_of_several_kinds_leaves_no_customer_that_fits() {
+        let stops: [(f64, f64, i32); 38] = [
+            (-12.0, 27.0, 195),
+            (12.0, 9.0, 131),
+            (4.0, -7.0, 237),
+            (28.0, 3.0, 273),
+            (-12.0, 27.0, 430),
+            (-5.0, -19.0, 325),
+            (-17.0, 14.0, 959),
+            (-5.0, -19.0, 605),
+            (-5.0, -19.0, 151),
+            (-24.0, 6.0, 225),
+            (-5.0, -19.0, 231),
+            (21.0, 20.0, 375),
+            (21.0, 20.0, 842),
+            (4.0, -7.0, 173),
+            (-17.0, 14.0, 1130),
+            (4.0, -7.0, 735),
+            (26.0, -11.0, 163),
+            (4.0, -7.0, 132),
+            (21.0, 20.0, 122),
+            (-5.0, -19.0, 210),
+            (15.0, -26.0, 520),
+            (-5.0, -19.0, 348),
+            (26.0, -11.0, 1256),
+            (12.0, 9.0, 745),
+            (-8.0, -22.0, 134),
+            (-24.0, 6.0, 220),
+            (-17.0, 14.0, 98),
+            (-5.0, -19.0, 189),
+            (26.0, -11.0, 705),
+            (-17.0, 14.0, 380),
+            (-28.0, -15.0, 1064),
+            (-24.0, 6.0, 1560),
+            (-12.0, 27.0, 137),
+            (28.0, 3.0, 131),
+            (12.0, 9.0, 183),
+            (-24.0, 6.0, 168),
+            (-5.0, -19.0, 602),
+            (12.0, 9.0, 325),
+        ];
+        let customers: Vec<InputCustomer> = stops
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y, demand))| {
+                customer(serde_json::json!({ "id": i + 1, "x": x, "y": y, "demand": demand }))
+            })
+            .collect();
+        let kinds = |small: usize| {
+            [
+                vehicle(serde_json::json!({ "capacity": 1000, "count": 2 })),
+                vehicle(serde_json::json!({ "capacity": 1500, "count": small })),
+                vehicle(serde_json::json!({ "capacity": 2500, "count": 2 })),
+                vehicle(serde_json::json!({ "capacity": 3500, "count": 1 })),
+                vehicle(serde_json::json!({ "capacity": 5000, "count": 1 })),
+            ]
+        };
+        let long = |method: &str| match method {
+            "ga" => InputConfig {
+                max_generations: Some(200),
+                seed: Some(42),
+                ..InputConfig::default()
+            },
+            "alns" => InputConfig {
+                max_iterations: Some(3000),
+                seed: Some(42),
+                ..InputConfig::default()
+            },
+            _ => InputConfig::default(),
+        };
+        for small in [2, 1] {
+            let fleet = kinds(small);
+            for method in ["savings", "ga", "alns"] {
+                for config in [quick(method), long(method)] {
+                    let (out, violations) = solved_and_checked(&customers, &fleet, method, &config);
+                    assert!(violations.is_empty(), "{method} {small}: {violations:?}");
+                    assert!(
+                        out.unassigned.is_empty(),
+                        "{method} with {small} of 1500: left out {:?}",
+                        out.unassigned
+                    );
+                }
+            }
+        }
+    }
+
+    /// One kind of vehicle, three of them, exactly full: demands 6, 6, 4, 4, 5, 5
+    /// in vehicles of 10. It fits as (6, 4), (6, 4), (5, 5), but the customers
+    /// that are near each other are the two 4s and the two 5s, so a plan made by
+    /// distance pairs those, leaves each 6 alone on a fourth route, and bringing
+    /// it down to three routes has nowhere to put a 6.
+    #[test]
+    fn a_full_fleet_of_one_kind_leaves_no_customer_that_fits() {
+        let customers: Vec<InputCustomer> = [
+            (-10.0, 0.0, 6),
+            (-10.0, 1.0, 6),
+            (10.0, 0.0, 4),
+            (10.0, 1.0, 4),
+            (0.0, 10.0, 5),
+            (0.0, 11.0, 5),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y, demand))| {
+            customer(serde_json::json!({ "id": i + 1, "x": x, "y": y, "demand": demand }))
+        })
+        .collect();
+        let three = [vehicle(serde_json::json!({ "capacity": 10, "count": 3 }))];
+        for method in ["savings", "ga", "alns"] {
+            let (out, violations) = solved_and_checked(&customers, &three, method, &quick(method));
+            assert!(violations.is_empty(), "{method}: {violations:?}");
+            assert!(
+                out.unassigned.is_empty(),
+                "{method}: left out {:?} of a fleet that takes them all",
+                out.unassigned
+            );
+            assert!(out.routes.len() <= 3, "{method}");
+        }
+    }
+
+    /// Loading the vehicles first keeps what the route-first plan keeps: the vehicle's duration
+    /// limit with its break, and the time windows -- a late arrival at a soft window is priced,
+    /// at a hard one it is refused. Demands 6, 6, 4, 4, 5, 5 in three vehicles of 10 fit only
+    /// as (6, 4), (6, 4), (5, 5), so every method needs the loaded plan here.
+    #[test]
+    fn the_loaded_fleet_keeps_breaks_and_windows() {
+        let stops = [
+            (-10.0, 0.0, 6),
+            (-10.0, 1.0, 6),
+            (10.0, 0.0, 4),
+            (10.0, 1.0, 4),
+            (0.0, 10.0, 5),
+            (0.0, 11.0, 5),
+        ];
+        let build = |window: Option<(f64, Option<f64>)>| -> Vec<InputCustomer> {
+            stops
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y, demand))| {
+                    let mut c =
+                        serde_json::json!({ "id": i + 1, "x": x, "y": y, "demand": demand });
+                    if let Some((close, penalty)) = window {
+                        c["time_window"] = serde_json::json!([0.0, close]);
+                        if let Some(p) = penalty {
+                            c["lateness_penalty"] = serde_json::json!(p);
+                        }
+                    }
+                    customer(c)
+                })
+                .collect()
+        };
+        let fleet = [vehicle(serde_json::json!({
+            "capacity": 10,
+            "count": 3,
+            "max_duration": 400.0,
+            "break": { "earliest": 5.0, "latest": 300.0, "duration": 20.0 }
+        }))];
+        // No window; a hard window that every route can keep; a soft window some route will miss.
+        for customers in [
+            build(None),
+            build(Some((200.0, None))),
+            build(Some((30.0, Some(1.0)))),
+        ] {
+            for method in ["savings", "ga", "alns"] {
+                let (out, violations) =
+                    solved_and_checked(&customers, &fleet, method, &quick(method));
+                assert!(violations.is_empty(), "{method}: {violations:?}");
+                assert!(
+                    out.unassigned.is_empty(),
+                    "{method}: left out {:?}",
+                    out.unassigned
+                );
+                assert!(out.routes.len() <= 3, "{method}");
             }
         }
     }
@@ -7053,6 +7361,51 @@ mod multi_depot_tests {
             );
             // The customers near depot 1 ride out of it.
             for (route, &kind) in both.routes.iter().zip(&both.route_vehicles) {
+                let from_second = fleet[kind].depot == Some(1);
+                assert!(
+                    route.iter().all(|&id| (id >= 20) == from_second),
+                    "{method}: {route:?}"
+                );
+            }
+        }
+    }
+
+    /// A fixed fleet at each of two depots, each exactly full: the demands 6, 6, 4, 4, 5, 5 near a
+    /// depot fit its three vehicles of 10 only as (6, 4), (6, 4), (5, 5). Each depot is planned as
+    /// a problem of its own, so each loads its vehicles first when its routes leave someone out.
+    #[test]
+    fn a_full_fleet_at_each_depot_leaves_no_customer_that_fits() {
+        let depots = [(0.0, 0.0), (1000.0, 0.0)];
+        let around = |base_x: f64, first_id: usize| -> Vec<InputCustomer> {
+            [
+                (-10.0, 0.0, 6.0),
+                (-10.0, 1.0, 6.0),
+                (10.0, 0.0, 4.0),
+                (10.0, 1.0, 4.0),
+                (0.0, 10.0, 5.0),
+                (0.0, 11.0, 5.0),
+            ]
+            .iter()
+            .enumerate()
+            .map(|(i, &(dx, y, demand))| customer(first_id + i, base_x + dx, y, demand))
+            .collect()
+        };
+        let mut customers = around(0.0, 10);
+        customers.extend(around(1000.0, 20));
+        let fleet = vec![
+            vehicle(json!({ "capacity": 10, "count": 3 })),
+            vehicle(json!({ "capacity": 10, "count": 3, "depot": 1 })),
+        ];
+        for method in ["savings", "ga", "alns"] {
+            let out =
+                solve_with(&depots, &customers, &fleet, method, &config(method)).expect(method);
+            assert_plan_is_right(&depots, &customers, &fleet, &out, method);
+            assert!(
+                out.unassigned.is_empty(),
+                "{method}: left out {:?}",
+                out.unassigned
+            );
+            for (route, &kind) in out.routes.iter().zip(&out.route_vehicles) {
                 let from_second = fleet[kind].depot == Some(1);
                 assert!(
                     route.iter().all(|&id| (id >= 20) == from_second),
