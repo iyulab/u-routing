@@ -109,8 +109,7 @@ pub(crate) fn by_depot<E>(
         // Offer what a depot could not serve to the customer's next depot.
         let mut moved = false;
         for d in 0..depots {
-            for k in 0..built[d].unassigned.len() {
-                let c = built[d].unassigned[k];
+            for &c in &built[d].unassigned {
                 if attempt[c] + 1 < candidates[c].len() {
                     attempt[c] += 1;
                     dirty[d] = true;
