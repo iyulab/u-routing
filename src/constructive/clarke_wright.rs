@@ -26,7 +26,8 @@
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
 use crate::evaluation::{
-    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+    effective_cost, has_pairs, has_soft_windows, route_checks_needed, route_feasible,
+    route_peak_load, RouteLimits,
 };
 use crate::models::{Customer, Solution, Vehicle};
 
@@ -123,10 +124,24 @@ pub fn clarke_wright_savings(
     let limits = &RouteLimits::of(vehicle);
     let constrained = route_checks_needed(customers, limits);
     let soft = has_soft_windows(customers);
+    let paired = has_pairs(customers);
     for i in 1..n {
         route_of[i] = i;
         route_load[i] = customers[i].demand();
-        if !constrained || route_feasible(&[i], depot, distances, customers, limits) {
+    }
+    for i in 1..n {
+        if let Some(delivery) = customers[i].delivery_index() {
+            // A pair starts as one route, pickup then delivery; the delivery has none of its own.
+            route_of[delivery] = i;
+            let start = [i, delivery];
+            if route_peak_load(&start, customers) <= vehicle.capacity()
+                && route_feasible(&start, depot, distances, customers, limits)
+            {
+                route_members[i].extend(start);
+            }
+        } else if customers[i].pickup_index().is_some() {
+            // The delivery of a pair: its pickup's route carries it.
+        } else if !constrained || route_feasible(&[i], depot, distances, customers, limits) {
             route_members[i].push(i);
         }
     }
@@ -146,9 +161,10 @@ pub fn clarke_wright_savings(
             continue;
         }
 
-        // Check capacity
+        // Check capacity. (With pairs a route's load rises and falls: the merged route's peak is
+        // checked below instead of the sum.)
         let combined_load = route_load[ri] + route_load[rj];
-        if combined_load > vehicle.capacity() {
+        if !paired && combined_load > vehicle.capacity() {
             continue;
         }
 
@@ -184,6 +200,9 @@ pub fn clarke_wright_savings(
                 candidate.extend(route_members[merge_from].iter().rev());
             } else {
                 candidate.extend(route_members[merge_from].iter());
+            }
+            if paired && route_peak_load(&candidate, customers) > vehicle.capacity() {
+                continue;
             }
             if !route_feasible(&candidate, depot, distances, customers, limits) {
                 continue;

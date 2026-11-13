@@ -149,6 +149,15 @@ impl Customer {
         }
     }
 
+    /// This entry with its pair partner named by another table's index (see [`Customer::placed`]):
+    /// `delivery` and `pickup` are rows of the table it is placed in, `None` where the partner is
+    /// not in it.
+    pub(crate) fn with_partner(mut self, delivery: Option<usize>, pickup: Option<usize>) -> Self {
+        self.delivery = delivery;
+        self.pickup = pickup;
+        self
+    }
+
     /// Whether this entry is a depot, not a customer to visit.
     pub fn is_depot(&self) -> bool {
         self.depot

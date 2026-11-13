@@ -7,7 +7,9 @@
 //! nothing of pairs: what keeps them right is the one feasibility question they all ask.
 
 use u_routing::balance::{improve as balance_improve, Balance, Quantity};
-use u_routing::constructive::{nearest_neighbor, nearest_neighbor_tw};
+use u_routing::constructive::{
+    clarke_wright_savings, construct_by_depot, nearest_neighbor, nearest_neighbor_tw,
+};
 use u_routing::distance::DistanceMatrix;
 use u_routing::evaluation::{
     check_solution, pairs_ordered, route_eval, route_feasible, Fleet, RouteEvaluator, RouteLimits,
@@ -259,6 +261,23 @@ fn limiting_and_balancing_keep_every_pair_together() {
     }
 }
 
+/// The pairs and a few ordinary customers (they load and unload nothing but their own demand).
+fn with_plain(customers: &[Customer], seed: u64) -> Vec<Customer> {
+    let mut rng = Lcg(seed ^ 0x5555);
+    let mut all = customers.to_vec();
+    for _ in 0..(1 + rng.below(4)) {
+        let id = all.len();
+        all.push(Customer::new(
+            id,
+            rng.next() * 100.0,
+            rng.next() * 100.0,
+            1 + rng.below(4) as i32,
+            1.0,
+        ));
+    }
+    all
+}
+
 /// The same pairs on a map, each customer with a window of the given width around a time that
 /// the trip to it takes; some pairs cannot be served at all.
 fn with_windows(i: &Instance, width: f64, seed: u64) -> Vec<Customer> {
@@ -354,5 +373,128 @@ fn a_vehicle_that_unloads_carries_the_next_pair_on_the_same_route() {
     ] {
         assert_eq!(solution.num_routes(), 1, "{name}");
         assert_eq!(solution.routes()[0].customer_ids(), [1, 2, 3, 4], "{name}");
+    }
+}
+
+#[test]
+fn the_savings_construction_merges_whole_pair_routes_forward() {
+    for seed in 0..80 {
+        let base = instance(seed);
+        let capacity = [6, 9, 14, 30][(seed % 4) as usize];
+        let mut vehicle = Vehicle::new(0, capacity);
+        if seed % 3 == 0 {
+            vehicle = vehicle.with_max_distance(260.0);
+        }
+        let vehicles = [vehicle.clone()];
+        let base = if seed % 2 == 1 {
+            let customers = with_plain(&base.customers, seed);
+            let dm = DistanceMatrix::from_customers(&customers);
+            Instance {
+                customers,
+                dm,
+                ..base
+            }
+        } else {
+            base
+        };
+        for (label, customers) in [
+            ("no windows", base.customers.clone()),
+            ("loose windows", with_windows(&base, 300.0, seed)),
+            ("tight windows", with_windows(&base, 30.0, seed)),
+        ] {
+            let solution = clarke_wright_savings(&customers, &base.dm, &vehicle);
+            let fleet = Fleet {
+                vehicles: &vehicles,
+                counts: &[],
+                max_routes: None,
+            };
+            let found = check_solution(&customers, &base.dm, &fleet, &solution);
+            assert!(
+                found.is_empty(),
+                "savings / {label} (seed {seed}, capacity {capacity}): {found:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn savings_chains_pairs_when_the_vehicle_unloads_between_them() {
+    // Two 6-unit pairs on a line, a vehicle of 6: the pairs merge into one route (the sum 12
+    // would have forbidden it; the peak is 6).
+    let customers = vec![
+        Customer::depot(0.0, 0.0),
+        Customer::new(1, 1.0, 0.0, 6, 0.0).pickup_of(2),
+        Customer::new(2, 2.0, 0.0, 0, 0.0).delivery_of(1),
+        Customer::new(3, 3.0, 0.0, 6, 0.0).pickup_of(4),
+        Customer::new(4, 4.0, 0.0, 0, 0.0).delivery_of(3),
+    ];
+    let dm = DistanceMatrix::from_customers(&customers);
+    let solution = clarke_wright_savings(&customers, &dm, &Vehicle::new(0, 6));
+    assert_eq!(solution.num_routes(), 1);
+    assert_eq!(solution.routes()[0].customer_ids(), [1, 2, 3, 4]);
+}
+
+/// Two depots (rows 0 and 1) and pairs between them (pickups at 2, 4, ..., deliveries at 3, 5, ...).
+fn depot_instance(seed: u64, depots: usize) -> (Vec<Customer>, DistanceMatrix) {
+    let mut rng = Lcg(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let pairs = 3 + rng.below(6);
+    let mut customers: Vec<Customer> = (0..depots)
+        .map(|d| Customer::depot_at(d, 15.0 + 70.0 * d as f64 / (depots - 1) as f64, 50.0))
+        .collect();
+    for p in 0..pairs {
+        let (pickup, delivery) = (depots + 2 * p, depots + 1 + 2 * p);
+        let q = 1 + rng.below(5) as i32;
+        customers.push(
+            Customer::new(pickup, rng.next() * 100.0, rng.next() * 100.0, q, 1.0)
+                .pickup_of(delivery),
+        );
+        customers.push(
+            Customer::new(delivery, rng.next() * 100.0, rng.next() * 100.0, 0, 1.0)
+                .delivery_of(pickup),
+        );
+    }
+    let dm = DistanceMatrix::from_customers(&customers);
+    (customers, dm)
+}
+
+#[test]
+fn several_depots_keep_a_pair_at_one_depot() {
+    for seed in 0..90 {
+        let depots = 2 + (seed % 3) as usize % 2 + usize::from(seed % 3 == 2);
+        let (customers, dm) = depot_instance(seed, depots);
+        let capacity = [6, 9, 30][(seed % 3) as usize];
+        // Three vehicles at each depot; a limit now and then sends a pair to the other depot.
+        let limit = seed % 2 == 0;
+        let vehicles: Vec<Vehicle> = (0..3 * depots)
+            .map(|v| {
+                let x = Vehicle::new(v, capacity).with_depot(v / 3);
+                if limit {
+                    x.with_max_distance(150.0)
+                } else {
+                    x
+                }
+            })
+            .collect();
+        let fleet = Fleet {
+            vehicles: &vehicles,
+            counts: &[],
+            max_routes: None,
+        };
+        let by_nn = construct_by_depot(&customers, &dm, &vehicles, |c, d, v| {
+            nearest_neighbor(c, d, v)
+        });
+        let found = check_solution(&customers, &dm, &fleet, &by_nn);
+        assert!(
+            found.is_empty(),
+            "nn by depot (seed {seed}, capacity {capacity}): {found:?}"
+        );
+        let by_savings = construct_by_depot(&customers, &dm, &vehicles, |c, d, v| {
+            clarke_wright_savings(c, d, &v[0])
+        });
+        let found = check_solution(&customers, &dm, &fleet, &by_savings);
+        assert!(
+            found.is_empty(),
+            "savings by depot (seed {seed}, capacity {capacity}): {found:?}"
+        );
     }
 }

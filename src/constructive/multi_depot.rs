@@ -72,6 +72,12 @@ pub(crate) fn by_depot<E>(
                 .then(a.cmp(&b))
         });
     }
+    // A pair goes to one depot: its delivery is offered to the depots its pickup is.
+    for pickup in depots..n {
+        if let Some(delivery) = customers[pickup].delivery_index().filter(|&d| d < n) {
+            candidates[delivery] = candidates[pickup].clone();
+        }
+    }
     let mut attempt = vec![0usize; n];
     let mut built: Vec<Built> = (0..depots).map(|_| Built::default()).collect();
     let mut dirty = vec![true; depots];
@@ -90,10 +96,23 @@ pub(crate) fn by_depot<E>(
                 let mut rows = Vec::with_capacity(members.len() + 1);
                 rows.push(d);
                 rows.extend_from_slice(&members);
+                // The table renumbers its rows: a pair's partner is named by its new row.
+                let mut slot = vec![None; n];
+                for (k, &r) in rows.iter().enumerate() {
+                    slot[r] = Some(k);
+                }
                 let table: Vec<Customer> = rows
                     .iter()
                     .enumerate()
-                    .map(|(k, &r)| customers[r].placed(k, k == 0))
+                    .map(|(k, &r)| {
+                        let c = &customers[r];
+                        c.placed(k, k == 0).with_partner(
+                            c.delivery_index()
+                                .and_then(|g| slot.get(g).copied().flatten()),
+                            c.pickup_index()
+                                .and_then(|g| slot.get(g).copied().flatten()),
+                        )
+                    })
                     .collect();
                 let share = plan(d, &table, &distances.restricted(&rows), &fleet[d])?;
                 Built {
@@ -110,8 +129,14 @@ pub(crate) fn by_depot<E>(
         let mut moved = false;
         for d in 0..depots {
             for &c in &built[d].unassigned {
+                // A pair moves with its pickup.
+                if customers[c].pickup_index().is_some() {
+                    continue;
+                }
                 if attempt[c] + 1 < candidates[c].len() {
-                    attempt[c] += 1;
+                    for moving in std::iter::once(c).chain(customers[c].delivery_index()) {
+                        attempt[moving] += 1;
+                    }
                     dirty[d] = true;
                     dirty[candidates[c][attempt[c]]] = true;
                     moved = true;
