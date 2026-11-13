@@ -8,6 +8,21 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Added
+
+- Soft ends of time windows, in the Rust model (every method honours it, and the WebAssembly, C ABI and .NET requests carry it): `Customer::with_lateness_penalty(penalty)` lets a vehicle arrive after a customer's `due`, each unit
+  of time late costing `penalty` (linear; without a penalty the window stays hard, and the opening of the window stays hard
+  either way). `TimeWindow::lateness`, `evaluation::route_eval` (distance, duration, lateness and its cost of an allowed
+  route, or `None` — the same allowed set as `route_feasible`, which now admits a late arrival at a soft window),
+  `Route::total_lateness` / `Route::lateness_cost`, and `check_solution` compares a route's reported lateness cost with its own
+  (`LatenessMismatch`). `two_opt_improve`, `or_opt_improve` and `three_opt_improve` weigh the lateness cost against the distance when a customer has a soft window (steepest descent over the whole route's distance plus lateness cost, `route_eval` per neighbour) and are unchanged without one; so do `relocate_improve` and `exchange_improve` (each move judged by the change in distance plus lateness cost of both routes it touches, evaluated whole). The penalty is in units of distance, and `Solution::price` prices a route's lateness like its distance (`route_cost(distance + lateness cost)`). `route_elimination` (internal) weighs the lateness a merge costs and the ejection pool, which plans against hard windows, leaves routes with a soft window as they are; `nearest_neighbor_tw` admits a late arrival at a soft window, picks the cheapest step (distance plus lateness cost) and stops carrying a route on to a customer a route of its own would reach for less, `clarke_wright_savings` merges two routes only if the merged route costs less than the two apart, and `solomon_i1` inserts a customer only where it costs less than a route of its own. The genetic algorithm's split cuts a tour by distance plus lateness cost, its fitness is that cost, and ALNS's insertions, its solution (`RoutingSolution::lateness_cost`) and its cost are in the same terms; a customer left out costs more than any lateness can. `fleet::cheapest_insertion` returns the change in distance plus lateness cost. In the requests, `customers[].lateness_penalty` (WebAssembly and C ABI) / `Customer.LatenessPenalty` (.NET) is that penalty, in units of distance per unit of time late (at least 0: a negative one is `parameter_out_of_range`); each `route_summaries[]` entry reports `lateness` and `lateness_cost` (`RouteSummary.Lateness`, `RouteSummary.LatenessCost` in .NET), and `cost` and `total_cost` price a route at `fixed_cost` + `cost_per_distance` × (`distance` + `lateness_cost`) -- `check_vrp_solution` compares a reported `total_cost` with that. The fleet assignment (`RouteDemand::priced_distance`) and the balancing (`RouteFigures::priced_distance`) price a route the same way. The one-pass methods (`"nn"`, `"savings"`) of the requests plan the problem as given and with every window hard and keep the cheaper plan (priced with the soft windows), so a soft problem never costs them more than the hard one; `Customer::without_lateness_penalty` makes a window hard again. With no penalty set every figure is what it was: a hard window is violated exactly when it was.
+
+### Changed
+
+- **Breaking** (Rust API): `ViolationType` gains the variant `LatenessMismatch`; an exhaustive `match` over it needs an arm.
+- **Breaking** (Rust API): `RoutingSolution::recalculate_distance(distances)` is `recalculate(distances, customers)`: the solution carries its lateness cost as well as its distance, and the customers are what it is computed from.
+- **Breaking** (wire and .NET): `route_summaries[]` entries gain `lateness` and `lateness_cost` (`RouteSummary` gains `Lateness` and `LatenessCost` before `Workload`, so a positional construction needs them); `RouteDemand` and `RouteFigures` (Rust) gain `lateness_cost`.
+
 ### Fixed
 
 - A fleet of several kinds with a `count` on every kind left customers `unassigned` that the fleet has room for.

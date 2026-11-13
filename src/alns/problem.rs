@@ -8,7 +8,7 @@ use u_metaheur::alns::AlnsProblem;
 
 use crate::constructive::{nearest_neighbor, nearest_neighbor_tw};
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_checks_needed, RouteLimits};
+use crate::evaluation::{lateness_bound, route_checks_needed, RouteLimits};
 use crate::models::{Customer, Vehicle};
 
 use super::solution_repr::RoutingSolution;
@@ -50,17 +50,21 @@ pub struct RoutingAlnsProblem {
     capacity: i32,
     limits: RouteLimits,
     route_cost: f64,
+    /// The most the lateness of a complete solution can cost (0 with no soft window).
+    lateness_bound: f64,
 }
 
 impl RoutingAlnsProblem {
     /// Creates a new routing ALNS problem.
     pub fn new(customers: Vec<Customer>, distances: DistanceMatrix, capacity: i32) -> Self {
+        let lateness_bound = lateness_bound(&customers, &distances);
         Self {
             customers,
             distances,
             capacity,
             limits: RouteLimits::NONE,
             route_cost: 0.0,
+            lateness_bound,
         }
     }
 
@@ -117,9 +121,15 @@ impl AlnsProblem for RoutingAlnsProblem {
 
     fn cost(&self, solution: &RoutingSolution) -> f64 {
         // Penalize unassigned customers heavily
-        let unassigned_penalty = solution.unassigned().len() as f64 * 10_000.0;
+        // (and more than any lateness can cost, with soft windows: leaving a customer out must not
+        // beat serving it late)
+        let unassigned_penalty =
+            solution.unassigned().len() as f64 * (10_000.0 + self.lateness_bound);
         let routes = solution.routes().iter().filter(|r| !r.is_empty()).count();
-        solution.total_distance() + self.route_cost * routes as f64 + unassigned_penalty
+        solution.total_distance()
+            + solution.lateness_cost()
+            + self.route_cost * routes as f64
+            + unassigned_penalty
     }
 }
 

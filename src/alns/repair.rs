@@ -15,8 +15,9 @@ use rand::Rng;
 use u_metaheur::alns::RepairOperator;
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::{effective_cost, has_soft_windows};
 use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
-use crate::fleet::insertion_on_time;
+use crate::fleet::{insertion_on_time, soft_insertion_cost};
 use crate::models::Customer;
 
 use super::solution_repr::RoutingSolution;
@@ -43,6 +44,11 @@ fn new_route_cost(
     limits: &RouteLimits,
     route_cost: f64,
 ) -> Option<f64> {
+    if has_soft_windows(customers) {
+        // A route of its own is late where the customer cannot be reached in time, and that costs.
+        let alone = effective_cost(&[customer_id], 0, distances, customers, limits);
+        return alone.is_finite().then_some(route_cost + alone);
+    }
     open_route(customer_id, distances, customers, limits)
         .then(|| route_cost + distances.get(0, customer_id) + distances.get(customer_id, 0))
 }
@@ -198,7 +204,7 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
             }
         }
 
-        sol.recalculate_distance(&self.distances);
+        sol.recalculate(&self.distances, &self.customers);
         sol
     }
 }
@@ -271,11 +277,39 @@ impl RegretInsertion {
     ) -> Vec<(usize, usize, f64)> {
         let depot = 0;
         let constrained = route_checks_needed(&self.customers, &self.limits);
+        let soft = has_soft_windows(&self.customers);
         let mut costs = Vec::new();
 
         for (ri, route) in routes.iter().enumerate() {
             let load: i32 = route.iter().map(|&c| self.customers[c].demand()).sum();
             if load + self.customers[customer_id].demand() > self.capacity {
+                continue;
+            }
+
+            if soft {
+                // The change in the route's distance plus lateness cost, evaluated whole.
+                let value =
+                    effective_cost(route, depot, &self.distances, &self.customers, &self.limits);
+                if !value.is_finite() {
+                    continue;
+                }
+                let best = (0..=route.len())
+                    .filter_map(|pos| {
+                        soft_insertion_cost(
+                            route,
+                            value,
+                            pos,
+                            customer_id,
+                            &self.distances,
+                            &self.customers,
+                            &self.limits,
+                        )
+                        .map(|cost| (cost, pos))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((cost, pos)) = best {
+                    costs.push((ri, pos, cost));
+                }
                 continue;
             }
 
@@ -393,7 +427,7 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
             }
         }
 
-        sol.recalculate_distance(&self.distances);
+        sol.recalculate(&self.distances, &self.customers);
         sol
     }
 }

@@ -144,6 +144,15 @@
           "format": "int128",
           "type": "integer"
         },
+        "lateness_penalty": {
+          "default": null,
+          "description": "What each unit of time a vehicle is late costs, in units of distance, making the end of the\n`time_window` soft: a route may arrive after `due`, and is priced at its distance plus\nthis times the lateness (`route_summaries[].lateness_cost`). Absent or `null`: the window\nis hard -- a late arrival is not allowed. At least 0; has no effect on a customer\nwithout a `time_window`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "service_time": {
           "default": 0.0,
           "format": "double",
@@ -764,7 +773,7 @@
       "description": "One route's figures, as the evaluator reads the route: the depot at both\nends, the route's vehicle, the customers' service times and time windows.",
       "properties": {
         "cost": {
-          "description": "The route's vehicle's `fixed_cost` plus `cost_per_distance` × `distance`.",
+          "description": "The route's vehicle's `fixed_cost` plus `cost_per_distance` × (`distance` + `lateness_cost`):\na route's lateness is priced like distance.",
           "format": "double",
           "type": "number"
         },
@@ -775,6 +784,16 @@
         },
         "duration": {
           "description": "When the route is back at the depot, leaving it at time 0: travel\n(one unit of distance is one unit of time), waiting for time windows to\nopen and service times. Equal to `distance` for a route with neither.",
+          "format": "double",
+          "type": "number"
+        },
+        "lateness": {
+          "description": "How late the route is, summed over its customers with a soft window (`lateness_penalty`):\neach one's arrival after its `due`. `0` when every window is met or hard.",
+          "format": "double",
+          "type": "number"
+        },
+        "lateness_cost": {
+          "description": "What that lateness costs, in units of distance: each customer's lateness times its\n`lateness_penalty`, summed. `0` without a soft window.",
           "format": "double",
           "type": "number"
         },
@@ -796,7 +815,9 @@
         "distance",
         "load",
         "cost",
-        "duration"
+        "duration",
+        "lateness",
+        "lateness_cost"
       ],
       "type": "object"
     },
@@ -947,7 +968,7 @@
           "type": "string"
         },
         "total_cost": {
-          "description": "What the plan costs: over its routes, the route's vehicle's\n`fixed_cost` plus `cost_per_distance` × the route's distance. Equal to\n`total_distance` with the default costs.",
+          "description": "What the plan costs: over its routes, the route's vehicle's\n`fixed_cost` plus `cost_per_distance` × (the route's distance plus its `lateness_cost`).\nEqual to `total_distance` with the default costs and no soft window.",
           "format": "double",
           "type": "number"
         },

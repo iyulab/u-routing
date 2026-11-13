@@ -5,6 +5,7 @@
 //! and removal without rebuilding full `Route` objects.
 
 use crate::distance::DistanceMatrix;
+use crate::evaluation::{has_soft_windows, route_eval, RouteLimits};
 use crate::models::Customer;
 
 /// Lightweight VRP solution for ALNS manipulation.
@@ -32,6 +33,7 @@ pub struct RoutingSolution {
     routes: Vec<Vec<usize>>,
     unassigned: Vec<usize>,
     total_distance: f64,
+    lateness_cost: f64,
 }
 
 impl RoutingSolution {
@@ -39,14 +41,16 @@ impl RoutingSolution {
     pub fn new(
         routes: Vec<Vec<usize>>,
         unassigned: Vec<usize>,
-        _customers: &[Customer],
+        customers: &[Customer],
         distances: &DistanceMatrix,
     ) -> Self {
         let total_distance = compute_total_distance(&routes, distances);
+        let lateness_cost = compute_lateness_cost(&routes, distances, customers);
         Self {
             routes,
             unassigned,
             total_distance,
+            lateness_cost,
         }
     }
 
@@ -75,20 +79,44 @@ impl RoutingSolution {
         self.total_distance
     }
 
+    /// What the routes' lateness at soft windows costs (each customer's lateness times its
+    /// penalty, summed), in units of distance; 0 when every window is hard.
+    pub fn lateness_cost(&self) -> f64 {
+        self.lateness_cost
+    }
+
     /// Number of routes.
     pub fn num_routes(&self) -> usize {
         self.routes.len()
     }
 
-    /// Recalculates total distance from current routes.
-    pub fn recalculate_distance(&mut self, distances: &DistanceMatrix) {
+    /// Recalculates the total distance and the lateness cost from the current routes.
+    pub fn recalculate(&mut self, distances: &DistanceMatrix, customers: &[Customer]) {
         self.total_distance = compute_total_distance(&self.routes, distances);
+        self.lateness_cost = compute_lateness_cost(&self.routes, distances, customers);
     }
 
     /// Removes empty routes.
     pub fn remove_empty_routes(&mut self) {
         self.routes.retain(|r| !r.is_empty());
     }
+}
+
+/// What the lateness of `routes` costs (depot=0). A route a hard window makes late has no
+/// lateness to price and adds nothing.
+fn compute_lateness_cost(
+    routes: &[Vec<usize>],
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+) -> f64 {
+    if !has_soft_windows(customers) {
+        return 0.0;
+    }
+    routes
+        .iter()
+        .filter_map(|r| route_eval(r, 0, distances, customers, &RouteLimits::NONE))
+        .map(|e| e.lateness_cost)
+        .sum()
 }
 
 /// Computes total distance for all routes (depot=0).

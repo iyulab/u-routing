@@ -28,6 +28,7 @@
                 "properties": {
                   "demand": {},
                   "id": {},
+                  "lateness_penalty": {},
                   "service_time": {},
                   "time_window": {},
                   "x": {},
@@ -92,6 +93,7 @@
             "properties": {
               "demand": {},
               "id": {},
+              "lateness_penalty": {},
               "service_time": {},
               "time_window": {},
               "x": {},

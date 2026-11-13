@@ -93,6 +93,16 @@ pub struct RouteDemand {
     pub distance: f64,
     /// Return time to the depot on the route's own clock.
     pub duration: f64,
+    /// What the route's lateness at soft windows costs, in units of distance (0 when every
+    /// window is hard). The route is priced at its distance plus this.
+    pub lateness_cost: f64,
+}
+
+impl RouteDemand {
+    /// The distance the route is priced at: its distance plus the cost of its lateness.
+    pub fn priced_distance(&self) -> f64 {
+        self.distance + self.lateness_cost
+    }
 }
 
 /// The cheapest of `types` that carries `demand`, ignoring how many of each
@@ -104,7 +114,7 @@ pub fn cheapest_type(types: &[VehicleType], demand: &RouteDemand) -> Option<(usi
         if !t.carries(demand) {
             continue;
         }
-        let cost = t.vehicle.route_cost(demand.distance);
+        let cost = t.vehicle.route_cost(demand.priced_distance());
         if best.is_none_or(|(_, c)| cost < c) {
             best = Some((i, cost));
         }
@@ -154,7 +164,7 @@ pub fn assign_types(
     let real = |r: usize, c: usize| -> Option<f64> {
         let ty = &types[column_type[c]];
         ty.carries(&routes[r])
-            .then(|| ty.vehicle.route_cost(routes[r].distance))
+            .then(|| ty.vehicle.route_cost(routes[r].priced_distance()))
     };
     // Far above what any assignment of real costs adds up to.
     let mut scale = 1.0_f64;
@@ -256,6 +266,7 @@ mod tests {
             load,
             distance,
             duration: distance,
+            lateness_cost: 0.0,
         }
     }
 
@@ -384,7 +395,7 @@ mod tests {
                             return None;
                         }
                         served += customers[r];
-                        cost += types[k].vehicle().route_cost(routes[r].distance);
+                        cost += types[k].vehicle().route_cost(routes[r].priced_distance());
                     }
                 }
                 Some((served, cost))

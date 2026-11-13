@@ -11,6 +11,7 @@ mod or_opt;
 mod relocate;
 mod route_elimination;
 mod route_minimization;
+mod soft;
 mod three_opt;
 mod two_opt;
 

@@ -458,6 +458,20 @@ exchange) are taken only when the resulting route reaches each customer by its
 `due`. A customer no route can reach on time comes back in `unassigned` rather
 than being served late.
 
+**Soft windows.** A customer's `lateness_penalty` (at least 0, in units of distance per unit of
+time late) makes the *end* of its window soft: a route may arrive after `due`, and is priced at its
+distance plus `lateness_penalty` × the lateness, summed over its customers
+(`route_summaries[].lateness` is the time late and `.lateness_cost` its price). The opening of
+the window stays hard — an early vehicle waits — and a penalty on a customer without a `time_window`
+has no effect. Every method weighs the price: the search moves, the savings merges, the insertions, the
+genetic algorithm's split and fitness and the ALNS cost all take the change in distance *plus* lateness
+cost, so a longer route that is on time can beat a shorter one that is late, and a customer no route can
+reach on time is served late (at its penalty) where a hard window would leave it in `unassigned`.
+`cost` and `total_cost` include the lateness — a route costs `fixed_cost` + `cost_per_distance` ×
+(`distance` + `lateness_cost`), so with `cost_per_distance: 0` lateness is free — and
+`check_vrp_solution` compares a reported `total_cost` with that price. A negative penalty is
+`parameter_out_of_range` (`parameter: "lateness_penalty"`, `min: 0`).
+
 **Config constraints:**
 
 | Parameter | Method | Constraint | Default |
@@ -524,8 +538,8 @@ exposes them as `ErrorCode`, `Parameter`, `Index` and `Details`.
   "routes": [[1, 3, 5], [2, 4]],
   "route_vehicles": [0, 0],
   "route_summaries": [
-    { "distance": 25.5, "load": 14, "cost": 25.5, "duration": 25.5, "workload": null },
-    { "distance": 17.0, "load": 9, "cost": 17.0, "duration": 17.0, "workload": null }
+    { "distance": 25.5, "load": 14, "cost": 25.5, "duration": 25.5, "lateness": 0, "lateness_cost": 0, "workload": null },
+    { "distance": 17.0, "load": 9, "cost": 17.0, "duration": 17.0, "lateness": 0, "lateness_cost": 0, "workload": null }
   ],
   "total_distance": 42.5,
   "total_cost": 42.5,
@@ -555,10 +569,11 @@ route with its vehicle's `fixed_cost` and `cost_per_distance` (equal to
 
 `route_summaries` has one entry per route, in the order of `routes`: its `distance`
 (depot to depot), the `load` it carries, its `cost` (the vehicle's `fixed_cost` plus
-`cost_per_distance` × `distance`) and its `duration` — when it is back at the depot,
+`cost_per_distance` × (`distance` + `lateness_cost`)) and its `duration` — when it is back at the depot,
 leaving at time 0, with one unit of distance one unit of time, plus waiting for time
 windows to open and service times (equal to `distance` for a route with neither) —
-and, with `config.balance`, its `workload` (what `quantity` counts; `null` without a balance).
+its `lateness` (the time it is late at customers with a soft window) and `lateness_cost` (what that
+costs, in units of distance; both `0` without a soft window) and, with `config.balance`, its `workload` (what `quantity` counts; `null` without a balance).
 `total_distance` is the sum of the `distance`s and `total_cost` of the `cost`s; `equity` is the
 largest `workload` and `objective` is `total_cost` + `weight` × `equity` (both `null` without a
 balance).

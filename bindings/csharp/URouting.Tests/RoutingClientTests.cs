@@ -163,6 +163,31 @@ public class RoutingClientTests
     }
 
     [Fact]
+    public void A_soft_window_is_served_late_and_the_lateness_is_priced_like_distance()
+    {
+        // 50 away and due at 10: late by 40 whatever is done, at 2 a unit of time.
+        var solution = _client.SolveVrp(new VrpRequest(0, 0,
+            [new(1, 30, 40, TimeWindow: new(0, 10), LatenessPenalty: 2)]));
+        Assert.Empty(solution.Unassigned);
+        var route = Assert.Single(solution.RouteSummaries);
+        Assert.Equal(100.0, route.Distance, 9);
+        Assert.Equal(40.0, route.Lateness, 9);
+        Assert.Equal(80.0, route.LatenessCost, 9);
+        Assert.Equal(180.0, route.Cost, 9);
+        Assert.Equal(180.0, solution.TotalCost, 9);
+    }
+
+    [Fact]
+    public void A_lateness_penalty_below_zero_is_refused_at_its_customer()
+    {
+        var refusal = Assert.Throws<RoutingException>(() =>
+            _client.SolveVrp(new VrpRequest(0, 0, [new(1, 1, 1, TimeWindow: new(0, 10), LatenessPenalty: -1)])));
+        Assert.Equal("parameter_out_of_range", refusal.ErrorCode);
+        Assert.Equal("lateness_penalty", refusal.Parameter);
+        Assert.Equal(0, refusal.Index);
+    }
+
+    [Fact]
     public void A_fixed_fleet_is_kept()
     {
         var solution = _client.SolveVrp(new VrpRequest(0, 0, Customers)

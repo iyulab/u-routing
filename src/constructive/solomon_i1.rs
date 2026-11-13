@@ -23,7 +23,9 @@
 //! Problems with Time Window Constraints", *Operations Research* 35(2), 254-265.
 
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{route_feasible, RouteEvaluator, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_feasible, RouteEvaluator, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Constructs a VRPTW solution using Solomon's I1 insertion heuristic.
@@ -72,6 +74,10 @@ pub fn solomon_i1(
     let depot = vehicle.depot_id();
     let evaluator = RouteEvaluator::new(customers, distances, vehicle);
     let limits = RouteLimits::of(vehicle);
+    // With a soft window an insertion costs the change in the route's distance plus lateness
+    // cost, and is taken only where that is less than serving the customer on a route of its own.
+    let soft = has_soft_windows(customers);
+    let fixed = vehicle.fixed_cost_in_distance();
 
     let mut unrouted: Vec<usize> = (1..n).collect();
     let mut solution = Solution::new();
@@ -93,6 +99,11 @@ pub fn solomon_i1(
 
         // Iteratively insert customers into this route
         loop {
+            let route_cost = if soft {
+                effective_cost(&route_customers, depot, distances, customers, &limits)
+            } else {
+                0.0
+            };
             let mut best_insert: Option<(usize, usize, f64)> = None; // (unrouted_idx, position, cost)
 
             for (ui, &cid) in unrouted.iter().enumerate() {
@@ -117,7 +128,7 @@ pub fn solomon_i1(
                     };
 
                     // Distance cost
-                    let cost = distances.get(prev, cid) + distances.get(cid, next)
+                    let mut cost = distances.get(prev, cid) + distances.get(cid, next)
                         - distances.get(prev, next);
 
                     // Check time window feasibility
@@ -125,6 +136,14 @@ pub fn solomon_i1(
                     test_route.insert(pos, cid);
                     if !route_feasible(&test_route, depot, distances, customers, &limits) {
                         continue;
+                    }
+                    if soft {
+                        cost = effective_cost(&test_route, depot, distances, customers, &limits)
+                            - route_cost;
+                        let alone = effective_cost(&[cid], depot, distances, customers, &limits);
+                        if cost >= alone + fixed {
+                            continue;
+                        }
                     }
 
                     if best_insert.as_ref().is_none_or(|b| cost < b.2) {

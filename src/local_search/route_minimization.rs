@@ -78,6 +78,13 @@ pub(crate) fn minimize_routes<R: Rng>(
     rng: &mut R,
     deadline: &Deadline,
 ) -> Vec<Vec<usize>> {
+    // The ejection pool plans against hard windows (the latest arrival each customer allows is
+    // the end of its window), so it has nothing to say about a window that may be missed at a
+    // price: with a soft window the routes are returned as they are, and `eliminate_routes`,
+    // which weighs the lateness it costs, is the step that removes routes.
+    if crate::evaluation::has_soft_windows(customers) {
+        return routes;
+    }
     let depot = vehicle.depot_id();
     let fixed = vehicle.fixed_cost_in_distance();
     let cost = |routes: &[Vec<usize>]| {

@@ -24,7 +24,9 @@
 use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
-use crate::evaluation::{route_checks_needed, route_feasible, RouteLimits};
+use crate::evaluation::{
+    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+};
 use crate::models::{Customer, Solution, Vehicle};
 
 /// Applies inter-route 2-opt* (tail exchange) improvement.
@@ -123,6 +125,18 @@ fn find_best_exchange(
     let limits = &RouteLimits::of(vehicle);
     let floor = gain_floor(distances);
     let constrained = route_checks_needed(customers, limits);
+    let soft = has_soft_windows(customers);
+    // With a soft window a tail exchange is judged by the whole of both new routes: the
+    // change in distance plus lateness cost, not the distance of the four edges.
+    let eval = |route: &[usize]| effective_cost(route, depot, distances, customers, limits);
+    let (old1, old2) = if soft {
+        (eval(route1), eval(route2))
+    } else {
+        (0.0, 0.0)
+    };
+    if soft && !(old1.is_finite() && old2.is_finite()) {
+        return None;
+    }
     let mut best: Option<(usize, usize, f64)> = None;
 
     // The load of a head is a prefix sum, and of a tail the route's load less
@@ -145,6 +159,24 @@ fn find_best_exchange(
             let new_load2 = head2[cut2] + (load1 - head1[cut1]);
 
             if new_load1 > vehicle.capacity() || new_load2 > vehicle.capacity() {
+                continue;
+            }
+
+            if soft {
+                let new1: Vec<usize> = route1[..cut1]
+                    .iter()
+                    .chain(route2[cut2..].iter())
+                    .copied()
+                    .collect();
+                let new2: Vec<usize> = route2[..cut2]
+                    .iter()
+                    .chain(route1[cut1..].iter())
+                    .copied()
+                    .collect();
+                let delta = eval(&new1) + eval(&new2) - old1 - old2;
+                if delta < -floor && best.as_ref().is_none_or(|b| delta < b.2) {
+                    best = Some((cut1, cut2, delta));
+                }
                 continue;
             }
 

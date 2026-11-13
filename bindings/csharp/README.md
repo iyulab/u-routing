@@ -77,8 +77,10 @@ bool shown = routing.GetMethods()
 ```
 
 `VrpSolution.RouteVehicles` says which vehicle drives each route (its index in
-`Vehicles`), and `RouteSummaries` gives each route's distance, load, cost and return
-time (`TotalDistance` and `TotalCost` are their sums). `CheckSolution` checks any plan — this one, an edited one, one from another
+`Vehicles`), and `RouteSummaries` gives each route's distance, load, cost, return
+time and lateness (`TotalDistance` and `TotalCost` are their sums). A customer's `LatenessPenalty`
+makes the end of its time window soft: a route may arrive late and is priced at its distance plus
+the penalty × the lateness (`RouteSummary.Lateness`, `RouteSummary.LatenessCost`; `Cost` includes it). `CheckSolution` checks any plan — this one, an edited one, one from another
 solver — against the request, and returns every rule it breaks as a typed record:
 
 ```csharp
