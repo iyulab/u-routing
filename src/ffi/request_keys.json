@@ -26,6 +26,7 @@
             "customers": {
               "items": {
                 "properties": {
+                  "delivery": {},
                   "demand": {},
                   "id": {},
                   "lateness_penalty": {},
@@ -105,6 +106,7 @@
         "customers": {
           "items": {
             "properties": {
+              "delivery": {},
               "demand": {},
               "id": {},
               "lateness_penalty": {},

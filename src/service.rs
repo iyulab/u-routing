@@ -23,13 +23,15 @@ use crate::constructive::{
 };
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
-    has_soft_windows, has_time_windows, route_checks_needed, route_eval, route_feasible,
-    RouteEvaluator, RouteLimits,
+    has_pairs, has_soft_windows, has_time_windows, route_checks_needed, route_eval, route_feasible,
+    route_peak_load, RouteEvaluator, RouteLimits,
 };
 use crate::fleet::{cheapest_insertion, limit_routes};
 use crate::ga::RoutingGaProblem;
 use crate::ga::{split, split_tw};
-use crate::local_search::{cross_depot_improve, or_opt_improve, two_opt_improve};
+use crate::local_search::{
+    cross_depot_improve, or_opt_improve, pair_relocate_improve, two_opt_improve,
+};
 use crate::models::{num_depots, Customer, TimeWindow, Vehicle};
 use u_metaheur::alns::{AlnsConfig, AlnsRunner};
 use u_metaheur::ga::{GaConfig, GaRunner};
@@ -489,6 +491,15 @@ pub(crate) struct InputCustomer {
     #[cfg_attr(feature = "wasm", tsify(optional))]
     #[cfg_attr(feature = "wasm", tsify(type = "number | null"))]
     lateness_penalty: Option<f64>,
+    /// Makes this customer the pickup of a pair: the `id` of the customer that unloads what is
+    /// loaded here. The pair goes on one route, this customer first; `demand` is what the pair
+    /// carries between the two stops, and the delivery's own `demand` is 0 (or absent). A
+    /// delivery is named by one pickup only and is not a pickup itself. Absent or `null`: an
+    /// ordinary customer. Pairs are planned by the `"nn"`, `"savings"` and `"alns"` methods, with
+    /// one kind of vehicle per depot.
+    #[serde(default, deserialize_with = "optional_whole")]
+    #[cfg_attr(feature = "wasm", tsify(optional, type = "number | null"))]
+    delivery: Option<i128>,
 }
 
 impl InputCustomer {
@@ -1047,6 +1058,7 @@ pub(crate) fn solve(
         all_ids,
         positions,
     } = build_customers(depots, input_customers, largest_load)?;
+    refuse_unsupported_pairs(method, &customers, &fleet)?;
     let dm = distance_matrix(
         &customers,
         &positions,
@@ -1093,7 +1105,7 @@ pub(crate) fn solve(
             let distance = route_distance_from(route, depot, &dm);
             RouteSummary {
                 distance,
-                load: built.total_load().into(),
+                load: route_peak_load(route, &customers).into(),
                 cost: vehicles[v].route_cost(priced_distance_from(route, depot, &dm, &customers)),
                 duration: built.total_duration(),
                 lateness: built.total_lateness(),
@@ -1430,6 +1442,48 @@ fn plan_by_depots(
 /// round lowers the cost, so it ends sooner when no move gains.
 const MAX_DEPOT_ROUNDS: usize = 8;
 
+/// Refuses a request with pickup-delivery pairs that `method` or the fleet cannot plan yet, so that
+/// what is not planned is said, not planned wrongly or quietly differently.
+///
+/// - The genetic algorithm builds a plan from one giant tour cut into routes, and a cut can part a
+///   pair; the methods that place a pair as one unit (`nn`, `savings`, `alns`) are the ones that
+///   plan pairs.
+/// - A fleet of several kinds at one depot is brought to the plan route by route afterwards, by
+///   cutting and refilling routes a customer at a time, which parts pairs. One kind of vehicle per
+///   depot (any count, any number of depots) plans pairs as they are.
+fn refuse_unsupported_pairs(
+    method: Method,
+    customers: &[Customer],
+    fleet: &[VehicleType],
+) -> Result<(), ServiceError> {
+    if !has_pairs(customers) {
+        return Ok(());
+    }
+    if method == Method::Genetic {
+        return Err(ServiceError::new(
+            Code::InvalidOption,
+            "method \"ga\" does not place pickup-delivery pairs (customers with a delivery) -- \
+             use \"alns\" for the best plans, or \"savings\" or \"nn\""
+                .to_string(),
+            json!({ "parameter": "method" }),
+        ));
+    }
+    let mut kinds: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for t in fleet {
+        *kinds.entry(t.vehicle().depot_id()).or_default() += 1;
+    }
+    if kinds.values().any(|&n| n > 1) {
+        return Err(ServiceError::new(
+            Code::InvalidOption,
+            "pickup-delivery pairs are planned with one kind of vehicle per depot -- a depot \
+             lists several kinds in vehicles; give it one (with a count if it has several)"
+                .to_string(),
+            json!({ "parameter": "vehicles" }),
+        ));
+    }
+    Ok(())
+}
+
 /// Refuses a request with no depot.
 fn require_depots(depots: &[(f64, f64)]) -> Result<(), ServiceError> {
     if depots.is_empty() {
@@ -1699,6 +1753,7 @@ pub(crate) fn check(
         input_customers.len(),
     )?;
     let fleet_types = build_vehicles(input_vehicles, depots.len())?;
+    refuse_unsupported_pairs(method, &customers, &fleet_types)?;
     let vehicles: Vec<Vehicle> = fleet_types.iter().map(|t| t.vehicle().clone()).collect();
     let counts: Vec<Option<usize>> = fleet_types.iter().map(VehicleType::count).collect();
     let balance = balance_of(config, input_customers, durations.is_some())?;
@@ -1990,6 +2045,93 @@ struct BuiltCustomers {
     positions: Vec<usize>,
 }
 
+/// One customer of the request as `build_customers` has read it, before the table it is placed
+/// in is known.
+struct ReadCustomer {
+    id: usize,
+    demand: i32,
+    customer: Customer,
+    /// The position in the request of the customer this one is the pickup for, if it is one.
+    delivery: Option<usize>,
+}
+
+/// For each customer (by position in the request), the position of the customer it is the pickup
+/// for -- `None` for everyone else. A `delivery` that names no customer, the customer itself, a
+/// customer with a demand of its own (a delivery unloads what its pickup loaded, so it asks for
+/// nothing), a customer that is a pickup too, or one that another pickup names already is refused:
+/// each of them would give a pair that cannot be one stop followed by one stop.
+fn pair_deliveries(
+    read: &[ReadCustomer],
+    first_at: &std::collections::HashMap<usize, usize>,
+) -> Result<Vec<Option<usize>>, ServiceError> {
+    let mut deliveries: Vec<Option<usize>> = vec![None; read.len()];
+    let mut named_by: Vec<Option<usize>> = vec![None; read.len()];
+    for (position, r) in read.iter().enumerate() {
+        let Some(delivery_id) = r.delivery else {
+            continue;
+        };
+        let parameter = format!("customers[{position}].delivery");
+        let refuse = |message: String, parameter: String| {
+            ServiceError::new(
+                Code::InvalidOption,
+                message,
+                json!({ "parameter": parameter }),
+            )
+        };
+        let Some(&at) = first_at.get(&delivery_id) else {
+            return Err(refuse(
+                format!(
+                    "customer {}: delivery {delivery_id} is not the id of any customer",
+                    r.id
+                ),
+                parameter,
+            ));
+        };
+        if at == position {
+            return Err(refuse(
+                format!("customer {}: a customer cannot be its own delivery", r.id),
+                parameter,
+            ));
+        }
+        let delivery = &read[at];
+        if delivery.demand != 0 {
+            return Err(refuse(
+                format!(
+                    "customer {delivery_id} is the delivery of customer {}: it unloads what the \
+                     pickup loaded, so its own demand is 0 (the pickup's demand is what the pair \
+                     carries)",
+                    r.id
+                ),
+                format!("customers[{at}].demand"),
+            ));
+        }
+        if delivery.delivery.is_some() {
+            return Err(refuse(
+                format!(
+                    "customer {delivery_id} is the delivery of customer {} and cannot be the \
+                     pickup of another pair",
+                    r.id
+                ),
+                format!("customers[{at}].delivery"),
+            ));
+        }
+        if let Some(first) = named_by[at] {
+            return Err(ServiceError::new(
+                Code::DuplicateId,
+                format!(
+                    "customer {delivery_id} is named as the delivery of the customers at \
+                     positions {first} and {position} of customers (counting from 0); a delivery \
+                     unloads one pickup"
+                ),
+                json!({ "id": delivery_id, "first": first, "second": position }),
+            ));
+        }
+        named_by[at] = Some(position);
+        deliveries[position] = Some(at);
+    }
+    Ok(deliveries)
+}
+
 /// Builds the internal customer list and ID mapping from input, leaving out
 /// (but still validating) every customer asking for more than `largest_load`.
 ///
@@ -2017,6 +2159,9 @@ fn build_customers(
     let mut positions: Vec<usize> = Vec::with_capacity(input_customers.len());
     let mut first_at: std::collections::HashMap<usize, usize> =
         std::collections::HashMap::with_capacity(input_customers.len());
+    // What each customer asks for once read, by position in the request: whether a solver sees
+    // it is decided after the pairs are known, since a pair is left out whole.
+    let mut read: Vec<ReadCustomer> = Vec::with_capacity(input_customers.len());
 
     for (position, ic) in input_customers.iter().enumerate() {
         let id: usize = whole_in("id", ic.id, 0, usize::MAX as i128).map_err(|mut e| {
@@ -2042,8 +2187,8 @@ fn build_customers(
             format!("customer {id}: demand")
         })?;
         all_ids.push(id);
-        let idx = customers.len();
-        let mut c = Customer::new(idx, ic.x, ic.y, demand, ic.service_time);
+        // Numbered when it is placed in the table, below.
+        let mut c = Customer::new(0, ic.x, ic.y, demand, ic.service_time);
         if let Some([ready, due]) = ic.time_window {
             let tw = TimeWindow::new(ready, due).ok_or_else(|| {
                 ServiceError::new(
@@ -2072,11 +2217,59 @@ fn build_customers(
                 )
             })?;
         }
-        if demand <= largest_load {
-            id_map.push(id);
-            positions.push(position);
-            customers.push(c);
+        let delivery = ic
+            .delivery
+            .map(|d| {
+                let parameter = format!("customers[{position}].delivery");
+                whole_in::<usize>(&parameter, d, 0, usize::MAX as i128)
+            })
+            .transpose()?;
+        read.push(ReadCustomer {
+            id,
+            demand,
+            customer: c,
+            delivery,
+        });
+    }
+
+    let deliveries = pair_deliveries(&read, &first_at)?;
+
+    // A customer asking for more than the largest vehicle takes is left out, and so is the
+    // customer it is paired with: a pickup too big for every vehicle takes its delivery along (a
+    // delivery asks for nothing, so it is never left out on its own account).
+    let mut seen: Vec<bool> = read.iter().map(|r| r.demand <= largest_load).collect();
+    for (pickup, delivery) in deliveries.iter().enumerate() {
+        if let Some(delivery) = *delivery {
+            seen[delivery] = seen[pickup];
         }
+    }
+    // Where each customer a solver sees is in the table: the depots, then those in the order given.
+    let mut row_of: Vec<Option<usize>> = vec![None; read.len()];
+    let mut next_row = customers.len();
+    for (position, &kept) in seen.iter().enumerate() {
+        if kept {
+            row_of[position] = Some(next_row);
+            next_row += 1;
+        }
+    }
+    let mut pickup_of: Vec<Option<usize>> = vec![None; read.len()];
+    for (pickup, delivery) in deliveries.iter().enumerate() {
+        if let Some(delivery) = *delivery {
+            pickup_of[delivery] = Some(pickup);
+        }
+    }
+    for (position, r) in read.into_iter().enumerate() {
+        let Some(row) = row_of[position] else {
+            continue;
+        };
+        let partner = |other: Option<usize>| other.and_then(|p| row_of[p]);
+        id_map.push(r.id);
+        positions.push(position);
+        customers.push(
+            r.customer
+                .placed(row, false)
+                .with_partner(partner(deliveries[position]), partner(pickup_of[position])),
+        );
     }
 
     // The model adds loads in `i32`. Every route's load is part of the sum of
@@ -2968,7 +3161,14 @@ fn solve_savings(
     vehicle: &Vehicle,
     kind: usize,
 ) -> Plan {
-    let solution = clarke_wright_savings(customers, dm, vehicle);
+    let mut solution = clarke_wright_savings(customers, dm, vehicle);
+    // Savings builds a pair as a route of its own and merges routes whole, so what is left over
+    // is pairs that belong in another route's gaps: moving each pair to its cheapest place is
+    // part of the method here, not an option (on pickup-delivery benchmarks it takes the
+    // distance over the best known from 119 % to 22 %).
+    if has_pairs(customers) {
+        solution = pair_relocate_improve(&solution, customers, dm, vehicle);
+    }
     let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
     Plan {
         vehicles: vec![kind; routes.len()],
@@ -7601,5 +7801,471 @@ mod multi_depot_tests {
         let from_second = out.route_vehicles.iter().filter(|&&k| k == 1).count();
         assert_eq!(from_second, 1, "{out:?}");
         assert!(out.unassigned.iter().all(|&id| id >= 11), "{out:?}");
+    }
+}
+
+#[cfg(test)]
+mod pair_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A tiny seeded source of numbers.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn below(&mut self, n: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 33) % n
+        }
+    }
+
+    fn customers(json: serde_json::Value) -> Vec<InputCustomer> {
+        serde_json::from_value(json).expect("customers")
+    }
+
+    fn fleet(json: serde_json::Value) -> Vec<InputVehicle> {
+        serde_json::from_value(json).expect("vehicles")
+    }
+
+    fn config(method: &str) -> InputConfig {
+        serde_json::from_value(match method {
+            "alns" => json!({ "seed": 3, "max_iterations": 30 }),
+            "ga" => json!({ "seed": 3, "population_size": 12, "max_generations": 6 }),
+            _ => json!({}),
+        })
+        .expect("settings")
+    }
+
+    fn solve_pairs(
+        depots: &[(f64, f64)],
+        customers: &[InputCustomer],
+        vehicles: &[InputVehicle],
+        method: &str,
+    ) -> Result<VrpOutput, ServiceError> {
+        solve(
+            &ProblemInput {
+                depots,
+                customers,
+                vehicles,
+                distances: None,
+                durations: None,
+            },
+            method,
+            &config(method),
+        )
+    }
+
+    /// Pickups with the id of the delivery they go to, as `(pickup, delivery)`.
+    fn pairs_of(customers: &[InputCustomer]) -> Vec<(i128, i128)> {
+        customers
+            .iter()
+            .filter_map(|c| c.delivery.map(|d| (c.id, d)))
+            .collect()
+    }
+
+    /// What the plan has to be, from the definitions and nothing the solver computed: a pair is
+    /// served by one route or by none, the pickup first; the load after each stop (a pickup adds
+    /// what it carries, a delivery takes it off) stays within the capacity of the route's vehicle;
+    /// the route's reported `load` is the highest of those; every customer is on a route or
+    /// unassigned.
+    fn assert_pairs_are_kept(
+        customers: &[InputCustomer],
+        vehicles: &[InputVehicle],
+        out: &VrpOutput,
+        what: &str,
+    ) {
+        let demand = |id: i128| {
+            customers
+                .iter()
+                .find(|c| c.id == id)
+                .expect("a customer")
+                .demand
+        };
+        let pairs = pairs_of(customers);
+        for &(pickup, delivery) in &pairs {
+            let at = |id: i128| {
+                out.routes.iter().enumerate().find_map(|(r, route)| {
+                    route
+                        .iter()
+                        .position(|&c| c as i128 == id)
+                        .map(|stop| (r, stop))
+                })
+            };
+            match (at(pickup), at(delivery)) {
+                (Some((rp, sp)), Some((rd, sd))) => {
+                    assert_eq!(
+                        rp, rd,
+                        "{what}: pair {pickup}->{delivery} split over routes"
+                    );
+                    assert!(sp < sd, "{what}: {delivery} visited before {pickup}");
+                }
+                (None, None) => {
+                    assert!(
+                        out.unassigned.contains(&(pickup as usize))
+                            && out.unassigned.contains(&(delivery as usize)),
+                        "{what}: pair {pickup}->{delivery} dropped without being unassigned"
+                    );
+                }
+                other => panic!("{what}: pair {pickup}->{delivery} half served: {other:?}"),
+            }
+        }
+        for (r, route) in out.routes.iter().enumerate() {
+            let capacity = vehicles
+                .get(out.route_vehicles[r])
+                .map_or(f64::from(i32::MAX), |v| v.capacity);
+            let (mut load, mut peak) = (0.0, 0.0_f64);
+            for &c in route {
+                let id = c as i128;
+                load += match pairs.iter().find(|p| p.1 == id) {
+                    Some(&(pickup, _)) => -demand(pickup),
+                    None => demand(id),
+                };
+                peak = peak.max(load);
+            }
+            assert!(
+                peak <= capacity,
+                "{what}: route {r} peaks at {peak} > {capacity}"
+            );
+            assert_eq!(
+                out.route_summaries[r].load as f64, peak,
+                "{what}: route {r}: the reported load is the peak"
+            );
+        }
+        let served: std::collections::HashSet<usize> =
+            out.routes.iter().flatten().copied().collect();
+        for c in customers {
+            assert!(
+                served.contains(&(c.id as usize)) != out.unassigned.contains(&(c.id as usize)),
+                "{what}: customer {} is on a route xor unassigned",
+                c.id
+            );
+        }
+    }
+
+    /// Four pairs on a line: with a capacity of 2, two can be open at once but not three.
+    fn four_pairs() -> Vec<InputCustomer> {
+        customers(json!([
+            { "id": 1, "x": 10.0, "y": 0.0, "demand": 1, "delivery": 11 },
+            { "id": 2, "x": 20.0, "y": 0.0, "demand": 1, "delivery": 12 },
+            { "id": 3, "x": 30.0, "y": 0.0, "demand": 1, "delivery": 13 },
+            { "id": 4, "x": 40.0, "y": 0.0, "demand": 1, "delivery": 14 },
+            { "id": 11, "x": 15.0, "y": 5.0 },
+            { "id": 12, "x": 25.0, "y": 5.0 },
+            { "id": 13, "x": 35.0, "y": 5.0 },
+            { "id": 14, "x": 45.0, "y": 5.0 },
+        ]))
+    }
+
+    #[test]
+    fn every_method_but_ga_plans_pairs_whole_and_in_order() {
+        let (depots, customers) = ([(0.0, 0.0)], four_pairs());
+        let vehicles = fleet(json!([{ "capacity": 2 }]));
+        for method in ["nn", "savings", "alns"] {
+            let out = solve_pairs(&depots, &customers, &vehicles, method).expect(method);
+            assert!(out.unassigned.is_empty(), "{method}: {out:?}");
+            assert_pairs_are_kept(&customers, &vehicles, &out, method);
+        }
+    }
+
+    #[test]
+    fn pairs_planned_over_random_requests_stay_whole_ordered_and_within_capacity() {
+        let mut rng = Lcg(11);
+        for case in 0..30 {
+            let pairs = 2 + rng.below(5) as usize;
+            let mut list = Vec::new();
+            for k in 0..pairs {
+                let (px, py) = (rng.below(100), rng.below(100));
+                let q = 1 + rng.below(4);
+                list.push(
+                    json!({ "id": 100 + k, "x": px, "y": py, "demand": q, "delivery": 200 + k }),
+                );
+                list.push(json!({ "id": 200 + k, "x": rng.below(100), "y": rng.below(100) }));
+            }
+            for k in 0..(rng.below(4) as usize) {
+                list.push(json!({
+                    "id": 300 + k, "x": rng.below(100), "y": rng.below(100),
+                    "demand": 1 + rng.below(3),
+                }));
+            }
+            let customers = customers(serde_json::Value::Array(list));
+            let depots = [(rng.below(100) as f64, rng.below(100) as f64)];
+            let vehicles = fleet(json!([{ "capacity": 4 + rng.below(6) }]));
+            for method in ["nn", "savings", "alns"] {
+                let out = solve_pairs(&depots, &customers, &vehicles, method).expect(method);
+                assert_pairs_are_kept(
+                    &customers,
+                    &vehicles,
+                    &out,
+                    &format!("case {case} {method}"),
+                );
+            }
+        }
+    }
+
+    /// Moving every pair to its cheapest place is part of the `"savings"` method: on requests
+    /// where the merged routes leave pairs that fit better in other routes, the plan is shorter than
+    /// the merging alone makes it, and never longer.
+    #[test]
+    fn savings_moves_pairs_to_their_cheapest_place() {
+        use crate::constructive::clarke_wright_savings;
+        let mut rng = Lcg(5);
+        let mut shorter = 0;
+        for case in 0..40 {
+            let mut list = Vec::new();
+            for k in 0..(6 + rng.below(5) as usize) {
+                list.push(json!({
+                    "id": 100 + k, "x": rng.below(100), "y": rng.below(100),
+                    "demand": 1 + rng.below(3), "delivery": 200 + k,
+                }));
+                list.push(json!({ "id": 200 + k, "x": rng.below(100), "y": rng.below(100) }));
+            }
+            let customers = customers(serde_json::Value::Array(list));
+            let (capacity, depots) = (6 + rng.below(4), [(50.0, 50.0)]);
+            let vehicles = fleet(json!([{ "capacity": capacity }]));
+            let out = solve_pairs(&depots, &customers, &vehicles, "savings").expect("savings");
+            let built = build_customers(&depots, &customers, i32::MAX).expect("customers");
+            let dm = DistanceMatrix::from_customers(&built.customers);
+            let vehicle = Vehicle::new(0, capacity as i32);
+            let merged = clarke_wright_savings(&built.customers, &dm, &vehicle).total_distance();
+            assert!(
+                out.total_distance <= merged + 1e-9,
+                "case {case}: {} > {merged}",
+                out.total_distance
+            );
+            shorter += usize::from(out.total_distance < merged - 1e-9);
+        }
+        assert!(
+            shorter >= 10,
+            "only {shorter} of 40 plans are shorter than the merging alone"
+        );
+    }
+
+    #[test]
+    fn pairs_are_kept_whole_with_several_depots() {
+        let depots = [(0.0, 0.0), (100.0, 0.0)];
+        let customers = customers(json!([
+            { "id": 1, "x": 5.0, "y": 0.0, "demand": 2, "delivery": 2 },
+            { "id": 2, "x": 9.0, "y": 4.0 },
+            { "id": 3, "x": 95.0, "y": 0.0, "demand": 2, "delivery": 4 },
+            { "id": 4, "x": 91.0, "y": 4.0 },
+            { "id": 5, "x": 50.0, "y": 0.0, "demand": 1, "delivery": 6 },
+            { "id": 6, "x": 52.0, "y": 3.0 },
+        ]));
+        let vehicles = fleet(json!([
+            { "capacity": 4, "depot": 0 },
+            { "capacity": 4, "depot": 1 },
+        ]));
+        for method in ["nn", "savings", "alns"] {
+            let out = solve_pairs(&depots, &customers, &vehicles, method).expect(method);
+            assert!(out.unassigned.is_empty(), "{method}: {out:?}");
+            assert_pairs_are_kept(&customers, &vehicles, &out, method);
+        }
+    }
+
+    #[test]
+    fn a_pair_whose_pickup_no_vehicle_can_carry_is_left_out_whole() {
+        let customers = customers(json!([
+            { "id": 1, "x": 10.0, "y": 0.0, "demand": 9, "delivery": 2 },
+            { "id": 2, "x": 12.0, "y": 0.0 },
+            { "id": 3, "x": 20.0, "y": 0.0, "demand": 2, "delivery": 4 },
+            { "id": 4, "x": 22.0, "y": 0.0 },
+        ]));
+        let vehicles = fleet(json!([{ "capacity": 3 }]));
+        for method in ["nn", "savings", "alns"] {
+            let out = solve_pairs(&[(0.0, 0.0)], &customers, &vehicles, method).expect(method);
+            let mut left_out = out.unassigned.clone();
+            left_out.sort_unstable();
+            assert_eq!(left_out, [1, 2], "{method}: {out:?}");
+            assert_pairs_are_kept(&customers, &vehicles, &out, method);
+        }
+    }
+
+    #[test]
+    fn a_pair_that_the_fixed_fleet_cannot_both_serve_is_unassigned_as_a_unit() {
+        // One vehicle for two pairs that cannot share a route: each is 24 long alone, both 64.
+        let customers = customers(json!([
+            { "id": 1, "x": 10.0, "y": 0.0, "demand": 2, "delivery": 2 },
+            { "id": 2, "x": 12.0, "y": 0.0 },
+            { "id": 3, "x": 30.0, "y": 0.0, "demand": 2, "delivery": 4 },
+            { "id": 4, "x": 32.0, "y": 0.0 },
+        ]));
+        let vehicles = fleet(json!([{ "capacity": 2, "max_distance": 30 }]));
+        let config: InputConfig = serde_json::from_value(json!({ "max_vehicles": 1 })).unwrap();
+        let out = solve(
+            &ProblemInput {
+                depots: &[(0.0, 0.0)],
+                customers: &customers,
+                vehicles: &vehicles,
+                distances: None,
+                durations: None,
+            },
+            "savings",
+            &config,
+        )
+        .expect("a fixed fleet");
+        assert_pairs_are_kept(&customers, &vehicles, &out, "max_vehicles 1");
+        assert_eq!(out.unassigned.len(), 2, "{out:?}");
+    }
+
+    fn refusal(
+        customers: &[InputCustomer],
+        vehicles: &[InputVehicle],
+        method: &str,
+    ) -> ServiceError {
+        solve_pairs(&[(0.0, 0.0)], customers, vehicles, method).expect_err("a refusal")
+    }
+
+    #[test]
+    fn a_delivery_that_cannot_be_one_is_refused_by_where_it_is_given() {
+        let vehicles = fleet(json!([{ "capacity": 5 }]));
+        // Names no customer.
+        let err = refusal(
+            &customers(json!([{ "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": 9 }])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "customers[0].delivery");
+        // Is itself.
+        let err = refusal(
+            &customers(json!([{ "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": 1 }])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "customers[0].delivery");
+        // Asks for something itself.
+        let err = refusal(
+            &customers(json!([
+                { "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": 2 },
+                { "id": 2, "x": 2.0, "y": 0.0, "demand": 3 },
+            ])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "customers[1].demand");
+        // Is a pickup too.
+        let err = refusal(
+            &customers(json!([
+                { "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": 2 },
+                { "id": 2, "x": 2.0, "y": 0.0, "delivery": 3 },
+                { "id": 3, "x": 3.0, "y": 0.0 },
+            ])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "customers[1].delivery");
+        // Is named by two pickups.
+        let err = refusal(
+            &customers(json!([
+                { "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": 3 },
+                { "id": 2, "x": 2.0, "y": 0.0, "demand": 1, "delivery": 3 },
+                { "id": 3, "x": 3.0, "y": 0.0 },
+            ])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::DuplicateId.name());
+        assert_eq!(
+            (
+                &err.fields["id"],
+                &err.fields["first"],
+                &err.fields["second"]
+            ),
+            (&json!(3), &json!(0), &json!(1))
+        );
+        // A negative id is a range refusal, as everywhere else.
+        let err = refusal(
+            &customers(json!([{ "id": 1, "x": 1.0, "y": 0.0, "demand": 1, "delivery": -1 }])),
+            &vehicles,
+            "nn",
+        );
+        assert_eq!(err.code(), Code::ParameterOutOfRange.name());
+        assert_eq!(err.fields["parameter"], "customers[0].delivery");
+    }
+
+    #[test]
+    fn what_the_planner_cannot_do_with_pairs_is_refused_not_planned_wrongly() {
+        let pairs = four_pairs();
+        // The genetic algorithm.
+        let err = refusal(&pairs, &fleet(json!([{ "capacity": 2 }])), "ga");
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "method");
+        // Several kinds at one depot.
+        let err = refusal(
+            &pairs,
+            &fleet(json!([{ "capacity": 2 }, { "capacity": 5, "fixed_cost": 3 }])),
+            "savings",
+        );
+        assert_eq!(err.code(), Code::InvalidOption.name());
+        assert_eq!(err.fields["parameter"], "vehicles");
+        // Without pairs the same requests are fine.
+        let plain = customers(json!([
+            { "id": 1, "x": 10.0, "y": 0.0, "demand": 1 },
+            { "id": 2, "x": 20.0, "y": 0.0, "demand": 1 },
+        ]));
+        for (method, vehicles) in [
+            ("ga", fleet(json!([{ "capacity": 2 }]))),
+            (
+                "savings",
+                fleet(json!([{ "capacity": 2 }, { "capacity": 5 }])),
+            ),
+        ] {
+            solve_pairs(&[(0.0, 0.0)], &plain, &vehicles, method).expect("no pairs");
+        }
+    }
+
+    #[test]
+    fn the_checker_names_a_pair_that_is_split_or_out_of_order() {
+        let customers = four_pairs();
+        let vehicles = fleet(json!([{ "capacity": 4 }]));
+        let problem = ProblemInput {
+            depots: &[(0.0, 0.0)],
+            customers: &customers,
+            vehicles: &vehicles,
+            distances: None,
+            durations: None,
+        };
+        let plan = |routes: serde_json::Value| -> InputSolution {
+            serde_json::from_value(json!({ "routes": routes })).unwrap()
+        };
+        let checked = |solution: &InputSolution| {
+            check(&problem, "savings", &config("savings"), solution).expect("a check")
+        };
+        // Everything whole and in order.
+        let good = plan(json!([[1, 11, 2, 12], [3, 13, 4, 14]]));
+        assert!(checked(&good).feasible);
+        // A delivery before its pickup.
+        let out = checked(&plan(json!([[11, 1, 2, 12], [3, 13, 4, 14]])));
+        assert!(
+            out.violations.iter().any(|v| matches!(
+                v,
+                PlanViolation::PairOrder {
+                    route: 0,
+                    pickup: 1,
+                    delivery: 11
+                }
+            )),
+            "{:?}",
+            out.violations
+        );
+        // A pair on two routes.
+        let out = checked(&plan(json!([[1, 2, 12], [11, 3, 13, 4, 14]])));
+        assert!(
+            out.violations.iter().any(|v| matches!(
+                v,
+                PlanViolation::PairSplit {
+                    pickup: 1,
+                    delivery: 11
+                }
+            )),
+            "{:?}",
+            out.violations
+        );
     }
 }

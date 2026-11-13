@@ -76,6 +76,12 @@ required-features = ["ffi"]
 name = "mdvrp"
 required-features = ["ffi"]
 
+# Li & Lim pickup-delivery measurement through the C entry points (instances not in this
+# repository -- see the example header).
+[[example]]
+name = "pdptw_service"
+required-features = ["ffi"]
+
 [dev-dependencies]
 # Generates the JSON Schemas the engine card points at (tests only).
 schemars = "1"

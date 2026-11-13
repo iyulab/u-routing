@@ -153,6 +153,12 @@ mod tests {
         };
         let vehicle = route_vehicle(10, &limits);
         assert_eq!(vehicle.rest(), Some(rest));
-        assert_eq!(RouteLimits::of(&vehicle), limits);
+        assert_eq!(
+            RouteLimits::of(&vehicle),
+            RouteLimits {
+                capacity: Some(10),
+                ..limits
+            }
+        );
     }
 }

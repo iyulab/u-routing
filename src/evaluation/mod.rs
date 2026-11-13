@@ -125,7 +125,10 @@ pub(crate) fn lateness_bound(customers: &[Customer], distances: &DistanceMatrix)
 
 /// What a vehicle allows one route besides its capacity: how far it may
 /// travel and how long it may take, depot to depot -- the limits
-/// [`RouteEvaluator::build_route`] reports as violations.
+/// [`RouteEvaluator::build_route`] reports as violations. The capacity itself is carried for
+/// one case only: a route with pickup-delivery pairs, whose load goes up and down along the
+/// route, so that visiting the same stops in another order can overload it (see
+/// [`RouteLimits::capacity`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RouteLimits {
     /// Longest total distance, including the return to the depot.
@@ -134,6 +137,12 @@ pub struct RouteLimits {
     pub max_duration: Option<f64>,
     /// The break the driver takes during the route ([`VehicleBreak`]).
     pub rest: Option<VehicleBreak>,
+    /// The most the vehicle carries at any point. [`route_feasible`] and [`route_eval`] check it
+    /// against the peak load of a route that has pickup-delivery pairs and against nothing else:
+    /// the load of any other route is the sum of its demands, which does not depend on the order,
+    /// and the searches that add a customer to a route check that sum themselves. `None`: not
+    /// checked.
+    pub capacity: Option<i32>,
 }
 
 impl RouteLimits {
@@ -142,6 +151,7 @@ impl RouteLimits {
         max_distance: None,
         max_duration: None,
         rest: None,
+        capacity: None,
     };
 
     /// The limits `vehicle` sets.
@@ -150,10 +160,12 @@ impl RouteLimits {
             max_distance: vehicle.max_distance(),
             max_duration: vehicle.max_duration(),
             rest: vehicle.rest(),
+            capacity: Some(vehicle.capacity()),
         }
     }
 
-    /// Whether nothing is set: no limit, no break.
+    /// Whether nothing is set: no limit, no break. (The capacity is not a limit in this sense: it
+    /// is only checked for routes with pairs, which [`route_checks_needed`] asks about anyway.)
     pub fn is_unlimited(&self) -> bool {
         self.max_distance.is_none() && self.max_duration.is_none() && self.rest.is_none()
     }
@@ -197,6 +209,22 @@ fn pair_stop_whole(route: &[usize], index: usize, customer: &Customer) -> bool {
             .is_none_or(|pickup| route[..index].contains(&pickup))
 }
 
+/// Whether a route with pickup-delivery pairs keeps within `limits.capacity` at every stop. A route
+/// without pairs, or limits without a capacity, always does: see [`RouteLimits::capacity`].
+fn pair_load_fits(route: &[usize], customers: &[Customer], limits: &RouteLimits) -> bool {
+    let Some(capacity) = limits.capacity else {
+        return true;
+    };
+    let (mut paired, mut load, mut peak) = (false, 0, 0);
+    for &id in route {
+        let customer = &customers[id];
+        paired |= customer.delivery_index().is_some() || customer.pickup_index().is_some();
+        load += load_change(customers, id);
+        peak = peak.max(load);
+    }
+    !paired || peak <= capacity
+}
+
 /// Whether a route `depot → route[0] → … → depot` reaches every customer by
 /// its due time -- or, at a customer whose window is soft
 /// ([`Customer::with_lateness_penalty`]), reaches it at all -- and keeps
@@ -205,7 +233,8 @@ fn pair_stop_whole(route: &[usize], index: usize, customer: &Customer) -> bool {
 /// [`DistanceMatrix::travel_time`] (the distances unless it has times of its
 /// own), waiting for a window that has not opened, and service before
 /// moving on, and keeps every pickup-delivery pair whole and in order
-/// ([`pairs_ordered`]). Capacity is not checked here. O(n) and allocation-free
+/// ([`pairs_ordered`]) within the capacity at every stop ([`RouteLimits::capacity`]; the capacity of
+/// a route without pairs is not checked here). O(n) and allocation-free
 /// (a route with pairs scans itself for each pair stop), so a search can ask it
 /// about every candidate move.
 pub fn route_feasible(
@@ -217,12 +246,14 @@ pub fn route_feasible(
 ) -> bool {
     if let Some(rest) = &limits.rest {
         return pairs_ordered(route, customers)
+            && pair_load_fits(route, customers, limits)
             && schedule::schedule(route, depot, distances, customers, rest)
                 .is_some_and(|s| limits.allow(s.distance, s.duration));
     }
     let mut time = 0.0;
     let mut distance = 0.0;
     let mut prev = depot;
+    let mut paired = false;
     for (index, &cid) in route.iter().enumerate() {
         distance += distances.get(prev, cid);
         let arrival = time + distances.travel_time(prev, cid);
@@ -230,6 +261,7 @@ pub fn route_feasible(
         if !pair_stop_whole(route, index, customer) {
             return false;
         }
+        paired |= customer.delivery_index().is_some() || customer.pickup_index().is_some();
         let start = match customer.time_window() {
             Some(tw) => {
                 if tw.is_violated(arrival) && customer.lateness_penalty().is_none() {
@@ -242,10 +274,11 @@ pub fn route_feasible(
         time = start + customer.service_duration();
         prev = cid;
     }
-    limits.allow(
-        distance + distances.get(prev, depot),
-        time + distances.travel_time(prev, depot),
-    )
+    (!paired || pair_load_fits(route, customers, limits))
+        && limits.allow(
+            distance + distances.get(prev, depot),
+            time + distances.travel_time(prev, depot),
+        )
 }
 
 /// What [`route_eval`] reports of a route that is allowed.
@@ -292,8 +325,8 @@ pub(crate) fn effective_cost(
 /// depot`, or `None` if it is not allowed: a late arrival at a hard window, or a
 /// limit of `limits` broken. The clock and the allowed set are those of
 /// [`route_feasible`] -- `route_eval(…).is_some()` is `route_feasible(…)` -- and
-/// the totals are those of [`RouteEvaluator::build_route`]. Capacity is not
-/// checked here. O(n) and allocation-free.
+/// the totals are those of [`RouteEvaluator::build_route`]. Capacity is checked as in
+/// [`route_feasible`]. O(n) and allocation-free.
 pub fn route_eval(
     route: &[usize],
     depot: usize,
@@ -302,7 +335,7 @@ pub fn route_eval(
     limits: &RouteLimits,
 ) -> Option<RouteEval> {
     if let Some(rest) = &limits.rest {
-        if !pairs_ordered(route, customers) {
+        if !pairs_ordered(route, customers) || !pair_load_fits(route, customers, limits) {
             return None;
         }
         let s = schedule::schedule(route, depot, distances, customers, rest)?;
@@ -319,6 +352,7 @@ pub fn route_eval(
     let mut lateness = 0.0;
     let mut lateness_cost = 0.0;
     let mut prev = depot;
+    let mut paired = false;
     for (index, &cid) in route.iter().enumerate() {
         distance += distances.get(prev, cid);
         let arrival = time + distances.travel_time(prev, cid);
@@ -326,6 +360,7 @@ pub fn route_eval(
         if !pair_stop_whole(route, index, customer) {
             return None;
         }
+        paired |= customer.delivery_index().is_some() || customer.pickup_index().is_some();
         let start = match customer.time_window() {
             Some(tw) => {
                 if tw.is_violated(arrival) {
@@ -340,6 +375,9 @@ pub fn route_eval(
         };
         time = start + customer.service_duration();
         prev = cid;
+    }
+    if paired && !pair_load_fits(route, customers, limits) {
+        return None;
     }
     let distance = distance + distances.get(prev, depot);
     let duration = time + distances.travel_time(prev, depot);
@@ -403,6 +441,61 @@ mod tests {
                 "max_distance {max}"
             );
         }
+    }
+
+    /// Two pairs of 3 on a line: the same four stops are within a capacity of 4 when each pair is
+    /// delivered before the next is loaded (peak 3) and over it when both are loaded first (peak 6),
+    /// though the demands add up to 6 either way -- so the order alone decides whether the route
+    /// overloads the vehicle.
+    #[test]
+    fn the_order_of_a_route_with_pairs_decides_whether_it_overloads_the_vehicle() {
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 3, 0.0).pickup_of(3),
+            Customer::new(2, 2.0, 0.0, 3, 0.0).pickup_of(4),
+            Customer::new(3, 3.0, 0.0, 0, 0.0).delivery_of(1),
+            Customer::new(4, 4.0, 0.0, 0, 0.0).delivery_of(2),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        let (in_turn, together) = ([1, 3, 2, 4], [1, 2, 3, 4]);
+        assert_eq!(route_peak_load(&in_turn, &customers), 3);
+        assert_eq!(route_peak_load(&together, &customers), 6);
+        let loose_break = VehicleBreak::new(0.0, 1000.0, 1.0);
+        for rest in [None, Some(loose_break)] {
+            let capacity = |capacity| RouteLimits {
+                capacity,
+                rest,
+                ..RouteLimits::NONE
+            };
+            let fits = |route: &[usize], limits: &RouteLimits| {
+                let feasible = route_feasible(route, 0, &dm, &customers, limits);
+                assert_eq!(
+                    feasible,
+                    route_eval(route, 0, &dm, &customers, limits).is_some(),
+                    "route_feasible and route_eval agree on {route:?}"
+                );
+                feasible
+            };
+            assert!(fits(&in_turn, &capacity(Some(4))), "{rest:?}");
+            assert!(!fits(&together, &capacity(Some(4))), "{rest:?}");
+            assert!(!fits(&together, &capacity(Some(5))), "{rest:?}");
+            assert!(fits(&together, &capacity(Some(6))), "{rest:?}");
+            // No capacity given: the order alone is all that is asked.
+            assert!(fits(&together, &capacity(None)), "{rest:?}");
+        }
+        // A route without pairs is not asked about its capacity here, whatever it carries.
+        let plain = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 1.0, 0.0, 9, 0.0),
+            Customer::new(2, 2.0, 0.0, 9, 0.0),
+        ];
+        let plain_dm = DistanceMatrix::from_customers(&plain);
+        let limits = RouteLimits {
+            capacity: Some(4),
+            ..RouteLimits::NONE
+        };
+        assert!(route_feasible(&[1, 2], 0, &plain_dm, &plain, &limits));
+        assert!(route_eval(&[1, 2], 0, &plain_dm, &plain, &limits).is_some());
     }
 
     #[test]
