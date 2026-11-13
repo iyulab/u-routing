@@ -3,7 +3,7 @@
   "card_version": 1,
   "engine": {
     "id": "u-routing",
-    "summary": "Vehicle routing: plans routes from a depot (or several, each vehicle starting from its own) that serve every customer within vehicle capacity, time windows and route limits (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
+    "summary": "Vehicle routing: plans routes from a depot (or several, each vehicle starting from its own) that serve every customer within vehicle capacity, time windows and route limits, with pickup-delivery pairs kept on one route in order (nearest neighbour, Clarke-Wright savings, a genetic algorithm with route splitting, ALNS), and checks a given plan against the same rules.",
     "version": "0.28.0",
     "license": "MIT",
     "repository": "https://github.com/iyulab/u-routing"
@@ -45,7 +45,7 @@
   "operations": [
     {
       "id": "solve_vrp",
-      "summary": "Routes from a depot, or from several depots with each vehicle starting from its own, that serve the customers within each vehicle's capacity, time windows, max_distance and max_duration, minimizing total cost, by the chosen method (nn, savings, ga or alns), optionally with at most max_vehicles routes; customers no route can take come back as unassigned, and the plan says per route its distance, load, cost and duration and why the method stopped.",
+      "summary": "Routes from a depot, or from several depots with each vehicle starting from its own, that serve the customers within each vehicle's capacity, time windows, max_distance and max_duration, minimizing total cost, by the chosen method (nn, savings, ga or alns), optionally with at most max_vehicles routes; a customer with a delivery is a pickup whose delivery rides the same route after it, the load counted along the route (nn, savings and alns only); customers no route can take come back as unassigned, and the plan says per route its distance, load, cost and duration and why the method stopped.",
       "input": {
         "schema": "schemas/wasm.schema.json#/$defs/solve_vrp.input",
         "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
@@ -123,6 +123,14 @@
             "method": "three seeded seven-customer maps",
             "tolerance": "1e-9 (lower bound); 0.1 % (searches)",
             "test": "src/service.rs::oracle_tests::on_a_map_small_enough_to_enumerate_no_method_beats_the_best_tour_and_the_searches_find_it"
+          },
+          {
+            "claim": "With pickup-delivery pairs, nn, savings and alns return plans in which each pair is served by one route (pickup first) or left unassigned together, the load after every stop stays within the vehicle's capacity, and the reported route load is that highest load.",
+            "reference_kind": "literature",
+            "reference": "the definition of a feasible pickup-and-delivery plan (Li & Lim, A metaheuristic for the pickup and delivery problem with time windows, 2001)",
+            "method": "solves thirty seeded random requests of two to six pairs and some ordinary customers with each method and recomputes pair order, loads along the route and unassigned pairs from the definitions",
+            "tolerance": "exact",
+            "test": "src/service.rs::pair_tests::pairs_planned_over_random_requests_stay_whole_ordered_and_within_capacity"
           }
         ],
         "limits": [
@@ -136,7 +144,7 @@
     },
     {
       "id": "check_vrp_solution",
-      "summary": "Whether a plan keeps every rule of its problem, read as solve_vrp reads it: each customer served exactly once or reported unassigned, the vehicle of each route and the depot it starts from, the fleet size, capacity, time windows, route limits and the reported distance and cost; lists every rule broken.",
+      "summary": "Whether a plan keeps every rule of its problem, read as solve_vrp reads it: each customer served exactly once or reported unassigned, the vehicle of each route and the depot it starts from, the fleet size, capacity (the highest load along a route with pickup-delivery pairs), a pickup and its delivery on one route in that order, time windows, route limits and the reported distance and cost; lists every rule broken.",
       "input": {
         "schema": "schemas/wasm.schema.json#/$defs/check_vrp_solution.input",
         "freshness_test": "src/wasm.rs::engine_card_tests::the_schemas_are_generated_from_the_binding_types"
