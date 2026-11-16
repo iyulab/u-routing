@@ -8,6 +8,10 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
+### Changed
+
+- Requires u-numflow 0.17.
+
 ## [0.28.0] - 2026-11-13
 
 The .NET client is `URouting` 0.25.0.
