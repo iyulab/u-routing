@@ -8,7 +8,6 @@
 
 use rand::Rng;
 use u_metaheur::alns::{DestroyOperator, RepairOperator};
-use u_metaheur::Deadline;
 
 use super::destroy::{RandomRemoval, RouteRemoval, ShawRemoval, WorstRemoval};
 use super::repair::{GreedyInsertion, RegretInsertion};
@@ -49,21 +48,6 @@ impl DestroyOperator<RoutingSolution> for Destroy {
             Self::Route(op) => op.destroy(solution, degree, rng),
         }
     }
-
-    fn destroy_within<R: Rng>(
-        &self,
-        solution: &RoutingSolution,
-        degree: f64,
-        rng: &mut R,
-        deadline: &Deadline,
-    ) -> Option<RoutingSolution> {
-        match self {
-            Self::Random(op) => op.destroy_within(solution, degree, rng, deadline),
-            Self::Worst(op) => op.destroy_within(solution, degree, rng, deadline),
-            Self::Shaw(op) => op.destroy_within(solution, degree, rng, deadline),
-            Self::Route(op) => op.destroy_within(solution, degree, rng, deadline),
-        }
-    }
 }
 
 /// One of the repair operators.
@@ -86,18 +70,6 @@ impl RepairOperator<RoutingSolution> for Repair {
         match self {
             Self::Greedy(op) => op.repair(solution, rng),
             Self::Regret(op) => op.repair(solution, rng),
-        }
-    }
-
-    fn repair_within<R: Rng>(
-        &self,
-        solution: &RoutingSolution,
-        rng: &mut R,
-        deadline: &Deadline,
-    ) -> Option<RoutingSolution> {
-        match self {
-            Self::Greedy(op) => op.repair_within(solution, rng, deadline),
-            Self::Regret(op) => op.repair_within(solution, rng, deadline),
         }
     }
 }

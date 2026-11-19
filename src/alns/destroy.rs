@@ -14,7 +14,6 @@
 
 use rand::{Rng, RngExt};
 use u_metaheur::alns::DestroyOperator;
-use u_metaheur::Deadline;
 
 use crate::distance::DistanceMatrix;
 use crate::models::Customer;
@@ -136,26 +135,11 @@ impl DestroyOperator<RoutingSolution> for WorstRemoval {
         degree: f64,
         rng: &mut R,
     ) -> RoutingSolution {
-        self.destroy_within(solution, degree, rng, &Deadline::start(None))
-            .expect("a destroy with no deadline completes")
-    }
-
-    /// Stops as soon as `deadline` passes: each removal scans every assigned customer.
-    fn destroy_within<R: Rng>(
-        &self,
-        solution: &RoutingSolution,
-        degree: f64,
-        rng: &mut R,
-        deadline: &Deadline,
-    ) -> Option<RoutingSolution> {
         let mut sol = solution.clone();
         let total_customers: usize = sol.routes().iter().map(|r| r.len()).sum();
         let num_remove = ((total_customers as f64 * degree).round() as usize).max(1);
 
         for _ in 0..num_remove {
-            if deadline.passed() {
-                return None;
-            }
             // Find customer with highest removal saving
             let mut best_saving = f64::NEG_INFINITY;
             let mut best_route = 0;
@@ -183,7 +167,7 @@ impl DestroyOperator<RoutingSolution> for WorstRemoval {
         }
 
         sol.remove_empty_routes();
-        Some(sol)
+        sol
     }
 }
 
@@ -231,26 +215,12 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
         degree: f64,
         rng: &mut R,
     ) -> RoutingSolution {
-        self.destroy_within(solution, degree, rng, &Deadline::start(None))
-            .expect("a destroy with no deadline completes")
-    }
-
-    /// Stops as soon as `deadline` passes: choosing each next customer scans every assigned
-    /// customer against every removed one, so removing a quarter of a large instance outlasts
-    /// a short budget.
-    fn destroy_within<R: Rng>(
-        &self,
-        solution: &RoutingSolution,
-        degree: f64,
-        rng: &mut R,
-        deadline: &Deadline,
-    ) -> Option<RoutingSolution> {
         let mut sol = solution.clone();
         let total_customers: usize = sol.routes().iter().map(|r| r.len()).sum();
         let num_remove = ((total_customers as f64 * degree).round() as usize).max(1);
 
         if total_customers == 0 {
-            return Some(sol);
+            return sol;
         }
 
         // Collect all assigned customers
@@ -272,9 +242,6 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
         for _ in 1..num_remove {
             if assigned.is_empty() {
                 break;
-            }
-            if deadline.passed() {
-                return None;
             }
 
             // Find most related unremoved customer to any removed customer
@@ -299,7 +266,7 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
 
         sol.unassigned_mut().extend(&removed);
         sol.remove_empty_routes();
-        Some(sol)
+        sol
     }
 }
 
@@ -417,38 +384,5 @@ mod tests {
             .collect();
         all.sort();
         assert_eq!(all, vec![1, 2, 3, 4]);
-    }
-
-    /// A destroy whose deadline has passed gives up; the cheap operators ignore it.
-    #[test]
-    fn a_spent_deadline_cuts_a_scanning_destroy_short() {
-        let customers: Vec<Customer> = std::iter::once(Customer::depot(0.0, 0.0))
-            .chain((1..=12).map(|i| Customer::new(i, i as f64, (i % 3) as f64, 1, 0.0)))
-            .collect();
-        let dm = DistanceMatrix::from_customers(&customers);
-        let sol = RoutingSolution::new(
-            vec![(1..=6).collect(), (7..=12).collect()],
-            vec![],
-            &customers,
-            &dm,
-        );
-        let mut rng = u_numflow::random::create_rng(1);
-        let spent = Deadline::start(Some(0));
-        let worst = WorstRemoval::new(dm.clone());
-        let shaw = ShawRemoval::new(dm, customers);
-        assert!(worst.destroy_within(&sol, 0.5, &mut rng, &spent).is_none());
-        assert!(shaw.destroy_within(&sol, 0.5, &mut rng, &spent).is_none());
-        assert!(RandomRemoval
-            .destroy_within(&sol, 0.5, &mut rng, &spent)
-            .is_some());
-        let open = Deadline::start(None);
-        assert_eq!(
-            worst
-                .destroy_within(&sol, 0.5, &mut rng, &open)
-                .expect("no deadline")
-                .unassigned()
-                .len(),
-            6
-        );
     }
 }

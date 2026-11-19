@@ -8,27 +8,9 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 ## [Unreleased]
 
-### Added
-
-- `local_search::relocate_improve_within` and `local_search::exchange_improve_within`: the inter-route descents with a
-  `u_metaheur::Deadline`; they stop taking moves when it passes and return the (feasible) solution as it then stands.
-  `relocate_improve` and `exchange_improve` are these with no deadline.
-- The ALNS destroy and repair operators (`ShawRemoval`, `WorstRemoval`, `GreedyInsertion`, `RegretInsertion`, and the
-  `Destroy` / `Repair` enums) implement `destroy_within` / `repair_within`, which give up when the deadline passes.
-
 ### Changed
 
 - Requires u-numflow 0.17.
-
-### Fixed
-
-- `config.time_limit_ms` did not bound `"alns"` and `"ga"` on a large input. The limit was looked at only between
-  iterations (and generations), and one destroy-and-repair, or the education of one individual, takes seconds at a
-  thousand customers or more: 2,000 customers with `time_limit_ms: 500` took about 32 s with `"alns"` and 2.4 s with
-  `"ga"`. The deadline now reaches into the operators, the temperature calibration, the GA's seeding and the local
-  search of an individual's education; the same runs return in about 0.6 s with `stop_reason: "time_limit"`. A run too
-  short to finish an iteration returns its starting solution (a constructive route set improved by local search),
-  not a worse one.
 
 ## [0.28.0] - 2026-11-13
 
