@@ -27,8 +27,8 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   up to 250 customers, and at most 100 customers beyond that (Ropke & Pisinger 2006). Solomon (56 instances, seeds
   1–3): mean gap to the best known distance +0.5 % → −1.1 % (more routes: 8.7 → 9.0; with `fixed_cost` 1000 8.0 routes at
   +1.2 %), 0.3 s per instance instead of 1.3 s; CVRPLIB X 303–801 customers at 10 s, 5,000 iterations, seeds 1–3: 1.0–4.1 %
-  above the best known. The multi-depot Cordeau set gets slightly worse, mean +3.9 % → +4.2 % (`pr` +6.7 % → +7.8 %), in
-  8 s instead of 23 s. Answers change for a given seed.
+  above the best known. The multi-depot Cordeau set (33 instances, seeds 1–3) goes from a mean gap of +4.8 % to +4.2 % (`pr` +8.7 % → +7.7 %), in
+  8 s instead of 21 s. Answers change for a given seed.
 
 ### Fixed
 
