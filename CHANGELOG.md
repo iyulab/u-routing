@@ -22,6 +22,7 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 
 - **Breaking** (Rust API): `ViolationType` gains the variants `PairOrder` and `PairSplit`; an exhaustive `match` over it needs arms. In .NET `PlanViolation` gains the records `PairOrder` and `PairSplit`.
 - **Breaking** (Rust API): `RouteLimits` gains the field `capacity` (`RouteLimits::of(vehicle)` fills it; a struct literal needs it or `..RouteLimits::NONE`). `route_feasible` and `route_eval` check it against the peak load of a route with pickup-delivery pairs -- changing the order of such a route can overload the vehicle although the demands add up the same -- and against nothing else, so a request without pairs plans exactly as before.
+- Requires u-numflow 0.17.
 
 ## [0.28.0] - 2026-11-13
 
