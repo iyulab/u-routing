@@ -181,6 +181,23 @@ feasible. Larger ones (seed 1): X-n200-k36 3.1 % in 1.9 s, X-n251-k28 2.7 %
 in 2.5 s, X-n303-k21 3.7 % in 4.7 s, X-n401-k29 2.0 % in 8.6 s --
 `config.time_limit_ms` bounds the time.
 
+**Larger instances.** The same harness takes `CVRPLIB_METHOD`, `CVRPLIB_TIME_MS` (`config.time_limit_ms`)
+and `CVRPLIB_ONLY` (name prefixes). Mean gap to the best known cost (seeds 1–3 for the search methods) and mean
+time, `ga` and `alns` with `config.time_limit_ms: 20000` and, for `alns`, `config.max_iterations: 5000`:
+
+| Instance (customers) | `savings` | `ga` | `alns` |
+|---|---|---|---|
+| X-n303-k21 (302) | 9.1 % · 0.02 s | 2.8 % · 4.5 s | 2.1 % · 8.0 s |
+| X-n502-k39 (501) | 4.5 % · 0.04 s | 1.1 % · 12 s | 0.8 % · 14 s |
+| X-n801-k40 (800) | 5.8 % · 0.1 s | 4.4 % · 20 s | 3.2 % · 12 s |
+| X-n1001-k43 (1,000) | 7.0 % · 0.2 s | 6.0 % · 20 s | 6.2 % · 20 s |
+
+Up to about 800 customers `alns` with a raised `max_iterations` is the better of the two within these budgets. At
+1,000 customers neither search gets far from the constructive start in 20 s (more time does not change `ga`'s answer
+in 60 s): `savings` is a seven-percent answer in a fifth of a second, and the search methods improve it by about one
+point. `alns` stops at its iteration limit (500 by default) before a time limit that was given to it, so give both
+when the time is what you have.
+
 `examples/mdvrp.rs` measures the methods on Cordeau's multi-depot instances (`p01`–`p23`,
 `pr01`–`pr10`: 48–360 customers, 2–9 depots; the University of Malaga's VRP site has the
 instances and the best known results), every answer checked with `urouting_check_solution`:
