@@ -269,6 +269,15 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
         // Remove from solution
         remove_customer(&mut sol, seed);
 
+        // `related[i]`: how related `assigned[i]` is to the removed customer it is closest to
+        // (the maximum over the removed ones). A customer's removal raises it only by its own
+        // relatedness, so each step reads one pass over the assigned ones, O(k·n) for k removals
+        // instead of O(k²·n) for comparing every one against every removed.
+        let mut related: Vec<f64> = assigned
+            .iter()
+            .map(|&cid| self.relatedness(seed, cid))
+            .collect();
+
         for _ in 1..num_remove {
             if assigned.is_empty() {
                 break;
@@ -280,21 +289,20 @@ impl DestroyOperator<RoutingSolution> for ShawRemoval {
             // Find most related unremoved customer to any removed customer
             let mut best_relatedness = f64::NEG_INFINITY;
             let mut best_idx = 0;
-
-            for (idx, &cid) in assigned.iter().enumerate() {
-                let max_rel = removed
-                    .iter()
-                    .map(|&r| self.relatedness(r, cid))
-                    .fold(f64::NEG_INFINITY, f64::max);
-                if max_rel > best_relatedness {
-                    best_relatedness = max_rel;
+            for (idx, &rel) in related.iter().enumerate() {
+                if rel > best_relatedness {
+                    best_relatedness = rel;
                     best_idx = idx;
                 }
             }
 
             let next = assigned.remove(best_idx);
+            related.remove(best_idx);
             removed.push(next);
             remove_customer(&mut sol, next);
+            for (rel, &cid) in related.iter_mut().zip(&assigned) {
+                *rel = rel.max(self.relatedness(next, cid));
+            }
         }
 
         sol.unassigned_mut().extend(&removed);
@@ -450,5 +458,55 @@ mod tests {
                 .len(),
             6
         );
+    }
+
+    /// Shaw removal reads each customer's relatedness to the removed ones incrementally; it
+    /// removes the customers the plain comparison of every one against every removed one picks.
+    #[test]
+    fn shaw_removal_picks_what_comparing_every_pair_picks() {
+        let customers: Vec<Customer> = std::iter::once(Customer::depot(0.0, 0.0))
+            .chain((1..=40).map(|i| {
+                let a = i as f64 * 2.399;
+                Customer::new(
+                    i,
+                    50.0 + 40.0 * a.cos(),
+                    50.0 + 40.0 * a.sin(),
+                    1 + (i % 5) as i32,
+                    0.0,
+                )
+            }))
+            .collect();
+        let dm = DistanceMatrix::from_customers(&customers);
+        let routes: Vec<Vec<usize>> = (1..=40usize)
+            .collect::<Vec<_>>()
+            .chunks(5)
+            .map(<[usize]>::to_vec)
+            .collect();
+        let sol = RoutingSolution::new(routes, vec![], &customers, &dm);
+        let shaw = ShawRemoval::new(dm, customers);
+        for seed in 0..20 {
+            let mut rng = u_numflow::random::create_rng(seed);
+            let got = shaw.destroy(&sol, 0.3, &mut rng);
+
+            let mut rng = u_numflow::random::create_rng(seed);
+            let mut assigned: Vec<usize> = (1..=40).collect();
+            let num_remove = ((40.0_f64 * 0.3).round() as usize).max(1);
+            let first = assigned.remove(rng.random_range(0..assigned.len() as u64) as usize);
+            let mut removed = vec![first];
+            for _ in 1..num_remove {
+                let mut best = (f64::NEG_INFINITY, 0);
+                for (idx, &cid) in assigned.iter().enumerate() {
+                    let rel = removed
+                        .iter()
+                        .map(|&r| shaw.relatedness(r, cid))
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    if rel > best.0 {
+                        best = (rel, idx);
+                    }
+                }
+                removed.push(assigned.remove(best.1));
+            }
+            assert_eq!(got.unassigned(), removed.as_slice(), "seed {seed}");
+        }
     }
 }

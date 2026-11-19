@@ -19,6 +19,16 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
 ### Changed
 
 - Requires u-numflow 0.17.
+- **`"alns"` starts from the Clarke-Wright savings solution instead of the nearest-neighbour tour, and one iteration removes
+  at most 100 customers.** On the CVRPLIB X instances of 800 and 1,001 customers the answer was the nearest-neighbour
+  tour improved by local search (14.5 % above the best known at 1,001 customers, worse than `"savings"` itself at
+  7.0 %); it is now 6.2 % at 10 s. An iteration removed 10–40 % of the customers and rebuilt them greedily, which on a
+  thousand customers never gave back a better solution than the one it started from; the removed share is still 10–40 %
+  up to 250 customers, and at most 100 customers beyond that (Ropke & Pisinger 2006). Solomon (56 instances, seeds
+  1–3): mean gap to the best known distance +0.5 % → −1.1 % (more routes: 8.7 → 9.0; with `fixed_cost` 1000 8.0 routes at
+  +1.2 %), 0.3 s per instance instead of 1.3 s; CVRPLIB X 303–801 customers at 10 s, 5,000 iterations, seeds 1–3: 1.0–4.1 %
+  above the best known. The multi-depot Cordeau set gets slightly worse, mean +3.9 % → +4.2 % (`pr` +6.7 % → +7.8 %), in
+  8 s instead of 23 s. Answers change for a given seed.
 
 ### Fixed
 
@@ -29,6 +39,13 @@ Maintained from 0.2.4 onward; earlier entries list release dates only (see git h
   search of an individual's education; the same runs return in about 0.6 s with `stop_reason: "time_limit"`. A run too
   short to finish an iteration returns its starting solution (a constructive route set improved by local search),
   not a worse one.
+- `"alns"` on a large input was slow per iteration and then returned its starting solution however long it ran. An
+  iteration priced every pending customer against every route again after each placement, and Shaw removal compared
+  every assigned customer with every removed one; on 1,000 customers one iteration took about 0.6 s. The repairs now
+  keep each customer's cheapest insertion per route and recompute only the route a placement changed (`GreedyInsertion`
+  and `RegretInsertion` place exactly what they placed), `ShawRemoval` keeps each customer's relatedness to the removed
+  set and updates it per removal, and the position scans read the instance's window and limit flags once instead of
+  scanning every customer per position (about 0.05 s per iteration at 1,000 customers).
 
 ## [0.28.0] - 2026-11-13
 

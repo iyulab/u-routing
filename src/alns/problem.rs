@@ -6,9 +6,9 @@
 use rand::Rng;
 use u_metaheur::alns::AlnsProblem;
 
-use crate::constructive::{nearest_neighbor, nearest_neighbor_tw};
+use crate::constructive::clarke_wright_savings;
 use crate::distance::DistanceMatrix;
-use crate::evaluation::{lateness_bound, route_checks_needed, RouteLimits};
+use crate::evaluation::{lateness_bound, RouteLimits};
 use crate::models::{Customer, Vehicle};
 
 use super::solution_repr::RoutingSolution;
@@ -89,36 +89,28 @@ impl AlnsProblem for RoutingAlnsProblem {
     type Solution = RoutingSolution;
 
     fn initial_solution<R: Rng>(&self, _rng: &mut R) -> RoutingSolution {
-        // Use nearest neighbor heuristic for initial solution
-        let vehicles: Vec<Vehicle> = (0..self.customers.len())
-            .map(|i| {
-                let v = Vehicle::new(i, self.capacity);
-                let v = match self.limits.max_distance {
-                    Some(d) => v.with_max_distance(d),
-                    None => v,
-                };
-                let v = match self.limits.max_duration {
-                    Some(t) => v.with_max_duration(t),
-                    None => v,
-                };
-                match self.limits.rest {
-                    Some(rest) => v.with_break(rest),
-                    None => v,
-                }
-            })
-            .collect();
-
-        // With time windows or limits the seed must already respect them: the
-        // repair operators only ever insert feasibly, so a late or too-long
-        // seed would stay that way.
-        let nn_sol = if route_checks_needed(&self.customers, &self.limits) {
-            nearest_neighbor_tw(&self.customers, &self.distances, &vehicles)
-        } else {
-            nearest_neighbor(&self.customers, &self.distances, &vehicles)
+        // Clarke-Wright savings: a good solution in a fraction of a second at any size, where a
+        // nearest-neighbour tour is some 10 % worse on a map of a thousand customers and a search
+        // too short to finish an iteration would hand it back as the answer. The routes keep
+        // the time windows and the vehicle's limits (the repair operators only ever insert
+        // feasibly, so a late or too-long seed would stay that way).
+        let vehicle = Vehicle::new(0, self.capacity);
+        let vehicle = match self.limits.max_distance {
+            Some(d) => vehicle.with_max_distance(d),
+            None => vehicle,
         };
+        let vehicle = match self.limits.max_duration {
+            Some(t) => vehicle.with_max_duration(t),
+            None => vehicle,
+        };
+        let vehicle = match self.limits.rest {
+            Some(rest) => vehicle.with_break(rest),
+            None => vehicle,
+        };
+        let seed = clarke_wright_savings(&self.customers, &self.distances, &vehicle);
 
-        let routes: Vec<Vec<usize>> = nn_sol.routes().iter().map(|r| r.customer_ids()).collect();
-        let unassigned: Vec<usize> = nn_sol.unassigned().to_vec();
+        let routes: Vec<Vec<usize>> = seed.routes().iter().map(|r| r.customer_ids()).collect();
+        let unassigned: Vec<usize> = seed.unassigned().to_vec();
 
         RoutingSolution::new(routes, unassigned, &self.customers, &self.distances)
     }

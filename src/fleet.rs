@@ -25,7 +25,8 @@
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
-    effective_cost, has_soft_windows, route_checks_needed, route_feasible, RouteLimits,
+    effective_cost, has_soft_windows, has_time_windows, route_checks_needed, route_feasible,
+    RouteLimits,
 };
 use crate::models::{Customer, Vehicle};
 
@@ -86,67 +87,118 @@ pub fn cheapest_insertion(
     distances: &DistanceMatrix,
     customers: &[Customer],
 ) -> Option<(usize, usize, f64)> {
-    let depot = 0;
-    let demand = customers[customer_id].demand();
-    let mut best: Option<(usize, usize, f64)> = None;
+    // What the instance says does not change from route to route: read it once, not per route.
     let soft = has_soft_windows(customers);
-
+    let windowed = has_time_windows(customers);
+    let mut best: Option<(usize, usize, f64)> = None;
     for (ri, route) in routes.iter().enumerate() {
-        let load: i32 = route.iter().map(|&c| customers[c].demand()).sum();
-        if load + demand > capacity_of(ri) {
-            continue;
-        }
         let limits = limits_of(ri);
-        if soft {
-            // The change in the route's distance plus lateness cost, evaluated whole.
-            let value = effective_cost(route, depot, distances, customers, &limits);
-            if !value.is_finite() {
-                continue;
-            }
-            for pos in 0..=route.len() {
-                let cost = soft_insertion_cost(
-                    route,
-                    value,
-                    pos,
-                    customer_id,
-                    distances,
-                    customers,
-                    &limits,
-                );
-                if let Some(cost) = cost {
-                    if best.as_ref().is_none_or(|b| cost < b.2) {
-                        best = Some((ri, pos, cost));
-                    }
-                }
-            }
-            continue;
-        }
-        let constrained = route_checks_needed(customers, &limits);
-        for pos in 0..=route.len() {
-            let prev = if pos == 0 { depot } else { route[pos - 1] };
-            let next = if pos == route.len() {
-                depot
-            } else {
-                route[pos]
-            };
-            let cost = distances.get(prev, customer_id) + distances.get(customer_id, next)
-                - distances.get(prev, next);
-            if best.as_ref().is_none_or(|b| cost < b.2)
-                && insertion_on_time(
-                    route,
-                    pos,
-                    customer_id,
-                    distances,
-                    customers,
-                    &limits,
-                    constrained,
-                )
-            {
-                best = Some((ri, pos, cost));
-            }
+        let bound = best.map_or(f64::INFINITY, |b| b.2);
+        if let Some((pos, cost)) = cheapest_in_route(
+            route,
+            capacity_of(ri),
+            &limits,
+            InstanceKind {
+                soft,
+                constrained: windowed || !limits.is_unlimited(),
+            },
+            customer_id,
+            distances,
+            customers,
+            bound,
+        ) {
+            best = Some((ri, pos, cost));
         }
     }
     best
+}
+
+/// What an instance's customers and a route's limits say about how an insertion is judged:
+/// each is a scan of every customer, so a search that makes many insertions reads them once.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InstanceKind {
+    /// Some window is soft: an insertion costs its change in distance plus lateness, evaluated
+    /// whole.
+    pub(crate) soft: bool,
+    /// A window or a limit applies: an insertion has to be checked against the whole route.
+    pub(crate) constrained: bool,
+}
+
+impl InstanceKind {
+    /// Reads `customers` and `limits`.
+    pub(crate) fn of(customers: &[Customer], limits: &RouteLimits) -> Self {
+        Self {
+            soft: has_soft_windows(customers),
+            constrained: route_checks_needed(customers, limits),
+        }
+    }
+}
+
+/// The cheapest position for `customer_id` in `route` alone, as `(position, cost_increase)`,
+/// strictly below `bound` (the cheapest found so far in other routes, or infinity): the least
+/// cost, the earliest position among equals. `None` when the route cannot take the customer
+/// within `capacity` and `limits`, or no position beats `bound`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cheapest_in_route(
+    route: &[usize],
+    capacity: i32,
+    limits: &RouteLimits,
+    kind: InstanceKind,
+    customer_id: usize,
+    distances: &DistanceMatrix,
+    customers: &[Customer],
+    bound: f64,
+) -> Option<(usize, f64)> {
+    let depot = 0;
+    let load: i32 = route.iter().map(|&c| customers[c].demand()).sum();
+    if load + customers[customer_id].demand() > capacity {
+        return None;
+    }
+    let mut best_cost = bound;
+    let mut best_pos = None;
+    if kind.soft {
+        // The change in the route's distance plus lateness cost, evaluated whole.
+        let value = effective_cost(route, depot, distances, customers, limits);
+        if !value.is_finite() {
+            return None;
+        }
+        for pos in 0..=route.len() {
+            let cost =
+                soft_insertion_cost(route, value, pos, customer_id, distances, customers, limits);
+            if let Some(cost) = cost {
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_pos = Some(pos);
+                }
+            }
+        }
+        return best_pos.map(|pos| (pos, best_cost));
+    }
+    for pos in 0..=route.len() {
+        let prev = if pos == 0 { depot } else { route[pos - 1] };
+        let next = if pos == route.len() {
+            depot
+        } else {
+            route[pos]
+        };
+        let cost = distances.get(prev, customer_id) + distances.get(customer_id, next)
+            - distances.get(prev, next);
+        if cost < best_cost
+            && insertion_on_time(
+                route,
+                pos,
+                customer_id,
+                distances,
+                customers,
+                limits,
+                kind.constrained,
+            )
+        {
+            best_cost = cost;
+            best_pos = Some(pos);
+        }
+    }
+    best_pos.map(|pos| (pos, best_cost))
 }
 
 /// A plan brought within a route limit by [`limit_routes`].

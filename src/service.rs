@@ -3097,8 +3097,10 @@ fn solve_alns(
     // is accepted one time in three and cools geometrically to a hundredth of the
     // start exactly when the iteration budget ends -- a schedule that never
     // cools leaves the search a random walk to the last iteration.
+    let (min_degree, max_degree) = alns_destroy_degrees(customers.len().saturating_sub(1));
     let mut alns_config = AlnsConfig::default()
         .with_max_iterations(max_iterations)
+        .with_destroy_degree(min_degree, max_degree)
         .with_relative_temperature(1.0, alns_cooling_rate(max_iterations, 0.01), 0.01, 20);
     if let Some(seed) = seed(method, cfg)? {
         alns_config = alns_config.with_seed(seed);
@@ -3129,6 +3131,18 @@ fn solve_alns(
 // ============================================================================
 // Tests (native — exercise the solver functions directly)
 // ============================================================================
+
+/// The fraction of the customers one ALNS iteration removes, as `(least, most)`: 10 % to 40 % of
+/// them, but never more than 100 customers (Ropke & Pisinger 2006 remove at most
+/// `min(100, 0.4·n)` requests). Removing a tenth of a thousand customers and rebuilding them
+/// greedily gives back a worse solution than the one it started from, so a larger instance never
+/// accepts an iteration; the cap keeps the neighbourhood the size it has on a hundred customers.
+fn alns_destroy_degrees(customers: usize) -> (f64, f64) {
+    let n = customers.max(1) as f64;
+    let most = 0.4_f64.min(100.0 / n);
+    let least = 0.1_f64.min(most / 2.0);
+    (least, most)
+}
 
 /// The geometric cooling rate that takes a temperature to `floor` times its
 /// start over `iterations` iterations.
@@ -7608,5 +7622,17 @@ mod multi_depot_tests {
         let from_second = out.route_vehicles.iter().filter(|&&k| k == 1).count();
         assert_eq!(from_second, 1, "{out:?}");
         assert!(out.unassigned.iter().all(|&id| id >= 11), "{out:?}");
+    }
+
+    /// An iteration removes a tenth to two fifths of a small instance, as it always has, and at
+    /// most a hundred customers of a large one.
+    #[test]
+    fn an_alns_iteration_removes_at_most_a_hundred_customers() {
+        assert_eq!(alns_destroy_degrees(10), (0.1, 0.4));
+        assert_eq!(alns_destroy_degrees(100), (0.1, 0.4));
+        let (least, most) = alns_destroy_degrees(1000);
+        assert!((most * 1000.0 - 100.0).abs() < 1e-9 && (least * 1000.0 - 50.0).abs() < 1e-9);
+        let (least, most) = alns_destroy_degrees(0);
+        assert!(0.0 < least && least <= most);
     }
 }

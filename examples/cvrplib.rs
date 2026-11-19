@@ -17,6 +17,11 @@
 //! then `urouting_check_solution` on the answer. `generations` sets
 //! `config.max_generations` (default: the service's); `seeds` defaults to `1`
 //! (a comma list runs each). The cost is the answer's `total_distance`.
+//!
+//! Environment: `CVRPLIB_METHOD` (`ga` by default; `alns` reads `generations` as
+//! `config.max_iterations`; `savings` and the other one-pass methods read neither),
+//! `CVRPLIB_TIME_MS` (`config.time_limit_ms` -- the columns then show whether the limit held),
+//! `CVRPLIB_ONLY` (comma list of name prefixes, e.g. `X-n502,X-n1001`).
 
 use std::ffi::{CStr, CString};
 use std::time::Instant;
@@ -92,11 +97,23 @@ fn main() {
         s.split(',').map(|v| v.parse().expect("a seed")).collect()
     });
 
+    let method = std::env::var("CVRPLIB_METHOD").unwrap_or_else(|_| "ga".to_string());
+    let time_limit_ms: Option<u64> = std::env::var("CVRPLIB_TIME_MS")
+        .ok()
+        .map(|v| v.parse().expect("a number of milliseconds"));
+    let only: Vec<String> = std::env::var("CVRPLIB_ONLY")
+        .map(|v| v.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
+
     let mut names: Vec<_> = std::fs::read_dir(dir)
         .expect("instance directory is readable")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "vrp"))
+        .filter(|p| {
+            let stem = p.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            only.is_empty() || only.iter().any(|prefix| stem.starts_with(prefix.as_str()))
+        })
         .collect();
     names.sort();
 
@@ -130,11 +147,21 @@ fn main() {
         for &seed in &seeds {
             let mut config = json!({ "seed": seed });
             if let Some(g) = generations {
-                config["max_generations"] = json!(g);
+                match method.as_str() {
+                    "ga" => config["max_generations"] = json!(g),
+                    "alns" => config["max_iterations"] = json!(g),
+                    _ => {}
+                }
+            }
+            if let Some(ms) = time_limit_ms {
+                config["time_limit_ms"] = json!(ms);
+            }
+            if !matches!(method.as_str(), "ga" | "alns") {
+                config = json!({});
             }
             let request = json!({
                 "depots": [{ "x": points[0].0, "y": points[0].1 }],
-                "customers": customers, "vehicles": vehicles, "method": "ga",
+                "customers": customers, "vehicles": vehicles, "method": method,
                 "config": config, "distances": distances,
             });
             let started = Instant::now();
@@ -167,7 +194,7 @@ fn main() {
     }
     if !gaps.is_empty() {
         eprintln!(
-            "ga: mean gap {:.2} % over {} runs",
+            "{method}: mean gap {:.2} % over {} runs",
             gaps.iter().sum::<f64>() / gaps.len() as f64,
             gaps.len()
         );
