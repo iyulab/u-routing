@@ -5769,6 +5769,49 @@ mod tests {
         assert_eq!(err.fields["min"], serde_json::json!(0.0));
     }
 
+    /// The limit bounds the whole solve on a large instance, not only the gaps between
+    /// iterations: on this many customers one destroy-and-repair (or one generation) takes
+    /// longer than the limit by itself, and the search still has to hand back its best
+    /// within a small multiple of it.
+    #[test]
+    fn a_time_limit_bounds_the_whole_solve_on_a_large_instance() {
+        use std::time::{Duration, Instant};
+        const LIMIT_MS: u64 = 100;
+        for method in ["alns", "ga"] {
+            let config = InputConfig {
+                max_generations: (method == "ga").then_some(1_000_000),
+                max_iterations: (method == "alns").then_some(100_000_000),
+                seed: Some(1),
+                time_limit_ms: Some(LIMIT_MS.into()),
+                ..InputConfig::default()
+            };
+            let started = Instant::now();
+            let out = solve(
+                &ProblemInput {
+                    depots: &[(0.0, 0.0)],
+                    customers: &ring(700),
+                    vehicles: &fleet(&[100.0]),
+                    distances: None,
+                    durations: None,
+                },
+                method,
+                &config,
+            )
+            .expect("a time-limited run");
+            let took = started.elapsed();
+            eprintln!("{method}: {took:?}");
+            assert_eq!(out.stop_reason, StopReason::TimeLimit, "{method}");
+            assert!(out.unassigned.is_empty(), "{method}");
+            // A fixed allowance for the work after the search (local search, assembling the
+            // answer, the seeds' first stage) on a slow debug build -- measured at about 1.5 and
+            // 3 times the limit; before the fix `alns` took 36 times it and `ga` 5 times.
+            assert!(
+                took < Duration::from_millis(LIMIT_MS * 5 + 500),
+                "{method}: {took:?} for a {LIMIT_MS} ms limit"
+            );
+        }
+    }
+
     /// `time_limit_ms` ends a GA or ALNS run that would otherwise go far
     /// longer; it is a whole number of at least 1, and the one-pass methods
     /// refuse it as a setting they do not read.

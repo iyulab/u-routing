@@ -20,10 +20,13 @@
 //! Prins, C. (2004). "A simple and effective evolutionary algorithm for the
 //! vehicle routing problem", *Computers & Operations Research* 31(12), 1985-2002.
 
+use u_metaheur::Deadline;
+
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{route_checks_needed, RouteEvaluator, RouteLimits};
 use crate::local_search::{
-    eliminate_routes, exchange_improve, or_opt_improve, relocate_improve, two_opt_improve,
+    eliminate_routes_within, exchange_improve_within, or_opt_improve, relocate_improve_within,
+    two_opt_improve,
 };
 use crate::models::{Customer, Solution, Vehicle};
 
@@ -59,11 +62,16 @@ pub(crate) fn concatenate(routes: &[Vec<usize>], num_customers: usize) -> Vec<us
 }
 
 /// Improves the solution `tour` splits into, and returns it as a giant tour.
+///
+/// The improvement is a sequence of stages, each a pass over the whole instance; once
+/// `deadline` passes the stages not yet started are skipped and the routes as they stand
+/// are returned -- on a large instance one education outlasts a short budget by itself.
 pub(crate) fn educate(
     tour: &[usize],
     customers: &[Customer],
     distances: &DistanceMatrix,
     vehicle: &Vehicle,
+    deadline: &Deadline,
 ) -> Vec<usize> {
     let limits = RouteLimits::of(vehicle);
     let fixed = vehicle.fixed_cost_in_distance();
@@ -81,24 +89,35 @@ pub(crate) fn educate(
         split(tour, customers, distances, vehicle.capacity(), fixed).routes
     };
 
+    if deadline.passed() {
+        return concatenate(&routes, customers.len() - 1);
+    }
+
     let evaluator = RouteEvaluator::new(customers, distances, vehicle);
     let mut solution = Solution::new();
     for route in &routes {
         solution.add_route(evaluator.build_route(route).0);
     }
-    let solution = relocate_improve(&solution, customers, distances, vehicle);
-    let solution = exchange_improve(&solution, customers, distances, vehicle);
-    let routes = eliminate_routes(
-        solution.routes().iter().map(|r| r.customer_ids()).collect(),
-        customers,
-        distances,
-        vehicle,
-    );
+    let solution = relocate_improve_within(&solution, customers, distances, vehicle, deadline);
+    let solution = if deadline.passed() {
+        solution
+    } else {
+        exchange_improve_within(&solution, customers, distances, vehicle, deadline)
+    };
+    let routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
+    let routes = if deadline.passed() {
+        routes
+    } else {
+        eliminate_routes_within(routes, customers, distances, vehicle, deadline)
+    };
 
     let depot = vehicle.depot_id();
     let routes: Vec<Vec<usize>> = routes
         .iter()
         .map(|r| {
+            if deadline.passed() {
+                return r.clone();
+            }
             let (route, _) = two_opt_improve(r, depot, distances, customers, &limits);
             or_opt_improve(&route, depot, distances, customers, &limits).0
         })
@@ -135,7 +154,7 @@ mod tests {
         let limits = RouteLimits::NONE;
         let before = split_tw(&tour, &customers, &dm, 4, &limits, 0.0).total_distance;
 
-        let educated = educate(&tour, &customers, &dm, &vehicle);
+        let educated = educate(&tour, &customers, &dm, &vehicle, &Deadline::start(None));
         let mut sorted = educated.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, (1..=8).collect::<Vec<_>>());
@@ -154,5 +173,34 @@ mod tests {
         let vehicle = route_vehicle(10, &limits);
         assert_eq!(vehicle.rest(), Some(rest));
         assert_eq!(RouteLimits::of(&vehicle), limits);
+    }
+
+    /// With the deadline already passed the education does nothing beyond the split: the
+    /// tour comes back as the routes of that split, not improved.
+    #[test]
+    fn education_past_the_deadline_stops_at_the_split() {
+        let mut customers = vec![Customer::depot(0.0, 0.0)];
+        for i in 1..=8 {
+            let x = if i % 2 == 0 { 10.0 } else { -10.0 };
+            customers.push(Customer::new(i, x, i as f64, 1, 0.0));
+        }
+        let dm = DistanceMatrix::from_customers(&customers);
+        let vehicle = route_vehicle(4, &RouteLimits::NONE);
+        let tour: Vec<usize> = (1..=8).collect();
+        let split_only = split(&tour, &customers, &dm, 4, 0.0).total_distance;
+
+        let spent = educate(&tour, &customers, &dm, &vehicle, &Deadline::start(Some(0)));
+        let after_spent = split(&spent, &customers, &dm, 4, 0.0).total_distance;
+        assert!(
+            (after_spent - split_only).abs() < 1e-9,
+            "{after_spent} != {split_only}"
+        );
+
+        let full = educate(&tour, &customers, &dm, &vehicle, &Deadline::start(None));
+        let after_full = split(&full, &customers, &dm, 4, 0.0).total_distance;
+        assert!(
+            after_full < split_only - 1e-9,
+            "{after_full} !< {split_only}"
+        );
     }
 }

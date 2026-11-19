@@ -28,6 +28,8 @@
 //! Bräysy, O. & Gendreau, M. (2005). "Vehicle Routing Problem with Time
 //! Windows, Part II: Metaheuristics", *Transportation Science* 39(1), 119-139.
 
+use u_metaheur::Deadline;
+
 use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
@@ -41,11 +43,30 @@ use super::route_distance;
 /// less than the route costs (its distance plus `vehicle`'s fixed cost), and
 /// returns what is left. Every route returned keeps capacity, time windows and
 /// the route limits when the routes given do.
+#[cfg(test)]
 pub(crate) fn eliminate_routes(
+    routes: Vec<Vec<usize>>,
+    customers: &[Customer],
+    distances: &DistanceMatrix,
+    vehicle: &Vehicle,
+) -> Vec<Vec<usize>> {
+    eliminate_routes_within(
+        routes,
+        customers,
+        distances,
+        vehicle,
+        &Deadline::start(None),
+    )
+}
+
+/// [`eliminate_routes`] that stops trying routes when `deadline` passes and returns the routes
+/// as they then stand (each elimination taken keeps them feasible).
+pub(crate) fn eliminate_routes_within(
     mut routes: Vec<Vec<usize>>,
     customers: &[Customer],
     distances: &DistanceMatrix,
     vehicle: &Vehicle,
+    deadline: &Deadline,
 ) -> Vec<Vec<usize>> {
     let depot = vehicle.depot_id();
     let limits = RouteLimits::of(vehicle);
@@ -68,6 +89,9 @@ pub(crate) fn eliminate_routes(
         let mut order: Vec<usize> = (0..routes.len()).collect();
         order.sort_by_key(|&r| routes[r].len());
         for r in order {
+            if deadline.passed() {
+                return routes;
+            }
             let saved = worth(&routes[r]) + fixed;
             if !saved.is_finite() {
                 continue;

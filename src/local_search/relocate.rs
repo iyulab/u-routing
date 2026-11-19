@@ -17,6 +17,8 @@
 //! Or, I. (1976). "Traveling Salesman-Type Combinatorial Problems and Their
 //! Relation to the Logistics of Blood Banking". PhD thesis.
 
+use u_metaheur::Deadline;
+
 use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{
@@ -73,6 +75,25 @@ pub fn relocate_improve(
     distances: &DistanceMatrix,
     vehicle: &Vehicle,
 ) -> Solution {
+    relocate_improve_within(
+        solution,
+        customers,
+        distances,
+        vehicle,
+        &Deadline::start(None),
+    )
+}
+
+/// [`relocate_improve`] that stops taking moves when `deadline` passes and returns the
+/// solution as it then stands (every move taken keeps it feasible, so a part-way result
+/// is one too). On a large solution the descent takes longer than a short budget.
+pub fn relocate_improve_within(
+    solution: &Solution,
+    customers: &[Customer],
+    distances: &DistanceMatrix,
+    vehicle: &Vehicle,
+    deadline: &Deadline,
+) -> Solution {
     if solution.num_routes() < 2 {
         return solution.clone();
     }
@@ -84,7 +105,8 @@ pub fn relocate_improve(
     // Best improvement: the best move of every pair of routes is kept, and a
     // move changes two routes, so only the pairs with one of them in it are
     // searched again. The move taken is the one a full scan would take.
-    while let Some(mv) = search.best() {
+    while !deadline.passed() {
+        let Some(mv) = search.best() else { break };
         let customer_id = routes[mv.from_route][mv.from_pos];
         routes[mv.from_route].remove(mv.from_pos);
         routes[mv.to_route].insert(mv.to_pos, customer_id);
@@ -694,5 +716,41 @@ mod tests {
         // New: d(1,2) + d(2,3) = 3 + 4 = 7
         // Delta: 7 - 7 = 0
         assert!((cost - 0.0).abs() < 1e-10);
+    }
+
+    /// A spent deadline stops the descent before its first move; an open one takes them.
+    #[test]
+    fn relocate_past_the_deadline_takes_no_move() {
+        // Customer 3 sits beside the east route but is served by the west one: moving it saves.
+        let customers = vec![
+            Customer::depot(0.0, 0.0),
+            Customer::new(1, 10.0, 0.0, 1, 0.0),
+            Customer::new(2, 11.0, 0.0, 1, 0.0),
+            Customer::new(3, 10.5, 1.0, 1, 0.0),
+            Customer::new(4, -10.0, 0.0, 1, 0.0),
+        ];
+        let dm = DistanceMatrix::from_customers(&customers);
+        let vehicle = Vehicle::new(0, 100);
+        let evaluator = crate::evaluation::RouteEvaluator::new(&customers, &dm, &vehicle);
+        let mut initial = Solution::new();
+        for route in [vec![1, 2], vec![3, 4]] {
+            initial.add_route(evaluator.build_route(&route).0);
+        }
+        let spent = relocate_improve_within(
+            &initial,
+            &customers,
+            &dm,
+            &vehicle,
+            &Deadline::start(Some(0)),
+        );
+        assert!((spent.total_distance() - initial.total_distance()).abs() < 1e-10);
+        assert_eq!(spent.num_served(), 4);
+        let open = relocate_improve(&initial, &customers, &dm, &vehicle);
+        assert!(
+            open.total_distance() < initial.total_distance() - 1e-9,
+            "the instance must have a move to take: {} !< {}",
+            open.total_distance(),
+            initial.total_distance()
+        );
     }
 }

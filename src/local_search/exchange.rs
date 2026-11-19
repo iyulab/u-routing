@@ -21,6 +21,8 @@
 //! Routeing Problems with Time Windows", *Journal of the Operational Research
 //! Society* 46(12), 1433-1446.
 
+use u_metaheur::Deadline;
+
 use super::gain_floor;
 use crate::distance::DistanceMatrix;
 use crate::evaluation::RouteEvaluator;
@@ -69,6 +71,24 @@ pub fn exchange_improve(
     distances: &DistanceMatrix,
     vehicle: &Vehicle,
 ) -> Solution {
+    exchange_improve_within(
+        solution,
+        customers,
+        distances,
+        vehicle,
+        &Deadline::start(None),
+    )
+}
+
+/// [`exchange_improve`] that stops taking exchanges when `deadline` passes and returns the
+/// solution as it then stands (every exchange taken keeps it feasible).
+pub fn exchange_improve_within(
+    solution: &Solution,
+    customers: &[Customer],
+    distances: &DistanceMatrix,
+    vehicle: &Vehicle,
+    deadline: &Deadline,
+) -> Solution {
     if solution.num_routes() < 2 {
         return solution.clone();
     }
@@ -78,10 +98,13 @@ pub fn exchange_improve(
     let mut routes: Vec<Vec<usize>> = solution.routes().iter().map(|r| r.customer_ids()).collect();
 
     let mut improved = true;
-    while improved {
+    while improved && !deadline.passed() {
         improved = false;
 
         for r1 in 0..routes.len() {
+            if deadline.passed() {
+                break;
+            }
             for r2 in (r1 + 1)..routes.len() {
                 if let Some((cut1, cut2, delta)) = find_best_exchange(
                     &routes[r1],

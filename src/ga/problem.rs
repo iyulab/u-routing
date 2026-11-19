@@ -202,19 +202,27 @@ impl GaProblem for RoutingGaProblem {
         if self.num_customers() == 0 {
             return Vec::new();
         }
-        let mut seeds = vec![
-            clarke_wright_savings(&self.customers, &self.distances, &self.vehicle),
-            sweep(&self.customers, &self.distances, &self.vehicle),
+        // Built one at a time, and only while the budget lasts (the first always is): on a
+        // large instance a seed costs more than a short budget.
+        type Construct<'a> = Box<dyn Fn() -> Solution + 'a>;
+        let mut builders: Vec<Construct<'_>> = vec![
+            Box::new(|| clarke_wright_savings(&self.customers, &self.distances, &self.vehicle)),
+            Box::new(|| sweep(&self.customers, &self.distances, &self.vehicle)),
         ];
         if self.time_windows {
-            seeds.push(solomon_i1(&self.customers, &self.distances, &self.vehicle));
+            builders.push(Box::new(|| {
+                solomon_i1(&self.customers, &self.distances, &self.vehicle)
+            }));
         }
         // The ejection pool's perturbation draws from its own stream: the
         // seeds stay the same constructions whatever the run's seed.
         let mut rng = u_numflow::random::create_rng(SEED_PERTURBATION_STREAM);
-        seeds
+        builders
             .iter()
-            .map(|s| {
+            .enumerate()
+            .take_while(|(i, _)| *i == 0 || !deadline.passed())
+            .map(|(_, build)| {
+                let s = &build();
                 let mut tour = self.tour_of(s);
                 if self.route_cost > 0.0 {
                     // With routes priced, the seeds start from as few routes as
@@ -238,6 +246,7 @@ impl GaProblem for RoutingGaProblem {
                     &self.customers,
                     &self.distances,
                     &self.vehicle,
+                    deadline,
                 ))
             })
             .collect()
@@ -317,6 +326,11 @@ impl GaProblem for RoutingGaProblem {
     }
 
     fn mutate<R: Rng>(&self, individual: &mut GiantTour, rng: &mut R) {
+        self.mutate_within(individual, rng, &Deadline::start(None));
+    }
+
+    /// The local search of the education stops at `deadline` (see [`educate`]).
+    fn mutate_within<R: Rng>(&self, individual: &mut GiantTour, rng: &mut R, deadline: &Deadline) {
         if individual.len() < 2 {
             return;
         }
@@ -332,6 +346,7 @@ impl GaProblem for RoutingGaProblem {
             &self.customers,
             &self.distances,
             &self.vehicle,
+            deadline,
         );
         *individual = GiantTour::new(educated);
     }

@@ -13,6 +13,7 @@
 
 use rand::Rng;
 use u_metaheur::alns::RepairOperator;
+use u_metaheur::Deadline;
 
 use crate::distance::DistanceMatrix;
 use crate::evaluation::{effective_cost, has_soft_windows};
@@ -142,7 +143,19 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
         "greedy_insertion"
     }
 
-    fn repair<R: Rng>(&self, solution: &RoutingSolution, _rng: &mut R) -> RoutingSolution {
+    fn repair<R: Rng>(&self, solution: &RoutingSolution, rng: &mut R) -> RoutingSolution {
+        self.repair_within(solution, rng, &Deadline::start(None))
+            .expect("a repair with no deadline completes")
+    }
+
+    /// Stops as soon as `deadline` passes: one repair over a large instance takes longer than
+    /// a short budget, and the runner can only look between iterations.
+    fn repair_within<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        _rng: &mut R,
+        deadline: &Deadline,
+    ) -> Option<RoutingSolution> {
         let mut sol = solution.clone();
         let mut unassigned = std::mem::take(sol.unassigned_mut());
 
@@ -155,6 +168,9 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
             let mut found = false;
 
             for (ui, &cid) in unassigned.iter().enumerate() {
+                if deadline.passed() {
+                    return None;
+                }
                 if let Some((ri, pos, cost)) = best_insertion(
                     sol.routes(),
                     cid,
@@ -205,7 +221,7 @@ impl RepairOperator<RoutingSolution> for GreedyInsertion {
         }
 
         sol.recalculate(&self.distances, &self.customers);
-        sol
+        Some(sol)
     }
 }
 
@@ -369,7 +385,19 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
         "regret_insertion"
     }
 
-    fn repair<R: Rng>(&self, solution: &RoutingSolution, _rng: &mut R) -> RoutingSolution {
+    fn repair<R: Rng>(&self, solution: &RoutingSolution, rng: &mut R) -> RoutingSolution {
+        self.repair_within(solution, rng, &Deadline::start(None))
+            .expect("a repair with no deadline completes")
+    }
+
+    /// Stops as soon as `deadline` passes: one repair over a large instance takes longer than
+    /// a short budget, and the runner can only look between iterations.
+    fn repair_within<R: Rng>(
+        &self,
+        solution: &RoutingSolution,
+        _rng: &mut R,
+        deadline: &Deadline,
+    ) -> Option<RoutingSolution> {
         let mut sol = solution.clone();
         let mut unassigned = std::mem::take(sol.unassigned_mut());
 
@@ -381,6 +409,9 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
             let mut found = false;
 
             for (ui, &cid) in unassigned.iter().enumerate() {
+                if deadline.passed() {
+                    return None;
+                }
                 let costs = self.sorted_insertion_costs(sol.routes(), cid);
 
                 if costs.is_empty() {
@@ -428,7 +459,7 @@ impl RepairOperator<RoutingSolution> for RegretInsertion {
         }
 
         sol.recalculate(&self.distances, &self.customers);
-        sol
+        Some(sol)
     }
 }
 
@@ -505,5 +536,26 @@ mod tests {
         let (ri, pos, _cost) = result.expect("should find insertion");
         assert_eq!(ri, 0);
         assert_eq!(pos, 1); // between 1 and 3
+    }
+
+    /// A repair whose deadline has passed gives up (the runner drops the candidate); with no
+    /// deadline it completes.
+    #[test]
+    fn a_spent_deadline_cuts_a_repair_short() {
+        let (cust, dm) = setup();
+        let sol = RoutingSolution::new(vec![vec![1]], vec![2, 3, 4], &cust, &dm);
+        let mut rng = u_numflow::random::create_rng(42);
+        let spent = Deadline::start(Some(0));
+        let greedy = GreedyInsertion::new(dm.clone(), cust.clone(), 100);
+        let regret = RegretInsertion::new(dm.clone(), cust.clone(), 100);
+        assert!(greedy.repair_within(&sol, &mut rng, &spent).is_none());
+        assert!(regret.repair_within(&sol, &mut rng, &spent).is_none());
+        let open = Deadline::start(None);
+        for repaired in [
+            greedy.repair_within(&sol, &mut rng, &open),
+            regret.repair_within(&sol, &mut rng, &open),
+        ] {
+            assert!(repaired.expect("no deadline").unassigned().is_empty());
+        }
     }
 }

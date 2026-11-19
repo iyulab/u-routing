@@ -5,6 +5,10 @@
 //! - [`three_opt_improve()`] — Intra-route 3-opt reconnection (Lin 1965)
 //! - [`relocate_improve()`] — Inter-route customer relocation
 //! - [`exchange_improve()`] — Inter-route cross-exchange / 2-opt* (Potvin & Rousseau, 1995)
+//!
+//! The inter-route descents also come as `relocate_improve_within` and `exchange_improve_within`,
+//! which stop when a [`u_metaheur::Deadline`] passes.
+//!
 //! - [`cross_depot_improve()`] — Customer relocation and swap between the routes of different depots
 
 mod cross_depot;
@@ -18,10 +22,12 @@ mod three_opt;
 mod two_opt;
 
 pub use cross_depot::cross_depot_improve;
-pub use exchange::exchange_improve;
+pub use exchange::{exchange_improve, exchange_improve_within};
 pub use or_opt::{or_opt_improve, route_distance};
-pub use relocate::relocate_improve;
+pub use relocate::{relocate_improve, relocate_improve_within};
+#[cfg(test)]
 pub(crate) use route_elimination::eliminate_routes;
+pub(crate) use route_elimination::eliminate_routes_within;
 pub(crate) use route_minimization::minimize_routes;
 pub use three_opt::three_opt_improve;
 pub use two_opt::two_opt_improve;
